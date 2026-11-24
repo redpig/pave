@@ -546,6 +546,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pave-protocol"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "pave-kernel",
+ "serde",
+]
+
+[[package]]
 name = "pave-scheme-briolette"
 version = "0.1.0"
 dependencies = [

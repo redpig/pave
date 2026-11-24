@@ -91,6 +91,8 @@ pub struct View<S: Scheme> {
     pub(crate) conflicts: Vec<Record>,
     pub(crate) messages: Vec<Record>,
     pub(crate) evidence: BTreeMap<Hash, Evidence>,
+    /// Which applied record created each state, as an index into `records`.
+    created: BTreeMap<Hash, usize>,
     known: BTreeSet<Hash>,
 }
 
@@ -117,6 +119,7 @@ impl<S: Scheme> View<S> {
             conflicts: Vec::new(),
             messages: Vec::new(),
             evidence: BTreeMap::new(),
+            created: BTreeMap::new(),
             known: BTreeSet::new(),
         };
         v.scopes.insert(root.id, root);
@@ -147,6 +150,18 @@ impl<S: Scheme> View<S> {
     }
     pub fn evidence(&self) -> impl Iterator<Item = &Evidence> {
         self.evidence.values()
+    }
+    /// The record that created `state`, spent or not.
+    pub fn creator(&self, state: &Hash) -> Option<&Record> {
+        self.created.get(state).map(|&i| &self.records[i])
+    }
+    /// The first spend of `state` seen here, if it has been spent.
+    pub fn spender(&self, state: &Hash) -> Option<&Record> {
+        self.spent.get(state).map(|s| &s.record)
+    }
+    /// Every outstanding state.
+    pub fn unspent(&self) -> impl Iterator<Item = &Coin> {
+        self.unspent.values()
     }
     pub fn records(&self) -> &[Record] {
         &self.records
@@ -236,6 +251,7 @@ impl<S: Scheme> View<S> {
             self.spent.insert(*state, Spent { record: rec.clone(), nym });
         }
         for coin in effect.coins {
+            self.created.insert(coin.state, self.records.len());
             self.unspent.insert(coin.state, coin);
         }
         if let Some(s) = effect.scope {
@@ -299,6 +315,7 @@ impl<S: Scheme> View<S> {
                 let sid = schema.id();
                 e.coins.push(Coin {
                     state: rec.output(0),
+                    origin: rec.output(0),
                     kind: Kind::MintBudget,
                     schema: sid,
                     amount: *amount,
@@ -320,6 +337,7 @@ impl<S: Scheme> View<S> {
                 self.check_per_holder(&b.schema, *amount)?;
                 e.coins.push(Coin {
                     state: rec.output(0),
+                    origin: rec.output(0),
                     kind: Kind::Value,
                     schema: b.schema,
                     amount: *amount,
@@ -330,6 +348,7 @@ impl<S: Scheme> View<S> {
                 if b.amount > *amount {
                     e.coins.push(Coin {
                         state: rec.output(1),
+                        origin: b.origin,
                         kind: Kind::MintBudget,
                         schema: b.schema,
                         amount: b.amount - amount,
@@ -395,6 +414,7 @@ impl<S: Scheme> View<S> {
                 }
                 e.coins.push(Coin {
                     state: rec.output(0),
+                    origin: rec.output(0),
                     kind: first.kind.clone(),
                     schema: first.schema,
                     amount: sum,
@@ -490,6 +510,7 @@ fn moved(c: &Coin, state: Hash, amount: u64, to: &Credential) -> Coin {
     }
     Coin {
         state,
+        origin: c.origin,
         kind: c.kind.clone(),
         schema: c.schema,
         amount,

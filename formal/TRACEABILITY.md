@@ -11,23 +11,34 @@ Each kernel invariant from [spec/kernel.md](../spec/kernel.md), the TLA+ propert
 | 5 | Fixed at creation | Structural in all models | `Schema::id` is the hash of its settings; `ScopeRules::within`; `Op::Derive` only narrows; `invariants::fixed_at_creation` | `per_holder_limit`, `child_scope_is_never_looser`, `derive_only_narrows` | — |
 | 6 | Detectable conflict | `Detected`, `EpochDetected`, `NoFalseFlag` and `HonestLossAccounted` in CivicSequences; `Detected` and `NoFalseFlag` in CivicGossip and CivicTiered (`noevidence`, `flagrecipient`, `positiononly`, `fakeevidence`, `honestrepeat`, `noepochevidence`) | `View::apply` (first seen wins, second use becomes `Evidence`); `verify_evidence`; `invariants::detected`, `invariants::no_false_flag` | `offline_double_spend_is_detected_and_names_only_the_signer`, `forged_evidence_is_refused`, `double_mint_offline_is_detected`, `partitions`, `offline_double_spend_with_ecdaa` (Briolette v1) | `lemma_step_preserves_inv`, `lemma_detected`, `lemma_names_signer` (draft) |
 
-## Protocol-level properties
+## Protocol properties
 
-These are not in the kernel crate yet; they belong in a protocol crate.
+Checked in [`pave-protocol`](../protocol) (`protocol/tests/protocol.rs`).
 
-| TLA+ property | Model | Where it will live |
-|---|---|---|
-| `FirstSeenWins` | CivicGossip, CivicTiered | Kernel already: `View::apply` keeps the first spend; asserted in `offline_double_spend_is_detected_and_names_only_the_signer` |
-| `HonestAcceptsInDate` | CivicSequences, CivicGossip, CivicTiered | Wallet acceptance policy over `Coin::history` and `Coin::hops` |
-| `OneEpoch`, `EpochDetected` | CivicSequences | Epoch sequences as exclusive capabilities; equivocation is already a kernel conflict |
-| `NoForgedEpoch`, `KnownIsSigned`, `HintsSuffice`, `EvidenceSpreads` | CivicGossip, CivicTiered | Gossip: compressed hints, extended proofs |
+| TLA+ property (faults) | Model | Rust | Tests |
+|---|---|---|---|
+| `FirstSeenWins` (`overwrite`) | CivicGossip, CivicTiered | `View::apply` keeps the first spend | `offline_double_spend_is_detected_and_names_only_the_signer`, `epoch_equivocation_is_a_kernel_conflict` |
+| `EpochDetected` (`noepochevidence`, `honestrepeat`) | CivicSequences | `epochs::roll` spends the current epoch state, so two versions are a kernel conflict | `epoch_equivocation_is_a_kernel_conflict` |
+| `HonestAcceptsInDate` (`ignoreexpiry`, `nolimit`, `latestonly`) | CivicSequences, CivicGossip, CivicTiered | `accept::check`: every ticket in the history against its own sequence; transfer limit | `recipients_honor_soft_expiry_and_the_kernel_doesnt`, `every_ticket_is_checked_against_its_own_sequence`, `transfer_limit_is_honored`, `revoked_groups_are_refused_per_issuer` |
+| `HonestNoKnownCheat` (`ignoreevidence`) | CivicGossip, CivicTiered | `accept::check` refuses flagged senders | `known_cheats_are_refused` |
+| `NoForgedEpoch` (`forge`) | CivicGossip, CivicTiered | Epochs come only from signed rolls; `Knowledge::add_epoch_data` keeps data only if a roll commits to it; `Knowledge::add_ticket` verifies the clerk | `epochs_roll_and_commit_their_data`, `tickets_must_come_from_a_trusted_clerk` |
+| `KnownIsSigned` (`hintepoch`) | CivicTiered | `epochs::head` reads only the view's signed records | `false_head_hints_never_advance_an_epoch` |
+| `NoFalseFlag` with hints (`trusthint`); witness `NoFalseHintDelay` | CivicTiered | Hints never reach `View::flagged`; `Policy::wait_on_hints` can only hold off a coin | `false_fork_hints_only_delay` |
+| `HintsSuffice` (`notrigger`) | CivicTiered | `gossip::wants` asks per hint; `gossip::serve` answers only with proofs | `hints_suffice_across_a_relay` |
+| `GossipDiscloses` (`gossiprecords`) | CivicGossip, CivicTiered | `gossip::serve` sends only epoch rolls and evidence | `hints_suffice_across_a_relay` |
 
 ## Mutation checks
 
-The kernel tests were checked against injected faults in `View::apply`, matching the TLA+ fault names. Each fault fails tests; the unmodified kernel passes all of them.
+The tests were checked against injected faults matching the TLA+ fault names. Each fault fails tests; the unmodified code passes all of them.
 
 | Fault | What was changed | Failing tests |
 |---|---|---|
 | `noevidence` | A second use is refused but no evidence is kept | 4 |
 | `flagrecipient` | Evidence names the first spend's recipient | 3 |
 | `steal` | The holder check on inputs is removed | 2 |
+| `latestonly` | Only the newest ticket in the history is checked | 2 |
+| `ignoreexpiry` | Soft expiry is never checked | 3 |
+| `nolimit` | The transfer limit is never reached | 2 |
+| `ignoreevidence` | Flagged senders are accepted | 2 |
+| `notrigger` | Fork hints never start a request | 2 |
+| `hintepoch` | Unsigned head hints count toward the known epoch | 2 |

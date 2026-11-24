@@ -99,6 +99,9 @@ pub enum Kind {
 pub struct Coin {
     /// This state's id, used as the basename when it is spent.
     pub state: Hash,
+    /// The capability this state belongs to: the state it had when minted or
+    /// issued. Moves and splits keep it; a merge starts a new one.
+    pub origin: Hash,
     pub kind: Kind,
     pub schema: Hash,
     pub amount: u64,

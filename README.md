@@ -19,6 +19,7 @@ The values behind it are in [docs/principles.md](docs/principles.md), and the re
 ## Code
 
 - [kernel/](kernel/): `pave-kernel`, the kernel in Rust. Scopes, shared and exclusive capabilities, signed records, local views that merge after being apart (first seen wins, a second use becomes evidence), receipts with partial reveal, and runtime checks named after the TLA+ properties. Credentials and signatures are opaque behind a `Scheme` trait.
+- [protocol/](protocol/): `pave-protocol`. Epoch sequences, where rolling is spending, so two versions of an epoch are an ordinary conflict. Tickets checked across a coin's whole history, each against its own clerk's sequence. Recipient policy for expiry, transfer limits, revocation and evidence. Two-tier gossip: compressed hints that fit one packet, and per-hint proofs.
 - [schemes/briolette/](schemes/briolette/): Briolette v1 (ECDAA over BLS12-381) as a scheme. Holdings are unlinkable, and a second use links only through its 48-byte pseudonym.
 
 ```bash
@@ -28,7 +29,7 @@ cargo test
 ## Checking it
 
 - [formal/](formal/): TLA+ models with fault injection. Each injected fault is caught by the property meant to catch it, and the safe configurations pass. [TRACEABILITY.md](formal/TRACEABILITY.md) maps every kernel invariant to its TLA+ properties, Rust checks and tests.
-- [kernel/tests/](kernel/tests/): tests named after the TLA+ faults, plus a property test over random offline histories with a dishonest holder.
+- [kernel/tests/](kernel/tests/) and [protocol/tests/](protocol/tests/): tests named after the TLA+ faults, plus a property test over random offline histories with a dishonest holder. Each test suite was checked against the faults it names.
 - [verus/](verus/): a Verus spec of the spend step (a draft, not yet checked).
 - [sim/](sim/): simulations of gossip benefit and bytes on the wire.
 
@@ -37,7 +38,7 @@ cargo test
 A draft design with a first kernel implementation. Nothing here handles real money; demos use test credit only.
 
 Next:
-- a protocol crate: epochs as sequences, tickets, expiry across history, two-tier gossip
+- swaps, and recovery as a self-minted capability
 - the civic work board profile, running offline between two devices
 - checking the Verus spec, then extending it to conservation
 - the mechanisms and use-case write-ups
