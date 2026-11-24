@@ -12,7 +12,7 @@ struct P {
 }
 
 fn holder(issuer: &Issuer, scheme: &BrioletteV1) -> P {
-    let key = issuer.enroll();
+    let key = issuer.join_locally();
     let cred = scheme.credential(&key);
     P { key, cred }
 }
@@ -21,7 +21,7 @@ fn holder(issuer: &Issuer, scheme: &BrioletteV1) -> P {
 fn holdings_are_unlinkable_but_reuse_links() {
     let issuer = Issuer::new();
     let scheme = issuer.scheme();
-    let key = issuer.enroll();
+    let key = issuer.join_locally();
     let (c1, c2) = (scheme.credential(&key), scheme.credential(&key));
     assert_ne!(c1, c2, "each holding gets a fresh randomized credential");
 
@@ -68,4 +68,29 @@ fn offline_double_spend_with_ecdaa() {
     let ev = x.evidence().next().unwrap();
     assert!(verify_evidence(&scheme, ev));
     println!("evidence: nym {} B, two records with signatures of {} B each", ev.nym.len(), ev.first.sigs[0].0.len());
+}
+
+#[test]
+fn join_keeps_the_secret_key_with_the_holder() {
+    use pave_scheme_briolette::{join_nonce, PendingKey};
+    let issuer = Issuer::new();
+    let scheme = issuer.scheme();
+    let nonce = join_nonce();
+    let (pending, req) = PendingKey::generate(&nonce);
+    // The request carries only a public key and a proof of its secret; a
+    // tampered key or a different nonce has no valid proof.
+    let mut bad = req.clone();
+    bad.public_key[5] ^= 1;
+    assert!(issuer.issue(&bad).is_err());
+    let mut renonced = req.clone();
+    renonced.nonce = join_nonce();
+    assert!(issuer.issue(&renonced).is_err());
+    let reply = issuer.issue(&req).unwrap();
+    // A credential for someone else's key is refused by the holder.
+    let (other, _) = PendingKey::generate(&nonce);
+    assert!(other.finish(&scheme, &reply).is_err());
+    let key = pending.finish(&scheme, &reply).unwrap();
+    let c = scheme.credential(&key);
+    let s = scheme.sign(&key, &c, b"msg", Some(b"bsn"));
+    assert!(scheme.verify(&c, b"msg", Some(b"bsn"), &s));
 }

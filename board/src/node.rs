@@ -13,7 +13,7 @@ use pave_kernel::receipt::Receipt;
 use pave_kernel::*;
 use pave_protocol::gossip::Hint;
 use pave_protocol::*;
-use pave_scheme_briolette::{BrioletteV1, HolderKey, Issuer};
+use pave_scheme_briolette::{randomize, BrioletteV1, HolderKey, Issuer, JoinReply, JoinRequest, PendingKey};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -46,6 +46,18 @@ pub struct Operator {
     pub minter_cred: Credential,
     pub cash_budget: Hash,
     pub next_group: u32,
+}
+
+/// The town's answer to a join request.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Enrollment {
+    pub town: Town,
+    pub join: JoinReply,
+    pub group: u32,
+    /// The first `credited` credentials hold the test credit.
+    pub credited: usize,
+    pub creds: Vec<Credential>,
+    pub bundle: Bundle,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -141,7 +153,7 @@ impl Node {
     pub fn init_town(path: &Path, label: &str) -> Result<Node, String> {
         let registrar = Issuer::new();
         let s = registrar.scheme();
-        let (root, clerk, minter, me) = (registrar.enroll(), registrar.enroll(), registrar.enroll(), registrar.enroll());
+        let (root, clerk, minter, me) = (registrar.join_locally(), registrar.join_locally(), registrar.join_locally(), registrar.join_locally());
         let (rc, cc, mc) = (s.credential(&root), s.credential(&clerk), s.credential(&minter));
         let genesis = Genesis { label: label.into(), root_rules: ScopeRules::default(), rooting: rc.clone() };
         let mut view = View::new(s.clone(), genesis.clone());
@@ -198,15 +210,17 @@ impl Node {
         Ok(out)
     }
 
-    /// Enroll a person (online, once): registrar credential, a group, a batch
-    /// of tickets, and test credit minted to fresh credentials.
-    pub fn enroll(&mut self, name: &str, out: &Path, credits: &[u64]) -> Result<Node, String> {
+    /// Operator: enroll a person (online, once). The wallet generated its own
+    /// key and sends only a join request, so the registrar never holds a
+    /// member's secret key. The town answers with the credential, a group, a
+    /// batch of ticketed credentials and test credit minted to some of them.
+    pub fn enroll(&mut self, req: &JoinRequest, credits: &[u64]) -> Result<Enrollment, String> {
         let op = self.operator.as_mut().ok_or("only the town operator can enroll")?;
-        let key = op.registrar.enroll();
+        let join = op.registrar.issue(req)?;
         let group = op.next_group;
         op.next_group += 1;
         let s = self.view.scheme().clone();
-        let creds: Vec<Credential> = (0..PREFETCH + credits.len()).map(|_| s.credential(&key)).collect();
+        let creds: Vec<Credential> = (0..PREFETCH + credits.len()).map(|_| randomize(&join.credential)).collect();
         self.issue_tickets(&creds, group)?;
         for (i, amount) in credits.iter().enumerate() {
             let op = self.operator.as_mut().unwrap();
@@ -215,24 +229,38 @@ impl Node {
             apply_ok(&mut self.view, &mint)?;
         }
         self.save()?;
+        let mut bundle = self.bundle();
+        bundle.tickets = self.know.tickets.values().filter(|t| creds.contains(&t.ticket.credential)).cloned().collect();
+        Ok(Enrollment { town: self.town.clone(), join, group, credited: credits.len(), creds, bundle })
+    }
+
+    /// Wallet: finish enrolling with the town's answer to this wallet's join
+    /// request, checking that the credential is bound to its own key.
+    pub fn finish_enrollment(pending: PendingKey, e: &Enrollment, name: &str, out: &Path) -> Result<Node, String> {
+        let s = BrioletteV1 { group_public_key: e.town.group_public_key.clone() };
+        let key = pending.finish(&s, &e.join)?;
         let mut person = Node {
             path: out.into(),
             name: name.into(),
             key,
-            group,
-            pool: creds[credits.len()..].to_vec(),
-            mine: creds.iter().cloned().collect(),
-            town: self.town.clone(),
-            view: View::new(s.clone(), self.town.genesis.clone()),
+            group: e.group,
+            pool: e.creds[e.credited..].to_vec(),
+            mine: e.creds.iter().cloned().collect(),
+            town: e.town.clone(),
+            view: View::new(s.clone(), e.town.genesis.clone()),
             know: Knowledge::default(),
             operator: None,
             outbox: vec![],
             cheat_states: BTreeSet::new(),
         };
-        person.absorb_bundle(&self.bundle());
-        for t in self.know.tickets.values().filter(|t| person.mine.contains(&t.ticket.credential)) {
-            person.know.add_ticket(&s, t.clone());
+        // The pool must be signable: each credential randomizes our own.
+        for c in &e.creds {
+            let sig = s.sign(&person.key, c, b"pave/enroll-check", None);
+            if !s.verify(c, b"pave/enroll-check", None, &sig) {
+                return Err("enrollment credential is not ours".into());
+            }
         }
+        person.absorb_bundle(&e.bundle);
         person.save()?;
         Ok(person)
     }

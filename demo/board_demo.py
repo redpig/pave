@@ -79,7 +79,11 @@ def main():
     cli("init", "--town", town_file, "--label", "Elm Street")
     people = {}
     for name, credit in [("alice", "100"), ("bob", "20"), ("carol", "20,20")]:
-        r = cli("enroll", "--town", town_file, "--name", name, "--out", os.path.join(d, f"{name}.pave"), "--credit", credit)
+        key, req, reply = (os.path.join(d, f"{name}.{x}") for x in ("key", "join", "reply"))
+        cli("join", "--key", key, "--request", req)  # on the wallet: its key never leaves
+        r = cli("enroll", "--town", town_file, "--request", req, "--reply", reply, "--credit", credit)
+        cli("finish", "--key", key, "--reply", reply, "--name", name, "--out", os.path.join(d, f"{name}.pave"))
+        os.remove(key)
         print(f"  enrolled {name}: group {r['group']}, {r['tickets']} prefetched tickets, test credit {credit}")
     nodes = [Node(args.bin, town_file, args.port, "town")]
     for i, name in enumerate(["alice", "bob", "carol"]):

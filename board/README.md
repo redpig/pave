@@ -4,7 +4,7 @@ A neighborhood work board on pave, and `pave-node`, which runs one wallet as a p
 
 ## Wallets and tickets
 
-- **Enrollment, once, online.** The registrar issues the wallet's group credential and the clerk issues a batch of prefetched tickets. Each ticket certifies a fresh randomized credential, in the wallet's revocation group, at the current epoch.
+- **Enrollment, once, online.** The wallet generates its own key and sends the registrar only a public key with a proof of its secret (`pave-node join`), so no role ever holds a member's key and none can sign or forge evidence as one. The registrar issues the group credential and the clerk a batch of prefetched tickets (`pave-node enroll`), and the wallet checks both are bound to its key (`pave-node finish`). Each ticket certifies a fresh randomized credential, in the wallet's revocation group, at the current epoch.
 - **One fresh credential per use.** Every holding, and every role in a job (posting, replying, change from a payment), uses a fresh credential, so a wallet's actions are unlinkable unless it uses one state twice.
 - **Ticket privacy.** Tickets travel only for credentials that appear in shared records, never for the unused pool.
 - **Refills.** A wallet asks the town for more tickets, signing the request with one of its own credentials so the clerk knows its group.

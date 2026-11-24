@@ -2,7 +2,9 @@
 //!
 //! ```text
 //! pave-node init   --town town.pave [--label NAME]
-//! pave-node enroll --town town.pave --name alice --out alice.pave [--credit 100,20]
+//! pave-node join   --key alice.key --request alice.join          (wallet)
+//! pave-node enroll --town town.pave --request alice.join --reply alice.reply [--credit 100,20]
+//! pave-node finish --key alice.key --reply alice.reply --name alice --out alice.pave
 //! pave-node run    --state alice.pave --listen 127.0.0.1:7001
 //! ```
 //!
@@ -10,7 +12,8 @@
 //! answering with one JSON object per line on stdout, so a person, a script
 //! or an agent can drive it the same way. Send `{"cmd":"help"}` for the list.
 
-use pave_board::node::Node;
+use pave_board::node::{Enrollment, Node};
+use pave_scheme_briolette::{join_nonce, JoinRequest, PendingKey};
 use pave_board::{board, net};
 use pave_kernel::{Credential, Hash};
 use serde_json::{json, Value};
@@ -192,25 +195,53 @@ fn main() {
             });
             println!("{}", json!({ "ok": true, "town": town, "board": hx(&n.town.board), "sequence": hx(&n.town.sequence) }));
         }
+        Some("join") => {
+            // Wallet side: generate a key here and write a join request.
+            let key = PathBuf::from(need(&args, "--key"));
+            let request = PathBuf::from(need(&args, "--request"));
+            let (pending, req) = PendingKey::generate(&join_nonce());
+            write_cbor(&key, &pending);
+            write_cbor(&request, &req);
+            println!("{}", json!({ "ok": true, "key": key, "request": request }));
+        }
         Some("enroll") => {
+            // Town side: answer a join request.
             let town = PathBuf::from(need(&args, "--town"));
+            let request: JoinRequest = read_cbor(&PathBuf::from(need(&args, "--request")));
+            let reply = PathBuf::from(need(&args, "--reply"));
+            let credits: Vec<u64> = arg(&args, "--credit").map(|c| c.split(',').filter_map(|x| x.parse().ok()).collect()).unwrap_or_default();
+            let mut t = Node::load(&town).unwrap_or_else(|e| die(e));
+            let e = t.enroll(&request, &credits).unwrap_or_else(|e| die(e));
+            write_cbor(&reply, &e);
+            println!("{}", json!({ "ok": true, "group": e.group, "credit": credits, "tickets": e.creds.len() - e.credited, "reply": reply }));
+        }
+        Some("finish") => {
+            // Wallet side: take the town's answer and become a node.
+            let key: PendingKey = read_cbor(&PathBuf::from(need(&args, "--key")));
+            let e: Enrollment = read_cbor(&PathBuf::from(need(&args, "--reply")));
             let name = need(&args, "--name");
             let out = PathBuf::from(need(&args, "--out"));
-            let credits: Vec<u64> = arg(&args, "--credit").map(|c| c.split(',').filter_map(|x| x.parse().ok()).collect()).unwrap_or_default();
-            let mut t = Node::load(&town).unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1)
-            });
-            let p = t.enroll(&name, &out, &credits).unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1)
-            });
-            println!("{}", json!({ "ok": true, "name": name, "group": p.group, "credit": credits, "tickets": p.pool.len() }));
+            let p = Node::finish_enrollment(key, &e, &name, &out).unwrap_or_else(|e| die(e));
+            println!("{}", json!({ "ok": true, "name": name, "group": p.group, "tickets": p.pool.len(), "out": out }));
         }
         Some("run") => run(PathBuf::from(need(&args, "--state")), need(&args, "--listen")),
         _ => {
-            eprintln!("usage: pave-node init|enroll|run ... (see the source header)");
+            eprintln!("usage: pave-node init|join|enroll|finish|run ... (see the source header)");
             std::process::exit(2);
         }
     }
+}
+
+fn die(e: String) -> ! {
+    eprintln!("{e}");
+    std::process::exit(1)
+}
+
+fn write_cbor<T: serde::Serialize>(path: &std::path::Path, v: &T) {
+    std::fs::write(path, pave_kernel::hash::encode(v)).unwrap_or_else(|e| die(format!("{}: {e}", path.display())));
+}
+
+fn read_cbor<T: serde::de::DeserializeOwned>(path: &std::path::Path) -> T {
+    let bytes = std::fs::read(path).unwrap_or_else(|e| die(format!("{}: {e}", path.display())));
+    ciborium::from_reader(bytes.as_slice()).unwrap_or_else(|e| die(format!("{}: {e}", path.display())))
 }

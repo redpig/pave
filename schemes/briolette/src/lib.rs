@@ -22,8 +22,9 @@ pub struct BrioletteV1 {
     pub group_public_key: Vec<u8>,
 }
 
-/// The group issuer: enrolls members by issuing their credentials. In pave
-/// terms, the registrar.
+/// The group issuer: issues credentials on holders' public keys. In pave
+/// terms, the registrar. It never sees a holder's secret key, so it can't sign
+/// as a holder or forge evidence against one.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Issuer {
     secret_key: Vec<u8>,
@@ -37,6 +38,58 @@ pub struct HolderKey {
     credential: Vec<u8>,
 }
 
+/// A holder's key before its credential arrives. Keep it secret.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct PendingKey {
+    secret_key: Vec<u8>,
+    public_key: Vec<u8>,
+}
+
+/// What a holder sends the issuer to join: its public key, with a proof of
+/// knowledge of the secret key bound to the issuer's nonce.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct JoinRequest {
+    pub public_key: Vec<u8>,
+    pub nonce: Vec<u8>,
+}
+
+/// The issuer's answer: the holder's base credential.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct JoinReply {
+    pub credential: Vec<u8>,
+}
+
+/// A fresh random join nonce. A replayed join request only yields a credential
+/// for the requester's own key, so the holder may choose it.
+pub fn join_nonce() -> Vec<u8> {
+    let mut nonce = vec![0u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce);
+    nonce
+}
+
+impl PendingKey {
+    /// Holder side, step 1: generate a key on the holder's own device and a
+    /// join request for it.
+    pub fn generate(nonce: &[u8]) -> (PendingKey, JoinRequest) {
+        let (mut sk, mut pk) = (Vec::new(), Vec::new());
+        assert!(v1::generate_wallet_keypair(&nonce.to_vec(), &mut sk, &mut pk));
+        (PendingKey { secret_key: sk, public_key: pk.clone() }, JoinRequest { public_key: pk, nonce: nonce.to_vec() })
+    }
+
+    /// Holder side, step 2: accept the issued credential, checking that it is
+    /// in the issuer's group and bound to this key.
+    pub fn finish(self, scheme: &BrioletteV1, reply: &JoinReply) -> Result<HolderKey, String> {
+        let cred = &reply.credential;
+        if cred.len() != 4 * G1_LENGTH || cred[3 * G1_LENGTH..] != self.public_key[..G1_LENGTH] {
+            return Err("credential is not bound to this key".into());
+        }
+        if !v1::credential_in_group(cred, &scheme.group_public_key) {
+            return Err("credential is not in the issuer's group".into());
+        }
+        Ok(HolderKey { secret_key: self.secret_key, credential: cred.clone() })
+    }
+}
+
 impl Issuer {
     pub fn new() -> Self {
         let (mut secret_key, mut group_public_key) = (Vec::new(), Vec::new());
@@ -48,15 +101,39 @@ impl Issuer {
         BrioletteV1 { group_public_key: self.group_public_key.clone() }
     }
 
-    /// Enroll a new holder: generate a wallet key and issue its credential.
-    pub fn enroll(&self) -> HolderKey {
-        let mut nonce = vec![0u8; 32];
-        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce);
-        let (mut sk, mut pk) = (Vec::new(), Vec::new());
-        assert!(v1::generate_wallet_keypair(&nonce, &mut sk, &mut pk));
+    /// Issue a credential on a join request. Fails unless the request proves
+    /// knowledge of the key's secret.
+    pub fn issue(&self, req: &JoinRequest) -> Result<JoinReply, String> {
         let (mut cred, mut cred_sig) = (Vec::new(), Vec::new());
-        assert!(v1::issue_credential(&pk, &self.secret_key, &nonce, &mut cred, &mut cred_sig));
-        HolderKey { secret_key: sk, credential: cred }
+        if !v1::issue_credential(&req.public_key, &self.secret_key, &req.nonce, &mut cred, &mut cred_sig) {
+            return Err("join request has no valid proof of key".into());
+        }
+        Ok(JoinReply { credential: cred })
+    }
+
+    /// Run both sides of a join in one process. Only for keys this process
+    /// will hold itself, such as an operator's own role keys, and for tests.
+    pub fn join_locally(&self) -> HolderKey {
+        let nonce = join_nonce();
+        let (pending, req) = PendingKey::generate(&nonce);
+        let reply = self.issue(&req).expect("local join");
+        pending.finish(&self.scheme(), &reply).expect("local join")
+    }
+}
+
+/// A fresh randomization of a base credential. Anyone holding the base
+/// credential can do this; only the key's holder can sign with the result.
+pub fn randomize(credential: &[u8]) -> Credential {
+    let mut out = Vec::new();
+    assert!(v1::randomize_credential(&credential.to_vec(), &mut out));
+    Credential(out)
+}
+
+impl HolderKey {
+    /// The holder's base credential, as issued. Don't use it directly: it
+    /// links everything signed with it.
+    pub fn base_credential(&self) -> &[u8] {
+        &self.credential
     }
 }
 
@@ -70,9 +147,7 @@ impl Scheme for BrioletteV1 {
     type HolderKey = HolderKey;
 
     fn credential(&self, key: &HolderKey) -> Credential {
-        let mut out = Vec::new();
-        assert!(v1::randomize_credential(&key.credential, &mut out));
-        Credential(out)
+        randomize(&key.credential)
     }
 
     fn sign(&self, key: &HolderKey, cred: &Credential, msg: &[u8], basename: Option<&[u8]>) -> Sig {

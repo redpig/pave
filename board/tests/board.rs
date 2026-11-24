@@ -29,9 +29,9 @@ fn the_whole_story_on_ecdaa() {
     let dir = std::env::temp_dir().join(format!("pave-board-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut town = Node::init_town(&dir.join("town"), "test").unwrap();
-    let mut alice = town.enroll("alice", &dir.join("alice"), &[100]).unwrap();
-    let mut bob = town.enroll("bob", &dir.join("bob"), &[20]).unwrap();
-    let mut carol = town.enroll("carol", &dir.join("carol"), &[20, 20]).unwrap();
+    let mut alice = join(&mut town, "alice", &dir, &[100]);
+    let mut bob = join(&mut town, "bob", &dir, &[20]);
+    let mut carol = join(&mut town, "carol", &dir, &[20, 20]);
     meet(&mut alice, &mut bob);
     meet(&mut alice, &mut carol);
 
@@ -99,4 +99,12 @@ fn the_whole_story_on_ecdaa() {
     assert_eq!(again.my_coins(), alice.my_coins());
     assert_eq!(again.view.flagged(), alice.view.flagged());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Enroll the way a wallet does: its key stays on its side.
+fn join(town: &mut Node, name: &str, dir: &std::path::Path, credits: &[u64]) -> Node {
+    use pave_scheme_briolette::{join_nonce, PendingKey};
+    let (pending, req) = PendingKey::generate(&join_nonce());
+    let e = town.enroll(&req, credits).unwrap();
+    Node::finish_enrollment(pending, &e, name, &dir.join(name)).unwrap()
 }

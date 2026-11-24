@@ -7,7 +7,7 @@ use std::time::Instant;
 fn main() {
     let issuer = Issuer::new();
     let s = issuer.scheme();
-    let key = issuer.enroll();
+    let key = issuer.join_locally();
     let n = 50;
     let t = Instant::now();
     let creds: Vec<_> = (0..n).map(|_| s.credential(&key)).collect();
