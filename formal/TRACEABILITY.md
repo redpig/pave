@@ -53,3 +53,9 @@ The tests were checked against injected faults matching the TLA+ fault names. Ea
 | `nowindow` | A revoked group anywhere in the history stops the coin | 1 |
 | `softall` | Soft expiry checks every ticket, not just the last hop | 2 |
 | `nohard` | Hard expiry is never checked | 1 |
+| `nodedupe` (reports) | Every report counts, not each person once per issue | 1 |
+| `ignoreruling` (reports) | A report ruled malicious still counts | 1 |
+| `nostanding` (reports) | A report counts without standing against earlier rulings | 1 |
+| `anypermit` (reports) | Any mirrored permit in a reply covers the issue | 1 |
+| `nohold` (reports) | Reports go out the moment they're made | 1 |
+| `anymirror` (reports) | Permits and rulings from anyone count | 1 |

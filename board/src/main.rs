@@ -13,6 +13,7 @@
 //! or an agent can drive it the same way. Send `{"cmd":"help"}` for the list.
 
 use pave_board::node::{Enrollment, Join, Node, PendingJoin};
+use pave_board::report;
 use pave_board::{board, net};
 use pave_kernel::{Credential, Hash};
 use serde_json::{json, Value};
@@ -53,7 +54,7 @@ const HELP: &[&str] = &[
     "whoami", "board", "post {title, pay}", "reply {job, note}", "accept {job, worker}", "done {job}",
     "pay {job}", "receive", "check {state}", "spend {state, to}", "cheat {state, to}", "meet {peer}",
     "gossip {peer}", "refill {peer, count}",
-    "evidence", "send {peer, amount, memo}", "resume {peer}", "swap {peer, state}", "collect {peer}", "roll {revoke: [group, ...], revoke_class: [class, ...]} (operator)", "help",
+    "evidence", "issues", "report {category, lat, lon, observed, note, photo} or {issue, observed, note}", "respond {issue, text, permit}", "forward {issue, channel, receipt}", "clear {issue}", "reports_on {issue}", "mirror {file} (town)", "rule {report, malicious} (town)", "send {peer, amount, memo}", "resume {peer}", "swap {peer, state}", "collect {peer}", "roll {revoke: [group, ...], revoke_class: [class, ...]} (operator)", "help",
 ];
 
 fn command(node: &Arc<Mutex<Node>>, v: &Value) -> Result<Value, String> {
@@ -116,7 +117,77 @@ fn command(node: &Arc<Mutex<Node>>, v: &Value) -> Result<Value, String> {
 }
 
 fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
+    // Reports held back for privacy go out once their epoch has come.
+    n.release_reports();
     match cmd {
+        "issues" => {
+            let issues: Vec<Value> = n
+                .issues()
+                .values()
+                .map(|i| json!({
+                    "issue": hx(&i.id), "category": i.key.category, "cell": i.key.cell, "opened": i.key.opened,
+                    "reporters": i.reporters, "by_class": i.classes, "notes": i.notes, "photos": i.photos,
+                    "permit": match &i.permit {
+                        report::PermitStatus::Found(p) => json!({ "found": hx(p) }),
+                        report::PermitStatus::Nearby(p) => json!({ "nearby": hx(p) }),
+                        report::PermitStatus::None => json!("none"),
+                    },
+                    "replies": i.replies.iter().map(|(t, p)| json!({ "text": t, "permit": p.as_ref().map(hx) })).collect::<Vec<_>>(),
+                    "forwarded": i.forwarded.iter().map(|(c, r)| json!({ "channel": c, "receipt": r })).collect::<Vec<_>>(),
+                    "cleared": i.cleared, "discounted": i.discounted,
+                }))
+                .collect();
+            Ok(json!({ "issues": issues, "held_reports": n.unpublished.len() }))
+        }
+        "report" => {
+            let observed = v["observed"].as_str().ok_or("missing observed (YYYY-MM-DD)")?;
+            let note = v["note"].as_str().unwrap_or("");
+            let photo = v["photo"].as_str().map(|p| {
+                let mut salt = [0u8; 32];
+                rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut salt);
+                report::commit_photo(&salt, p.as_bytes())
+            });
+            let issue = if v.get("issue").is_some() {
+                let issue = parse_hash(v, "issue")?;
+                n.corroborate(&issue, observed, note)?
+            } else {
+                let category = v["category"].as_str().ok_or("missing category")?;
+                let (lat, lon) = (v["lat"].as_f64().ok_or("missing lat")?, v["lon"].as_f64().ok_or("missing lon")?);
+                let key = report::IssueKey { category: category.into(), cell: report::cell(lat, lon, report::CELL_PRECISION), opened: observed.into() };
+                n.report(key, observed, note, photo)?
+            };
+            Ok(json!({ "issue": hx(&issue), "published_from_epoch": n.unpublished.last().map(|(e, _)| *e) }))
+        }
+        "respond" => {
+            let issue = parse_hash(v, "issue")?;
+            let permit = if v.get("permit").is_some() { Some(parse_hash(v, "permit")?) } else { None };
+            Ok(json!({ "posted": hx(&n.reply_issue(&issue, v["text"].as_str().unwrap_or(""), permit)?) }))
+        }
+        "forward" => {
+            let issue = parse_hash(v, "issue")?;
+            let channel = v["channel"].as_str().ok_or("missing channel")?;
+            let receipt = v["receipt"].as_str().ok_or("missing receipt")?;
+            Ok(json!({ "posted": hx(&n.forward_issue(&issue, channel, receipt)?) }))
+        }
+        "clear" => {
+            let issue = parse_hash(v, "issue")?;
+            Ok(json!({ "posted": hx(&n.clear_issue(&issue)?) }))
+        }
+        "mirror" => {
+            let file = v["file"].as_str().ok_or("missing file")?;
+            let text = std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?;
+            let permits: Vec<report::PublishedPermit> = serde_json::from_str(&text).map_err(|e| format!("{file}: {e}"))?;
+            Ok(json!({ "mirrored": n.mirror_permits(&permits)?, "of": permits.len() }))
+        }
+        "rule" => {
+            let report = parse_hash(v, "report")?;
+            let malicious = v["malicious"].as_bool().unwrap_or(true);
+            Ok(json!({ "ruling": hx(&n.rule(report, malicious)?) }))
+        }
+        "reports_on" => {
+            let issue = parse_hash(v, "issue")?;
+            Ok(json!({ "reports": n.reports_on(&issue).iter().map(hx).collect::<Vec<_>>() }))
+        }
         "whoami" => {
             let coins: Vec<Value> = n.my_coins().iter().map(|c| json!({ "state": hx(&c.state), "amount": c.amount, "hops": c.hops })).collect();
             let balance: u64 = n.my_coins().iter().map(|c| c.amount).sum();

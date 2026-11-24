@@ -50,6 +50,10 @@ pub struct Town {
     pub clerk: Credential,
     pub cash: Hash,
     pub classes: BTreeMap<String, Class>,
+    /// The reports scope, and the credentials of its mirror and moderator roles.
+    pub reports: Hash,
+    pub mirror: Credential,
+    pub moderator: Credential,
 }
 
 /// The operator: registrar plus the root, clerk and minter roles, each its
@@ -164,6 +168,7 @@ pub struct Saved {
     pub invoices: Vec<(Credential, u64, Hash)>,
     pub paid: Vec<(Hash, Credential)>,
     pub pending: Vec<Record>,
+    pub unpublished: Vec<(u32, Record)>,
 }
 
 /// A summary of what a wallet has: id prefixes of its records, evidence
@@ -219,6 +224,8 @@ pub struct Node {
     pub paid: BTreeMap<Hash, Credential>,
     /// Payer: payments signed and sent but not yet acknowledged.
     pub pending: Vec<Record>,
+    /// This wallet's reports, held until the epoch they may be published in.
+    pub unpublished: Vec<(u32, Record)>,
 }
 
 fn cash_schema() -> Schema {
@@ -289,6 +296,8 @@ impl Node {
         apply_ok(&mut view, &cash)?;
         let board = sign(&s, &root, &rc, Op::CreateScope { parent: genesis.root_scope(), rules: ScopeRules::default(), authority: auth });
         apply_ok(&mut view, &board)?;
+        let reports = sign(&s, &root, &rc, Op::CreateScope { parent: genesis.root_scope(), rules: ScopeRules::default(), authority: auth });
+        apply_ok(&mut view, &reports)?;
 
         let access: BTreeMap<String, Issuer> = default_classes().iter().map(|(c, _)| (c.to_string(), Issuer::new())).collect();
         let classes = default_classes()
@@ -303,6 +312,9 @@ impl Node {
             clerk: cc,
             cash: cash_schema().id(),
             classes,
+            reports: reports.output(0),
+            mirror: s.credential(&me),
+            moderator: s.credential(&me),
         };
         let my_access = access["hardware"].join_locally();
         let operator = Operator {
@@ -341,6 +353,7 @@ impl Node {
             invoices: BTreeMap::new(),
             paid: BTreeMap::new(),
             pending: vec![],
+            unpublished: vec![],
             vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(path)?)),
         };
         node.save()?;
@@ -456,6 +469,7 @@ impl Node {
             invoices: BTreeMap::new(),
             paid: BTreeMap::new(),
             pending: vec![],
+            unpublished: vec![],
             vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(out)?)),
         };
         for c in &e.creds {
@@ -500,6 +514,7 @@ impl Node {
             invoices: saved.invoices.into_iter().map(|(c, a, m)| (c, (a, m))).collect(),
             paid: saved.paid.into_iter().collect(),
             pending: saved.pending,
+            unpublished: saved.unpublished,
             vault: std::sync::Mutex::new(vault),
         };
         node.absorb_bundle(&Bundle {
@@ -540,6 +555,7 @@ impl Node {
             invoices: self.invoices.iter().map(|(c, (a, m))| (c.clone(), *a, *m)).collect(),
             paid: self.paid.iter().map(|(h, c)| (*h, c.clone())).collect(),
             pending: self.pending.clone(),
+            unpublished: self.unpublished.clone(),
         };
         let bytes = pave_kernel::hash::encode(&saved);
         let mut vault = self.vault.lock().unwrap();

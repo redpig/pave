@@ -2,6 +2,10 @@
 
 A neighborhood work board on pave, and `pave-node`, which runs one wallet as a process. Credentials are Briolette v1 (ECDAA over BLS12-381).
 
+## Civic reports
+
+The same node runs the [civic reports profile](../spec/reports.md): public reports of problems in the street, counted once per person per issue through per-issue pseudonyms, checked against permits the town mirrors from the city's published data, and ruled on without unmasking anyone. A wallet holds its own reports until the next epoch. `python3 demo/reports_demo.py` runs it across separate processes.
+
 ## Wallets and tickets
 
 - **Enrollment, once, online, into a class.** A class is a kind of device or level of assurance (this test town has `hardware` and `software`). The wallet generates two keys of its own, one for transfers and one for network access, and sends only public keys with proofs (`pave-node join`). No role ever holds a member's key, so none can sign or forge evidence as one. The town issues a transfer credential, shared by everyone so coins don't show the class, and an access credential from the class's own issuer, and mints the test credit (`pave-node enroll`). The wallet checks both credentials are bound to its keys (`pave-node finish`).
@@ -58,6 +62,13 @@ The whole run takes about 3 seconds. Measured on one core: randomizing a credent
 | `meet` | `peer` (`host:port`) | `new_evidence`, `bytes` |
 | `gossip` | `peer` | `compressed_bytes`, `wants`, `extended_bytes` |
 | `refill` | `peer`, `count` | `tickets` received from the town |
+| `issues` | | each issue: category, cell, day opened, distinct `reporters` by class, `permit` (found, nearby or none), replies, forwards, `cleared`, `discounted` |
+| `report` | `category`, `lat`, `lon`, `observed`, `note`, `photo`; or `issue`, `observed`, `note` | `issue`; held until the next epoch |
+| `respond` | `issue`, `text`, `permit` | the reply's id |
+| `forward` | `issue`, `channel`, `receipt` | the record's id |
+| `clear` | `issue` | held until the next epoch |
+| `mirror` | `file` | permits signed in (town only) |
+| `rule` | `report`, `malicious` | the ruling's id (town only) |
 | `send` | `peer`, `amount`, `memo` | `paid` (the payee's new coin), or `refused`, with the `bytes` of each step |
 | `resume` | `peer` | `acknowledged`: payments resent after a dropped connection |
 | `swap` | `peer`, `state` | `paid` (the fresh coin's state), or `held_until` an epoch |

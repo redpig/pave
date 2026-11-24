@@ -57,6 +57,7 @@ We do not assume that any role behaves well (principle 10), that devices are tam
 13. Operator state and role keys
 14. Payment bridge and redemption
 15. Cross-cutting: the class break
+16. Civic reports profile
 
 ---
 
@@ -330,6 +331,33 @@ Where pave can do better once this is built:
 
 ---
 
+## 16. Civic reports profile
+
+`board/src/report.rs`; [spec/reports.md](../spec/reports.md)
+
+**Attack surface:** reports, clearings, replies and forwards in a public scope; endorsements and their pseudonyms; the mirror's permits; the moderator's rulings; the reporter's device and the path a report takes off it. Briolette has no counterpart, so its column is omitted.
+
+| # | Attack | Prevent | React | Status |
+|---|---|---|---|---|
+| RP1 | Retaliation: the subject of a report finds out who filed it | Reports are signed by a fresh credential and endorsed by a fresh randomization of the access credential; the pseudonym is per issue and unrelated across issues; only a 150 m cell and a day are public | n/a | Built |
+| RP2 | Timing gives the reporter away ("posted at 8:02 from that corner") | The wallet holds its own reports until the next epoch | n/a | Built |
+| RP3 | The first peer to receive a report learns which device it came from | Carry reports through several peers before they reach the town; an anonymous network channel | n/a | Gap: today the reporter's own meet delivers it (P1) |
+| RP4 | A photo identifies the reporter, bystanders or number plates | Photos are committed by a salted hash and revealed only to a verifier; strip metadata, blur faces and plates on the device | n/a | Partial: commitment built; Gap: reveal, stripping, blurring |
+| RP5 | Brigading: one person files many reports, or many reports from many credentials | One pseudonym per person per issue, whatever credential they use; reporters must be enrolled members, so Sybils cost an enrollment each | Counts by wallet class show a skew toward low-assurance wallets | Built (mutation `nodedupe`) |
+| RP6 | A false or malicious report about a business or a rival crew | The report states only what was seen; the permit check comes from the city's data, and a valid permit settles it; the subject can reply in the thread | A ruling discounts the report and lists its pseudonym; the reporter's later reports need standing against it, which only they can't produce | Built (mutations `ignoreruling`, `nostanding`) |
+| RP7 | A ruled reporter starts a fresh issue to get around the ruling | Standing is against every ruling, on every issue | n/a | Built |
+| RP8 | A ruled reporter's wallet doesn't learn of the ruling, and keeps posting | A report counts only if its standing covers every ruling made before the report's epoch | n/a | Built |
+| RP9 | The moderator silences critics by ruling honest reports malicious | Rulings are public and name the report; a panel rather than one moderator; appeals | Rulings are evidence against the moderator; a recipient can choose not to honor a moderator | Partial: rulings public; Gap: panels and appeals |
+| RP10 | A forged permit or ruling, posted by someone other than the role | Only the mirror's permits and the moderator's rulings count | n/a | Built (test: forged permit and ruling ignored) |
+| RP11 | The mirror invents permits, or leaves real ones out so honest work looks unpermitted | Anyone can check a mirrored permit against the city's data; several independent mirrors | A false or missing permit is evidence against the mirror | Partial: one mirror; Gap: comparing mirrors |
+| RP12 | The subject points to a permit that doesn't cover the site | A permit in a reply counts only if it covers the issue's area on the day it opened | n/a | Built (mutation `anypermit`) |
+| RP13 | The subject's allies mark an issue cleared while it isn't | Clearings count each person once, like reports; the thread shows both counts | n/a | Built |
+| RP14 | A reporter claims a place or day they weren't at | Not preventable; independent corroboration by distinct people is what carries weight | A verifier's visit, as a paid job | Accepted |
+| RP15 | Paying for reports creates false ones | Pay for checking and forwarding, never for reporting | n/a | Design rule |
+| RP16 | Spam in the scope | Senders are enrolled members; per-issue counting caps what one person adds; rate limits | n/a | Partial |
+
+---
+
 ## Where pave is ahead of Briolette
 
 - **Offline detection.** Two holders who meet find a double spend on their own, with a portable 770-byte proof (K3).
@@ -340,6 +368,7 @@ Where pave can do better once this is built:
 - **Bounded minting.** Budgets are capabilities (M1, M3).
 - **Revocation needs no trust in the clerk.** Recipients refuse known cheats from evidence alone (C2, A4).
 - **Hints switch gossip tiers.** A 21-byte hint pulls a proof only when it's needed (A5, G1).
+- **Civic reports that count people without naming them** (section 16): one pseudonym per person per issue, and rulings that stop a malicious reporter through the standing proof without unmasking anyone.
 - **No central log is required** (V4). A validator's answers are evidence against it (V2).
 
 ## Where pave is behind
