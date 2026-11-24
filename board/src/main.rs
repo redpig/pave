@@ -52,7 +52,7 @@ fn parse_cred(v: &Value, k: &str) -> Result<Credential, String> {
 
 const HELP: &[&str] = &[
     "whoami", "board", "post {title, pay}", "reply {job, note}", "accept {job, worker}", "done {job}",
-    "pay {job} or {job, vouch, note}", "reply {job, note, trade: true}", "reputation {contractor}", "receive", "check {state}", "spend {state, to}", "cheat {state, to}", "meet {peer}",
+    "pay {job} or {job, vouch, note, as: stable label}", "stable {label} (a stable credential to share with contacts)", "add_contact {name, credential}", "reply {job, note, trade: true}", "reputation {contractor}", "receive", "check {state}", "spend {state, to}", "cheat {state, to}", "meet {peer}",
     "gossip {peer}", "refill {peer, count}", "sync {peer} (send queued posts to the board host, fetch the boards)",
     "evidence", "issues", "report {category, lat, lon, observed, note, photo} or {issue, observed, note}", "respond {issue, text, permit}", "forward {issue, channel, receipt}", "clear {issue}", "reports_on {issue}", "mirror {file} (town)", "rule {report, malicious} (town)", "send {peer, amount, memo}", "resume {peer}", "swap {peer, state}", "collect {peer}", "roll {revoke: [group, ...], revoke_class: [class, ...]} (operator)", "help",
 ];
@@ -223,12 +223,18 @@ fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
             let id = if v["trade"].as_bool() == Some(true) { n.reply_as_contractor(job, note)? } else { n.reply(job, note)? };
             Ok(json!({ "message": hx(&id), "contractor": n.contractor().as_ref().map(hx) }))
         }
+        "stable" => Ok(json!({ "credential": cx(&n.stable(v["label"].as_str().ok_or("missing label")?)?) })),
+        "add_contact" => {
+            let name = v["name"].as_str().ok_or("missing name")?;
+            n.add_contact(name, parse_cred(v, "credential")?)?;
+            Ok(json!({ "contacts": n.contacts.keys().collect::<Vec<_>>() }))
+        }
         "reputation" => {
             let who = if v.get("contractor").is_some() { parse_hash(v, "contractor")? } else { n.contractor().ok_or("this wallet has no trade key")? };
             let (counts, vouches) = n.reputation(&who);
             Ok(json!({
                 "contractor": hx(&who), "people_by_type": counts,
-                "vouches": vouches.iter().map(|x| json!({ "job": hx(&x.job), "type": x.category, "note": x.note, "coin": hx(&x.coin), "class": x.class })).collect::<Vec<_>>(),
+                "vouches": vouches.iter().map(|x| json!({ "job": hx(&x.job), "type": x.category, "note": x.note, "coin": hx(&x.coin), "class": x.class, "by": x.by.as_ref().map(cx), "known_by": x.known_by })).collect::<Vec<_>>(),
                 "coins_held": n.vouch_coins().iter().map(hx).collect::<Vec<_>>(),
             }))
         }
@@ -237,7 +243,7 @@ fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
         "pay" => {
             let job = parse_hash(v, "job")?;
             let payment = match v["vouch"].as_str() {
-                Some(category) => n.pay_and_vouch(job, category, v["note"].as_str().unwrap_or(""))?,
+                Some(category) => n.pay_and_vouch(job, category, v["note"].as_str().unwrap_or(""), v["as"].as_str())?,
                 None => n.pay(job)?,
             };
             Ok(json!({ "payment": hx(&payment) }))

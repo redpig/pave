@@ -175,6 +175,10 @@ pub struct Saved {
     pub outgoing: Vec<Submission>,
     #[serde(default)]
     pub trade: Option<Credential>,
+    #[serde(default)]
+    pub stable: Vec<(String, Credential)>,
+    #[serde(default)]
+    pub contacts: Vec<(String, Credential)>,
 }
 
 /// A summary of what a wallet has: id prefixes of its records, evidence
@@ -236,6 +240,10 @@ pub struct Node {
     pub outgoing: Vec<Submission>,
     /// This wallet's trade key, once it replies as a contractor.
     pub trade: Option<Credential>,
+    /// Stable credentials this wallet signs with for chosen audiences, by label.
+    pub stable: BTreeMap<String, Credential>,
+    /// Stable credentials others shared with this wallet, by the name it knows them by.
+    pub contacts: BTreeMap<String, Credential>,
 }
 
 fn cash_schema() -> Schema {
@@ -368,6 +376,8 @@ impl Node {
             boards: BTreeMap::new(),
             outgoing: vec![],
             trade: None,
+            stable: BTreeMap::new(),
+            contacts: BTreeMap::new(),
             vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(path)?)),
         };
         node.open_boards()?;
@@ -487,6 +497,8 @@ impl Node {
             boards: BTreeMap::new(),
             outgoing: vec![],
             trade: None,
+            stable: BTreeMap::new(),
+            contacts: BTreeMap::new(),
             vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(out)?)),
         };
         for c in &e.creds {
@@ -535,6 +547,8 @@ impl Node {
             boards: BTreeMap::new(),
             outgoing: saved.outgoing,
             trade: saved.trade,
+            stable: saved.stable.into_iter().collect(),
+            contacts: saved.contacts.into_iter().collect(),
             vault: std::sync::Mutex::new(vault),
         };
         node.absorb_bundle(&Bundle {
@@ -585,6 +599,8 @@ impl Node {
             boards: self.boards.iter().map(|(s, c)| (*s, c.submissions(), c.receipts.values().cloned().collect())).collect(),
             outgoing: self.outgoing.clone(),
             trade: self.trade.clone(),
+            stable: self.stable.iter().map(|(l, c)| (l.clone(), c.clone())).collect(),
+            contacts: self.contacts.iter().map(|(n, c)| (n.clone(), c.clone())).collect(),
         };
         let bytes = pave_kernel::hash::encode(&saved);
         let mut vault = self.vault.lock().unwrap();
@@ -858,7 +874,7 @@ impl Node {
     /// A contractor's reputation on the job board: distinct people per job
     /// type, and the vouches that count.
     pub fn reputation(&self, who: &Hash) -> (BTreeMap<String, usize>, Vec<board::Vouched>) {
-        self.copy(&self.town.jobs.scope).map(|c| board::reputation(c, &self.town.classes, who)).unwrap_or_default()
+        self.copy(&self.town.jobs.scope).map(|c| board::reputation(c, &self.town.classes, &self.contacts, who)).unwrap_or_default()
     }
 
     /// The vouch coins this wallet holds, by state.
@@ -889,6 +905,25 @@ impl Node {
     pub fn reply(&mut self, job: Hash, note: &str) -> Result<Hash, String> {
         let me = self.fresh()?;
         self.send_as(&me, BoardMsg::Reply { job, note: note.into(), trade: None })
+    }
+
+    /// A stable credential of this wallet's under `label` (made on first
+    /// use): share it with the people who should recognize what it signs,
+    /// such as one for neighbors and another for family. Anything signed
+    /// with it links to everything else signed with it.
+    pub fn stable(&mut self, label: &str) -> Result<Credential, String> {
+        if !self.stable.contains_key(label) {
+            let c = self.scheme().credential(&self.key);
+            self.stable.insert(label.into(), c);
+            self.save()?;
+        }
+        Ok(self.stable[label].clone())
+    }
+
+    /// Recognize what `name`'s stable credential signs from now on.
+    pub fn add_contact(&mut self, name: &str, cred: Credential) -> Result<(), String> {
+        self.contacts.insert(name.into(), cred);
+        self.save()
     }
 
     /// This wallet's trade key: the stable identity its vouches name. It is
@@ -941,11 +976,13 @@ impl Node {
     /// payment's second output is a zero-value vouch coin to the worker,
     /// and the vouch is posted, endorsed, in the contractor's thread. The
     /// worker must have replied as a contractor.
-    pub fn pay_and_vouch(&mut self, job_id: Hash, category: &str, note: &str) -> Result<Hash, String> {
-        self.pay_with(job_id, Some((category, note)))
+    /// With `as_stable`, the vouch is also signed with that stable
+    /// credential, so whoever was given it knows the vouch is this wallet's.
+    pub fn pay_and_vouch(&mut self, job_id: Hash, category: &str, note: &str, as_stable: Option<&str>) -> Result<Hash, String> {
+        self.pay_with(job_id, Some((category, note, as_stable)))
     }
 
-    fn pay_with(&mut self, job_id: Hash, vouch: Option<(&str, &str)>) -> Result<Hash, String> {
+    fn pay_with(&mut self, job_id: Hash, vouch: Option<(&str, &str, Option<&str>)>) -> Result<Hash, String> {
         let job = self.job(&job_id)?;
         if !self.mine.contains(&job.poster) {
             return Err("only the poster pays".into());
@@ -960,7 +997,7 @@ impl Node {
             None => None,
         };
         let rec = match (vouch, who) {
-            (Some((category, _)), Some(who)) => {
+            (Some((category, _, _)), Some(who)) => {
                 let mut parts = vec![(job.pay, worker.clone()), (0, worker)];
                 if coin.amount > job.pay {
                     parts.push((coin.amount - job.pay, self.fresh()?));
@@ -976,8 +1013,16 @@ impl Node {
         apply_ok(&mut self.view, &rec)?;
         let payment = rec.output(0);
         self.send_as(&job.poster, BoardMsg::Paid { job: job_id, payment })?;
-        if let (Some((category, note)), Some(who)) = (vouch, who) {
-            let msg = BoardMsg::Vouch { job: job_id, category: category.into(), note: note.into(), payment: rec };
+        if let (Some((category, note, as_stable)), Some(who)) = (vouch, who) {
+            let by = match as_stable {
+                Some(label) => {
+                    let key = self.stable(label)?;
+                    let sig = self.scheme().sign(&self.key, &key, &board::known_bytes(&job_id, &who, category), None);
+                    Some(board::Trade { key, sig })
+                }
+                None => None,
+            };
+            let msg = BoardMsg::Vouch { job: job_id, category: category.into(), note: note.into(), payment: rec, by };
             let scope = self.town.jobs.scope;
             self.compose(&scope, &job.poster, msg.kind(), Some(who), msg.encode(), Some(&[]))?;
         }

@@ -16,6 +16,12 @@
 //! the contractor as basename, so readers count distinct people per job
 //! type without learning who they are, and one person counts once however
 //! many jobs they vouch for.
+//!
+//! **Known to your contacts.** A voucher may sign a vouch with a stable
+//! credential it chose, such as one it has shared with its neighbors but
+//! never posted anywhere as its own. Contacts who were given that
+//! credential see who vouched; anyone else sees only that one unnamed
+//! person vouched for several jobs. Without one, a vouch is anonymous.
 
 use crate::bulletin::{endorser, Copy};
 use crate::node::Class;
@@ -53,7 +59,14 @@ pub enum BoardMsg {
     Paid { job: Hash, payment: Hash },
     /// In the contractor's thread, from the job's poster: the payment
     /// record, whose second output is the vouch coin.
-    Vouch { job: Hash, category: String, note: String, payment: Record },
+    Vouch {
+        job: Hash,
+        category: String,
+        note: String,
+        payment: Record,
+        /// A stable credential of the voucher's, signing `known_bytes`.
+        by: Option<Trade>,
+    },
 }
 
 impl BoardMsg {
@@ -86,6 +99,11 @@ impl BoardMsg {
 /// The receipt a payment for `job` commits to.
 pub fn pay_receipt(job: &Hash) -> Hash {
     hash_of("pave/board/pay", job)
+}
+
+/// The bytes a voucher's stable credential signs.
+pub fn known_bytes(job: &Hash, contractor: &Hash, category: &str) -> Vec<u8> {
+    pave_kernel::hash::encode(&("pave/board/known/v0", job, contractor, category))
 }
 
 /// The receipt a payment with a vouch commits to.
@@ -190,6 +208,11 @@ pub struct Vouched {
     /// The vouch coin: the payment's second output, held by the worker.
     pub coin: Hash,
     pub class: String,
+    /// The stable credential the voucher signed with, if any. Vouches with
+    /// the same one are from the same person.
+    pub by: Option<Credential>,
+    /// The reader's name for it, if the reader was given it.
+    pub known_by: Option<String>,
 }
 
 /// A contractor's reputation as a copy of the job board has it: by job
@@ -200,7 +223,8 @@ pub struct Vouched {
 /// output whose receipt names this job, contractor and type, and the
 /// endorsement checks out. Each job counts once, and each person once per
 /// type.
-pub fn reputation(copy: &Copy, classes: &BTreeMap<String, Class>, who: &Hash) -> (BTreeMap<String, usize>, Vec<Vouched>) {
+/// `contacts` are the reader's: names for the stable credentials it was given.
+pub fn reputation(copy: &Copy, classes: &BTreeMap<String, Class>, contacts: &BTreeMap<String, Credential>, who: &Hash) -> (BTreeMap<String, usize>, Vec<Vouched>) {
     let jobs = jobs(copy);
     let scope = copy.info.scope;
     let mut seen_jobs: BTreeSet<Hash> = BTreeSet::new();
@@ -210,7 +234,7 @@ pub fn reputation(copy: &Copy, classes: &BTreeMap<String, Class>, who: &Hash) ->
         if item.post.kind != "vouch" || item.post.thread != Some(*who) {
             continue;
         }
-        let Some(BoardMsg::Vouch { job, category, note, payment }) = BoardMsg::decode(item.content) else { continue };
+        let Some(BoardMsg::Vouch { job, category, note, payment, by }) = BoardMsg::decode(item.content) else { continue };
         let Some(j) = jobs.get(&job) else { continue };
         let Some(worker) = j.worker.as_ref() else { continue };
         let paid = j.status == Status::Paid && j.payment == Some(payment.output(0));
@@ -231,7 +255,10 @@ pub fn reputation(copy: &Copy, classes: &BTreeMap<String, Class>, who: &Hash) ->
         }
         let Some((class, nym)) = endorser(classes, &scope, &item.post) else { continue };
         people.entry(category.clone()).or_default().insert(nym);
-        out.push(Vouched { job, category, note, coin: payment.output(1), class });
+        // A stable credential counts only with its own signature on this vouch.
+        let by = by.filter(|t| copy.scheme().verify(&t.key, &known_bytes(&job, who, &category), None, &t.sig)).map(|t| t.key);
+        let known_by = by.as_ref().and_then(|c| contacts.iter().find(|(_, k)| *k == c).map(|(n, _)| n.clone()));
+        out.push(Vouched { job, category, note, coin: payment.output(1), class, by, known_by });
     }
     (people.into_iter().map(|(c, n)| (c, n.len())).collect(), out)
 }

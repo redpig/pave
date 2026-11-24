@@ -70,3 +70,5 @@ The tests were checked against injected faults matching the TLA+ fault names. Ea
 | `notradesig` (vouches) | A reply can name a contractor without its trade key's signature | 1 |
 | `vouchperjob` (vouches) | Vouches count per job, not per person | 1 |
 | `vouchunnamed` (vouches) | A vouch counts for a contractor the worker didn't name | 1 |
+| `stableunchecked` (vouches) | A vouch shows a stable credential without its signature | 1 |
+| `stablenotbound` (vouches) | A stable credential's signature isn't bound to its vouch | 1 |
