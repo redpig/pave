@@ -1,0 +1,355 @@
+# Threat model
+
+This document lists the attack surface of every component in pave, the attacks on each, and how each is prevented or reacted to. It also compares each one with Briolette, whose design documents, security model and audit were the baseline. Every Briolette attack has a row here.
+
+## How to read it
+
+Each component has its attack surface, then a table of attacks.
+
+- **Prevent** is what stops the attack before it succeeds. **React** is what limits the damage, detects it and responds once prevention fails or isn't possible (offline, a double spend can only be detected).
+- **Briolette** is the baseline mitigation.
+- **Status** is where pave stands today:
+  - **Built**: in the code and covered by tests.
+  - **Modeled**: in the spec, a TLA+ model or a simulation, but not yet in code.
+  - **Fixed**: a bug this audit found and fixed.
+  - **Gap**: missing.
+  - **Bug**: wrong in the code today.
+- **+** marks where pave does better than Briolette. **−** marks where it does worse.
+
+The ranked list of gaps and the decisions still open are at the end.
+
+## Adversaries
+
+| Adversary | Wants | Can |
+|---|---|---|
+| Dishonest holder | Spend the same value twice, or take value without consent | Run modified software, roll back its own state, go offline, collude |
+| Sybil | Many identities, for limits, reputation or votes | Enroll many devices or keys |
+| Class breaker | Clone value at scale | Extract keys from every device of one model (a secure element bug plus a phone exploit) and enroll fresh identities from it |
+| Thief, finder of a lost device | Spend the victim's value | Physical access, with time |
+| Malicious relay, point of sale or phone | Redirect, misreport or withhold | Sit between two holders, show its own screen |
+| Network attacker | Link people, censor | Eavesdrop, drop, delay, partition, eclipse a holder |
+| Dishonest role | Inflate, censor, deanonymize, frame | Run the registrar, clerk, mint, swapper, validator or recovery service, or several at once |
+| Coop insider | Pay itself, change rules quietly | Hold operator keys |
+| Cryptanalyst | Forge or link | Break the curve or the scheme, now or later (quantum) |
+| Spammer, denial of service | Exhaust people or services | Send junk, flood requests |
+
+What we assume:
+- The signature scheme is sound and anonymous.
+- At least one honest path eventually connects any two holders.
+- Each recipient picks its own roots and policy.
+
+We do not assume that any role behaves well (principle 10), that devices are tamper-proof, or that anyone is online.
+
+## Components
+
+1. Kernel: records, views and evidence
+2. Credential scheme
+3. Holder wallet and keys
+4. Registrar and enrollment
+5. Clerk: tickets and epochs
+6. Mint and budgets
+7. Acceptance: the recipient's policy
+8. Gossip and relays
+9. Peer link
+10. Validator, swapper and holder sync
+11. Recovery
+12. Work board profile
+13. Operator state and role keys
+14. Payment bridge and redemption
+15. Cross-cutting: the class break
+
+---
+
+## 1. Kernel: records, views and evidence
+
+`kernel/src/view.rs`, `objects.rs`, `invariants.rs`
+
+**Attack surface:** every record and evidence object received from anyone (`apply`, `merge_from`, `import_evidence`); schema and scope definitions; the CBOR decoder.
+
+| # | Attack | Prevent | React | Briolette | Status |
+|---|---|---|---|---|---|
+| K1 | Spend another holder's coin | A transfer needs a signature by the coin's holder credential (invariant 2) | n/a | Same, through the ECDAA chain | Built |
+| K2 | Create value by split, merge or mint | Every record conserves amount and kind (invariant 1); a split is one record, so its sum is checked offline by every recipient | n/a | Each half shows only `split <= original`; only the tokenmap sees the sum (audit H-5) | Built **+** |
+| K3 | Double spend offline | Not preventable offline | First seen wins. When two records consume one state under one signer and pseudonym, any view that holds both makes evidence (invariant 6). The evidence verifies on its own and travels anywhere (about 770 B) | Only the tokenmap sees the fork, once both copies are uploaded | Built **+** (proptest over partitions; CivicSequences) |
+| K4 | Frame an honest holder with fake evidence | Evidence needs two valid signatures with the same basename and pseudonym, which needs the holder's secret key | `no_false_flag` invariant | Non-frameability, provided the issuer never learns the secret key | Built; see S2 |
+| K5 | Blame the recipient instead of the cheat | Evidence names the signer's pseudonym, never the recipient | n/a | Same | Built (mutation `flagrecipient`) |
+| K6 | Change a schema's rules after minting | A schema's id is the hash of its settings (invariant 5) | n/a | Token descriptor fixed by the mint signature | Built |
+| K7 | Replay a record elsewhere | Records bind the exact states they consume; a replay is the same record and is a no-op | n/a | `previous_signature` chaining | Built |
+| K8 | Hide an earlier spend by not sharing it | n/a | Detected when any holder of the other copy meets any holder of this one | Detected at the tokenmap | Built (`cheat` in the demo) |
+| K9 | Issuer equivocation: two different successors to one epoch | An epoch is a sequence capability, so two rolls from one epoch are a double use | Evidence, exactly as for a double spend | Signed epochs compared out of band; an optional secondary signature | Built **+** (CivicSequences) |
+| K10 | Malformed or huge input that panics or exhausts a node | Typed CBOR decoding; a 64 MiB frame cap | n/a | Audit M-7 (panic on currency mismatch) | Gap: no-panic audit and fuzzing of `apply`, `absorb` and the scheme adapter, plus per-object size caps |
+| K11 | History growth until coins are too big to move | `offline_transfers` caps hops per schema | Swap for a fresh coin | Maximum provenance length plus swap; ZK compression proposed | Built (cap); swap is a Gap; compression is a Gap |
+
+---
+
+## 2. Credential scheme
+
+`schemes/briolette`, using Briolette v1 ECDAA over BLS12-381
+
+**Attack surface:** credential issuance (join); randomization; signing with and without a basename; verification of untrusted signatures and credentials; the pseudonym.
+
+| # | Attack | Prevent | React | Briolette | Status |
+|---|---|---|---|---|---|
+| S1 | Link a holder's uses | A fresh randomized credential per holding and per role; the pseudonym exists only for one basename | n/a | Same; randomized tickets | Built (`holdings_are_unlinkable_but_reuse_links`); ticket groups leak, see C3 |
+| S2 | The issuer frames a member or signs as one | The member generates its key and sends only a public key with a proof of its secret; the issuer issues on that, and the member checks the credential is bound to its key | n/a | Wallets generate their keys; the split-key join still rebuilt the combined key on the host | **Fixed** in this audit. Previously `Issuer::enroll` generated every member key, so the registrar could forge evidence and spends |
+| S3 | Forge a credential without the issuer | Unforgeability (q-SDH / LRSW) | n/a | Same; the implementation is custom (audit I-6) | Inherited; Gap: external review of the implementation and a proof for the exact composition |
+| S4 | An issuer mints rogue credentials for Sybils | Not cryptographically preventable | Rogue credentials sit under that issuer's group key. Recipients drop the key, and evidence clustered in one group points to it | Attestation provider registry with stake and slashing; tiered NAC keys | Gap: per-registrar and per-class group keys; enrollment receipts |
+| S5 | Cryptanalysis or a quantum computer: forgery, or linking past histories | `Scheme` is a trait and schemas name their scheme, so a scheme can be swapped without changing the kernel | Roll to a new scheme by epoch; expiry retires old coins | Post-quantum fallback registration recommended | Modeled (trait); Gap: a post-quantum or hybrid scheme. Histories recorded today can be linked once discrete log falls |
+| S6 | Timing side channels | v1 hashes to the curve in constant time (RFC 9380) | n/a | Audit M-5 (v0 was not constant time) | Inherited |
+| S7 | Reuse a signature in another context | basename = the consumed state; message = the record; v1 domain separation | n/a | Same (I-9) | Built |
+
+---
+
+## 3. Holder wallet and keys
+
+`board/src/node.rs`, the `.pave` state file, and later a secure element
+
+**Attack surface:** the state file at rest; the process memory; the control channel (stdin JSON); the display a person trusts; backups and restores; the agent or script driving the node.
+
+| # | Attack | Prevent | React | Briolette | Status |
+|---|---|---|---|---|---|
+| W1 | Steal keys from the device (malware, theft, backups) | Keys in a secure element or keystore; split key between phone and card; PIN | Recovery; group revocation | Same; audit M-3 found plaintext JSON | Gap: the state file holds the secret key in plaintext CBOR |
+| W2 | Roll back or restore state, then sign a basename again | The device signs each basename once, with anti-rollback storage (monotonic counter or Merkle root) | Evidence, then revocation | Credstick bloom filter, and swap authorization for false positives | Gap: a persisted set of signed basenames guarded by a monotonic counter. Today evidence is the only backstop |
+| W3 | Clone the wallet and spend in parallel | As W2 | Evidence on first meeting; revocation | Tokenmap | Built (detection); Gap (prevention) |
+| W4 | A relay, point of sale or app shows one amount and asks the key to sign another | The signing device shows the amount it is about to sign (a trusted display) | n/a | Credstick e-ink shows the amount from the APDU | Gap: there is no hardware signer yet. The node signs exactly what its command says |
+| W5 | Pocket attack: a reader signs without the person knowing | PIN or button between taps above a threshold | n/a | PIN between taps; amount threshold; attempt limits on a hardware counter | Gap |
+| W6 | An agent driving a node exceeds its authority | A spending cap the node enforces, below the agent | Spend history in receipts | n/a (no agents) | Gap: per-session caps, or a sub-wallet funded with only what the agent may spend |
+| W7 | Running out of tickets offline, so the holder can't receive | Prefetched pool | Refill when online | Same | Built |
+| W8 | Reusing a credential, which links holdings | A fresh credential per holding, change and role | n/a | Same | Built |
+| W9 | A lost or destroyed wallet | n/a | Recovery (section 11) | Opt-in recovery binding | Gap |
+| W10 | An interrupted payment: signed but never delivered | Keep the signed record as pending and resend it, never re-sign | Evidence if the holder later re-signs | Deferred payments mark tokens `PENDING_SEND` | Partial: `outbox`; Gap: resume protocol |
+
+---
+
+## 4. Registrar and enrollment
+
+`Issuer`, `pave-node join`, `enroll` and `finish`
+
+**Attack surface:** the join request; attestation, which doesn't exist yet; the registrar's group secret key; the link between a person and their enrollment.
+
+| # | Attack | Prevent | React | Briolette | Status |
+|---|---|---|---|---|---|
+| R1 | Sybil enrollment | Hardware attestation; rate limits per attestation key; lower assurance gets tighter limits (principle 18) | Revoke a class or group | Tiered NAC (low, medium, high); `Algorithm::NONE` online-only; `--require-attestation` | Gap: the operator enrolls whoever it is told to. Test credit only (principle 24) |
+| R2 | Class break: a whole device model's keys extracted | See section 15 | See section 15 | NAC tier ↔ randomized ticket groups; class revocation; challenge test | Gap |
+| R3 | Impersonate a service (registrar, clerk) | Services authenticate to wallets; genesis pins the root | n/a | Service identities from deterministic nonces (audit H-3, fixed) | Partial: genesis and the clerk credential are pinned in `Town`; Gap: authenticated service endpoints |
+| R4 | The registrar or clerk links a person to all their tickets | Anonymous ticket requests: signed under the member credential with basename = epoch, linkable only within one epoch; random groups per batch, mapped to a class and not to a person | n/a | NAC signatures with epoch basenames; randomized groups mapped to a NAC group | **Bug**: each wallet gets one sequential group, and refills are signed by one of its own credentials. The clerk can link every ticket a wallet ever holds to its enrollment |
+| R5 | The registrar's key is compromised | Offline or HSM key | Rotate the group key by epoch data; drop the old key | Repeated key fields in epoch data (audit L-2) | Gap |
+| R6 | A registrar refuses someone (exclusion) | Many registrars; each recipient chooses roots (principles 9 and 12) | n/a | One operator trust list | Modeled **+** |
+| R7 | The holder side accepts a bogus credential | `finish` checks the credential is in the group and bound to the holder's key, and that every pooled credential signs | n/a | n/a | Built (Fixed with S2) |
+
+---
+
+## 5. Clerk: tickets and epochs
+
+`protocol/src/epochs.rs`, `tickets.rs`
+
+**Attack surface:** ticket requests; the clerk key; epoch rolls and their data (revoked groups); ticket policy fields (epoch, group, `max_spend`).
+
+| # | Attack | Prevent | React | Briolette | Status |
+|---|---|---|---|---|---|
+| C1 | Show different revocation lists to different people | A roll is a transfer of the sequence capability, so two rolls from one epoch are a double use | Evidence | Gossip comparison | Built **+** |
+| C2 | Suppress a known revocation | Evidence is public and verifies on its own; each recipient refuses known cheats whatever the clerk publishes | A signed epoch plus older evidence it ignores is proof of suppression | Optimistic challenge with stake; relays sign what they serve | Built (recipients refuse independently) **+**; Gap: a suppression-proof format |
+| C3 | Ticket groups link holders | Random group per ticket batch from a large space (Briolette allows up to 32768), mapped privately to a class | n/a | Randomized groups | **Bug**: one sequential group per wallet, shown in every ticket |
+| C4 | Ticket flooding: endless receiving addresses | Per-pseudonym limits on ticket requests per epoch | n/a | NAC basename = epoch; per-NAC ticket budget | Gap |
+| C5 | Replay an old epoch as current | The head is the longest valid chain of rolls, so an older epoch can't replace a newer one | n/a | Epoch monotonicity | Built |
+| C6 | A holder stays offline to dodge revocation | Tickets expire after `soft_expiry` epochs, so a revoked or stale holder's coins stop being accepted | n/a | Elastic ticket lifetimes (short, medium, long); `T_evict = T_detect + 1 + D + T_life`; refresh | Built (per schema); Gap: per-ticket elastic lifetimes and refresh |
+| C7 | The clerk key is compromised | Offline signing of rolls; separate keys for tickets and epochs | Rotate keys through epoch data; trust in the old key ends with the roll | Repeated key fields; the state key can be air-gapped | Gap: rotation |
+| C8 | The clerk refuses tickets to someone | Several clerks and sequences; recipients choose (principle 9) | n/a | One clerk | Modeled |
+| C9 | Spend more than the ticket allows | `max_spend` on tickets | Server-side velocity sums | `max_spend`; velocity | **Bug**: the field exists, but `accept::check` ignores it |
+| C10 | Revocation strands honest holders downstream | Only a recent revoked ticket taints a coin (a window) | Swap for a fresh coin | Within a revocation epoch window only | **Bug**: any revoked group anywhere in a coin's history refuses it. Decision D2 |
+| C11 | Expiry applied to the whole history caps a coin's life | Briolette checks expiry only on the current holder's ticket | n/a | Current ticket only | Different. Decision D1 |
+
+---
+
+## 6. Mint and budgets
+
+**Attack surface:** mint keys; budget capabilities; who trusts which mint.
+
+| # | Attack | Prevent | React | Briolette | Status |
+|---|---|---|---|---|---|
+| M1 | Over-mint beyond the authorized supply | Minting consumes a `MintBudget` capability, and conservation covers budgets | n/a | The mint key is unlimited; the supply cap is central policy | Built **+** |
+| M2 | A mint key is compromised | Loss is bounded by the budget the key holds | Coins carry their origin; recipients drop that budget's coins | Rotate the mint key | Built (bounded); Gap: rotation |
+| M3 | Double mint from one budget offline | n/a | Evidence, as for any spend | n/a | Built **+** |
+| M4 | Unknown or private mints (points, IOUs) | Each recipient chooses which roots it accepts | n/a | Wallets may trust non-operator mints | Built |
+| M5 | The mint learns the first recipient | Mint to a fresh credential | Self-transfer or swap before spending | Same | Built (fresh credential) |
+
+---
+
+## 7. Acceptance: the recipient's policy
+
+`protocol/src/accept.rs`
+
+**Attack surface:** every coin and history offered as payment; the recipient's knowledge (tickets, epoch data, hints); the payment handshake.
+
+| # | Attack | Prevent | React | Briolette | Status |
+|---|---|---|---|---|---|
+| A1 | Pay with a coin held under an unticketed or foreign credential | Every credential in the history needs a valid ticket from a trusted clerk | n/a | Credential ↔ ticket binding | Built |
+| A2 | Pay with an expired coin | Soft expiry per ticket, per sequence | n/a | See C11 | Built (mutation `ignoreexpiry`) |
+| A3 | Exceed the offline hop limit | `offline_transfers` | n/a | Maximum provenance | Built (mutation `nolimit`) |
+| A4 | Pay with a coin from a known cheat | `refuse_known_cheats` | n/a | Revoked groups only | Built (mutation `ignoreevidence`) **+** |
+| A5 | Pay before the recipient knows a revocation | The handshake exchanges hints first; `wait_on_hints` holds a coin when a fork hint is pending | n/a | Required state exchange before every transaction | Built (mutations `notrigger`, `hintepoch`) |
+| A6 | Pay to a ticket that is invalid or revoked (the payer gets stuck) | The payer checks the recipient's ticket | n/a | Payer validates payee | Gap |
+| A7 | Redirect a payment at a point of sale | Merchant identity tickets; receive-only tickets for points of sale | n/a | Same | Gap |
+| A8 | Large offline exposure | `max_per_holder`, `max_spend`, validation thresholds published in epoch data | Validate online above a threshold | Validation thresholds; incentives for high value | Partial: `max_per_holder` in schemas; Gap: thresholds |
+| A9 | A proposal reveals the payer's coins before the payer consents | Propose amounts first, reveal coins on accept | n/a | 3-tap private mode | Gap: there's no payment protocol yet, only transfer then check |
+
+---
+
+## 8. Gossip and relays
+
+`protocol/src/gossip.rs`; CivicGossip and CivicTiered models
+
+**Attack surface:** compressed hint packets; want and have exchanges; proofs served on demand; any node acting as a relay.
+
+| # | Attack | Prevent | React | Briolette | Status |
+|---|---|---|---|---|---|
+| G1 | Fake hints to make peers fetch or stall | Hints never decide anything; only proofs do. A false fork hint costs one want | Proofs that don't verify are dropped | n/a (bitfield gossip) | Built; Gap: per-peer want budgets |
+| G2 | A relay withholds or selectively forwards revocations | Any single honest path suffices | Freshness receipts: a relay signs what it served, so serving a stale epoch is evidence | Same; receipts proposed | Built (models); Gap: receipts |
+| G3 | Eclipse or partition a holder | Not preventable | Expiry bounds how long stale knowledge matters | Same | Built |
+| G4 | Fake evidence | Evidence is verified before it is absorbed | n/a | n/a | Built |
+| G5 | Replay an old epoch through gossip | Chain head | n/a | Monotone epoch | Built |
+| G6 | Gossip as tracking: hints reveal what a holder cares about | Hints carry only sequence heads and conflicted basenames, not holdings | n/a | Bitfield only | Built; worth measuring |
+| G7 | Oversized proofs | Size caps per proof | n/a | APDU-sized frames | Gap |
+
+---
+
+## 9. Peer link
+
+`board/src/net.rs`: length-prefixed CBOR over TCP
+
+**Attack surface:** the socket; frames; the IP address or radio identifier.
+
+| # | Attack | Prevent | React | Briolette | Status |
+|---|---|---|---|---|---|
+| P1 | An eavesdropper links IP addresses to people's activity | An encrypted channel with no long-term identity (Noise NN), so unlinkability holds | n/a | Server-authenticated TLS, not mutual TLS (audit C-1) | Gap: plaintext TCP |
+| P2 | Someone in the middle alters messages | Everything that matters is signed | They can still drop or delay | Same | Built; Gap: channel integrity |
+| P3 | Malformed frames | 64 MiB cap; typed decode | n/a | Rate limits | Partial; Gap: smaller caps and a per-message-type limit |
+| P4 | Resource exhaustion of a node | Connection and rate limits | n/a | IP token bucket (audit M-6) | Gap |
+
+---
+
+## 10. Validator, swapper and holder sync
+
+Specified roles, not yet built
+
+**Attack surface:** what a holder uploads; what the service answers; the pool a swapper pays out of.
+
+| # | Attack | Prevent | React | Briolette | Status |
+|---|---|---|---|---|---|
+| V1 | Accept high-value coins with no online check | Any peer view can act as a validator; validate above a threshold | n/a | Validator plus tokenmap | Gap: the service |
+| V2 | A validator lies ("it's fine") | Every answer is a signed head or evidence (principle 10), so a false "fine" is provable once the fork surfaces | The validator's answer is evidence against it | Validator is trusted | Modeled **+** |
+| V3 | Launder a double spend through a swap | The swapper checks evidence and validates before paying | Its own swaps are transfers, so a bad swap leaves its own evidence | Swapper uses the tokenmap | Gap |
+| V4 | A central log of every history (privacy) | No mandatory tokenmap; holders sync if they want recovery | n/a | Tokenmap sees every uploaded history | Modeled **+** (the tradeoff: recovery needs the holder to sync) |
+| V5 | Bloom filter false positive blocks an honest spend | A swap authorized by the swapper bypasses the filter | n/a | `INS_SIGN_COMMIT_SWAP` | Gap (no guard to bypass yet) |
+
+---
+
+## 11. Recovery
+
+Specified as a holder-created capability (spec C9), not yet built
+
+**Attack surface:** recovery bindings; claims; the recovery pool; the old wallet if it comes back.
+
+| # | Attack | Prevent | React | Briolette | Status |
+|---|---|---|---|---|---|
+| RC1 | False loss claim against a live wallet | Recovery only after the coin and its ticket have expired, plus a cooling-off period | The live wallet revokes its binding during the cooling-off period | Same | Gap |
+| RC2 | Recover coins already spent | Expiry plus cooling-off gives honest holders time to swap | A spend after recovery conflicts with the recovery record, which is evidence | Fork detection; `RevokedCannotRecover` | Gap |
+| RC3 | Recover twice | A binding is consumed; a small list of recovered states | n/a | `NoDoubleRecovery` | Gap |
+| RC4 | The lost wallet comes back and spends | Its tickets are revoked after recovery | Evidence | Old wallet's group revoked | Gap |
+| RC5 | Binding spam | One binding per pseudonym per epoch | n/a | NAC epoch basename | Gap |
+| RC6 | The recovery service steals or mints | It holds no mint keys; it pays from a pool; it needs the delegate's proof | Its payouts are transfers, so they're public | Same | Gap |
+| RC7 | Recovery acts as the holder | Nothing signs as a holder (principle 11); the binding is set up by the holder in advance | n/a | Opt-in binding | Modeled |
+| RC8 | Escrowed or disputed coins recovered out from under a counterparty | Coins under a pending claim are ineligible | n/a | Escrow tag | Gap |
+
+---
+
+## 12. Work board profile
+
+`board/src/board.rs`
+
+**Attack surface:** posts, replies, accept, done and paid messages in the board scope; proof of means; payment receipts.
+
+| # | Attack | Prevent | React | Briolette | Status |
+|---|---|---|---|---|---|
+| B1 | Post a job without the pay to back it | Proof of means: a zero-value split of the poster's coin that commits to the terms | The proof is evidence if the coin is spent elsewhere first | n/a | Built |
+| B2 | Accept or mark paid on someone else's job | Only the poster's credential can accept or mark paid; only the accepted worker can mark done | Ignored | n/a | Built |
+| B3 | A false "done", or a poster who doesn't pay | n/a | Disputes and mediation posted as jobs (principle 20) | n/a | Gap |
+| B4 | Spam posts | Posting costs something or needs a capability (principle 17) | n/a | n/a | Gap |
+| B5 | Sybil reputation | Reputation tied to paid work with receipts | n/a | n/a | Gap |
+| B6 | Link a worker across jobs | A fresh credential per role | n/a | n/a | Built |
+| B7 | Claim a payment that doesn't match the job | The payment receipt commits to the job | n/a | n/a | Built |
+
+---
+
+## 13. Operator state and role keys
+
+`town.pave`
+
+**Attack surface:** the town file holding the registrar, root, clerk and minter secrets; the one operator who runs every role today.
+
+| # | Attack | Prevent | React | Briolette | Status |
+|---|---|---|---|---|---|
+| O1 | Steal the town file | Encrypt at rest, file mode 0600, HSM or offline keys for the root and the clerk's epoch key | Rotate keys | Audit M-4 (0600 permissions); an air-gapped state key | Gap |
+| O2 | One operator holds every role | Each role has its own key, so roles can be handed over (principle 22) | n/a | Separate services | Built (separate keys); Gap: handover |
+| O3 | An insider pays itself | Every mint and budget is public; budgets cap issuance | n/a | n/a | Built **+** |
+| O4 | No key rotation | Overlap, migrate, retire, through epoch data | n/a | Repeated key fields | Gap |
+
+---
+
+## 14. Payment bridge and redemption
+
+Not built, by design. Test credit only until there is an accountable operator (principle 24). Briolette's bridge (Ethereum and Bitcoin deposits) was flagged for separate review (audit I-4); pave will need the same.
+
+---
+
+## 15. Cross-cutting: the class break
+
+The attack: someone finds a weakness in one device model's secure element or firmware. Combined with a phone exploit, they extract keys at scale. They can then double-spend every coin those devices hold, enroll fresh identities with the extracted attestation keys, and evade the per-device limits.
+
+Evidence alone does not handle this. It catches every double spend and names one credential each time. But a class breaker has thousands of identities, and each one can cheat once before it is revoked. Briolette's answer is containment by class, and pave needs the same layers:
+
+| Layer | What it does | Briolette | pave |
+|---|---|---|---|
+| Prevent | The secure element signs each basename once, with anti-rollback storage; attestation at enrollment | Credstick bloom filter; Key Attestation and App Attest; split key | Gap (W2, R1) |
+| Bound | Lower-assurance classes get shorter ticket lifetimes, smaller `max_spend` and fewer tickets per epoch, so each extracted identity is worth little | GroupPolicy per NAC group; elastic lifetimes; per-NAC ticket budgets | Partial: schema-level expiry and hop limits; Gap: per-class policy (C4, C9) |
+| Detect | The first double spend that surfaces names the credential | Tokenmap, once tokens are uploaded | Built **+**: any two holders who meet detect it, with no service |
+| Contain | The clerk maps each randomized ticket group to the class (attestation tier and model) that requested it. When evidence piles up in one class, the clerk revokes every group of that class in the next epoch, and recipients refuse those tickets | Groups ↔ NAC group; class revocation | Gap (C3 and R4 are bugs today) |
+| Recover | Honest members of the broken class update, re-attest and pass a challenge before getting new tickets. The challenge: sign the cheat's earlier request basename and show a different pseudonym. They swap stranded coins | Challenge test; re-registration after update; recovery | Gap |
+
+Where pave can do better once this is built:
+- Detection needs no tokenmap, so a class break shows up wherever the cloned coins meet, including entirely offline.
+- Evidence is a portable proof, so the clerk's decision to revoke a class can be checked by anyone, and so can a decision not to.
+- Containment does not need anyone to be named: the group-to-class map holds no identities.
+
+---
+
+## Where pave is ahead of Briolette
+
+- **Offline detection.** Two holders who meet find a double spend on their own, with a portable 770-byte proof (K3).
+- **Offline split conservation** (K2).
+- **Issuer equivocation is a kernel conflict** (K9, C1).
+- **Bounded minting.** Budgets are capabilities (M1, M3).
+- **Revocation needs no trust in the clerk.** Recipients refuse known cheats from evidence alone (C2, A4).
+- **Hints switch gossip tiers.** A 21-byte hint pulls a proof only when it's needed (A5, G1).
+- **No central log is required** (V4). A validator's answers are evidence against it (V2).
+
+## Where pave is behind
+
+These are ranked by how much they matter before anyone other than us uses this.
+
+1. **Groups and anonymous refills** (C3, R4; bugs). The clerk can link every ticket a wallet holds to its enrollment. Fix: ticket requests signed with basename = epoch; random groups per batch mapped to a class; class revocation; the challenge test. This is also the containment layer for the class break.
+2. **Revocation scope** (C10; bug, decision D2) and **`max_spend`** (C9; bug).
+3. **The wallet never signs a basename twice**, with anti-rollback (W2), and **keys encrypted at rest** (W1, O1).
+4. **Attestation and per-class policy** (R1, R2): assurance tiers, lifetimes per tier, ticket budgets.
+5. **Encrypted peer channel** (P1) and **no-panic fuzzing** (K10).
+6. **Payment handshake**: propose and accept, recipient ticket check, resume after interruption (A6, A7, A9, W10).
+7. **Swapper and validator services** (V1, V3, K11).
+8. **Recovery** (section 11).
+9. **Key rotation** for every role (R5, C7, M2, O4).
+10. **Trusted display and PIN** once there is hardware (W4, W5), and caps for agents (W6).
+11. **Post-quantum scheme** (S5) and an external review of the ECDAA implementation (S3).
+
+## Decisions for Will
+
+- **D1. Expiry on the whole history, or only the current holder's ticket?** Briolette checks only the current holder's ticket, so a coin's life isn't capped by its oldest ticket. pave checks every ticket in the history. That stops a coin from carrying a long-stale ticket in its past, but it caps a coin's useful life at `soft_expiry` epochs from its oldest hop, forcing swaps.
+- **D2. Revocation window.** Briolette refuses a coin with a revoked group in its history only when that revoked ticket is recent (within a window). pave refuses for any revoked group anywhere, which strands honest holders downstream of a cheat. The proposal is to follow Briolette: refuse when the revoked ticket was issued within `w` epochs of the revocation, and keep evidence-based refusal for the cheat's own states.

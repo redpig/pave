@@ -14,7 +14,7 @@ A pavé setting is many small stones set close together to make one surface. Her
 | Protocol | Corollaries, standard schemas (epochs, expiry, tickets, value, time, votes, certification, recovery), core mechanisms (evidence, revocation, receipts, proof of means, two-tier gossip), role guarantees and profiles. | [spec/protocol.md](spec/protocol.md) |
 | Profiles | Cash (Briolette), civic work board, offline mesh. | end of the protocol |
 
-The values behind it are in [docs/principles.md](docs/principles.md), and the reasoning behind each decision is in [docs/design-log.md](docs/design-log.md).
+The values behind it are in [docs/principles.md](docs/principles.md), and the reasoning behind each decision is in [docs/design-log.md](docs/design-log.md). Every component's attack surface, the attacks on it and how each is prevented or answered are in [docs/threats.md](docs/threats.md).
 
 ## Code
 
