@@ -19,7 +19,8 @@ Checked in [`pave-protocol`](../protocol) (`protocol/tests/protocol.rs`).
 |---|---|---|---|
 | `FirstSeenWins` (`overwrite`) | CivicGossip, CivicTiered | `View::apply` keeps the first spend | `offline_double_spend_is_detected_and_names_only_the_signer`, `epoch_equivocation_is_a_kernel_conflict` |
 | `EpochDetected` (`noepochevidence`, `honestrepeat`) | CivicSequences | `epochs::roll` spends the current epoch state, so two versions are a kernel conflict | `epoch_equivocation_is_a_kernel_conflict` |
-| `HonestAcceptsInDate` (`ignoreexpiry`, `nolimit`, `latestonly`) | CivicSequences, CivicGossip, CivicTiered | `accept::check`: every ticket in the history against its own sequence; transfer limit | `recipients_honor_soft_expiry_and_the_kernel_doesnt`, `every_ticket_is_checked_against_its_own_sequence`, `transfer_limit_is_honored`, `revoked_groups_are_refused_per_issuer` |
+| `HonestAcceptsInDate` (`ignoreexpiry`, `nolimit`, `latestonly`) | CivicSequences, CivicGossip, CivicTiered | `accept::check`: soft expiry on the last hop, hard expiry from the first ticket, each against its own sequence; transfer limit. The models still check soft expiry on every ticket, which is stricter, and need updating | `recipients_honor_soft_expiry_and_the_kernel_doesnt`, `expiry_follows_the_last_hop_and_the_mint`, `a_stale_sender_is_refused`, `transfer_limit_is_honored`, `revoked_groups_are_refused_per_issuer` |
+| Revocation window (`nowindow`) | (not yet modeled) | `accept::check`: a revoked group stops the last hop always, earlier hops within `Policy::revocation_window` of the revocation | `revocation_taints_history_only_within_its_window` |
 | `HonestNoKnownCheat` (`ignoreevidence`) | CivicGossip, CivicTiered | `accept::check` refuses flagged senders | `known_cheats_are_refused` |
 | `NoForgedEpoch` (`forge`) | CivicGossip, CivicTiered | Epochs come only from signed rolls; `Knowledge::add_epoch_data` keeps data only if a roll commits to it; `Knowledge::add_ticket` verifies the clerk | `epochs_roll_and_commit_their_data`, `tickets_must_come_from_a_trusted_clerk` |
 | `KnownIsSigned` (`hintepoch`) | CivicTiered | `epochs::head` reads only the view's signed records | `false_head_hints_never_advance_an_epoch` |
@@ -48,3 +49,6 @@ The tests were checked against injected faults matching the TLA+ fault names. Ea
 | `nocap` | Ticket `max_spend` is never checked | 2 |
 | `norate` | Ticket requests aren't counted per epoch | 1 |
 | `noclassrevoke` | Closing a class doesn't revoke its groups | 1 |
+| `nowindow` | A revoked group anywhere in the history stops the coin | 1 |
+| `softall` | Soft expiry checks every ticket, not just the last hop | 2 |
+| `nohard` | Hard expiry is never checked | 1 |

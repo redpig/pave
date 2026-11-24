@@ -24,7 +24,8 @@ Decisions behind the current [kernel](../spec/kernel.md) and [protocol](../spec/
 - **An epoch is a sequence.** Each epoch is minted by spending the one before, so two versions of one epoch are an ordinary detectable conflict. No special kernel machinery is needed.
 - **Epoch policy.** When to roll is the issuer's published policy. The default is activity-driven: an epoch ends once enough distinct holders have drawn tickets.
 - **Tickets.** A ticket is a randomized credential acting as a short-lived holding slot, and transfer is spend. Extra tickets from one holder in an epoch link and count once, so active users pay in linkability, never in access.
-- **Expiry across the whole history.** Expiry runs from every ticket in a coin's history, each checked against its own issuer's sequence. A recipient needs each sequence's latest epoch to check it.
+- **Expiry on the last hop, with a lifetime from mint.** Soft expiry applies to the sender's and holder's tickets, so active coins keep circulating; hard expiry runs from the coin's first ticket, so every coin's life is capped. Each ticket counts by its own issuer's sequence. This is Briolette's rule. Checking soft expiry on every ticket in the history, as pave first did, bounded undetected copies more tightly but forced swaps on active coins and acted as a hidden lifetime cap.
+- **Revocation within a window.** A revoked group always stops the last hop, and earlier hops only if their ticket was issued within a few epochs before the revocation, so honest coins that passed through a group long ago aren't stranded. Tainting the whole history would have stranded every coin that ever touched a closed class. The window needs no tuning for volume: it counts the issuer's epochs, and activity-driven epochs already roll faster when traffic is heavy.
 - **Composable epochs.** Different capabilities can count different issuers' epochs. There is no shared clock.
 
 ## Wallets

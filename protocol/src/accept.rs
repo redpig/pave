@@ -113,12 +113,18 @@ pub struct Policy {
     pub require_standing: bool,
     /// Honor `max_spend` on the sender's and holder's tickets.
     pub honor_ticket_caps: bool,
+    /// How many of an issuer's epochs before a revocation a ticket in the
+    /// revoked group still taints a coin's history.
+    pub revocation_window: u32,
 }
+
+/// The default revocation window, in the issuer's epochs.
+pub const REVOCATION_WINDOW: u32 = 2;
 
 impl Policy {
     /// The default wallet policy: honor everything, don't wait on hints.
     pub fn wallet(trusted_clerks: BTreeMap<Credential, Hash>) -> Self {
-        Policy { trusted_clerks, honor_expiry: true, honor_transfer_limit: true, refuse_known_cheats: true, wait_on_hints: false, require_standing: true, honor_ticket_caps: true }
+        Policy { trusted_clerks, honor_expiry: true, honor_transfer_limit: true, refuse_known_cheats: true, wait_on_hints: false, require_standing: true, honor_ticket_caps: true, revocation_window: REVOCATION_WINDOW }
     }
 }
 
@@ -133,7 +139,11 @@ pub enum Refusal {
     UntrustedClerk(Credential),
     UnknownSequence(Hash),
     EpochDataMissing(Hash),
+    /// A ticket on the last hop is past the schema's soft expiry.
     Expired { credential: Credential, issued: u32, now: u32 },
+    /// The coin is past the schema's hard expiry, counted from its first
+    /// (mint-time) ticket.
+    CoinExpired { issued: u32, now: u32 },
     Revoked { credential: Credential, group: u32 },
     HintPending(Hash),
     /// The recipient knows of cheats, and the sender hasn't shown it isn't one.
@@ -200,9 +210,14 @@ pub fn check<S: Scheme>(
     }
 
     // Every credential the coin has been held under, each against its own
-    // clerk's sequence. Checking only the newest is wrong once clerks roll
-    // at different rates (the `latestonly` fault).
-    for cred in &coin.history {
+    // clerk's sequence (the `latestonly` fault: clerks roll at different
+    // rates). Soft expiry looks only at the last hop, so an active coin
+    // lives as long as its holders keep fresh tickets; hard expiry looks at
+    // the first ticket, so every coin's life is capped from mint. Revoked
+    // groups always stop the last hop, and stop earlier hops only within the
+    // revocation's window.
+    let last_hop = |c: &Credential| c == sender || c == &coin.holder;
+    for (i, cred) in coin.history.iter().enumerate() {
         let t = know.tickets.get(cred).ok_or_else(|| Refusal::NoTicket(cred.clone()))?;
         if !t.verify(view.scheme()) {
             return Err(Refusal::BadTicket(cred.clone()));
@@ -213,16 +228,23 @@ pub fn check<S: Scheme>(
         }
         let h = head(view, seq).ok_or(Refusal::UnknownSequence(*seq))?;
         if policy.honor_expiry {
-            if let Some(soft) = schema.soft_expiry {
+            if let (true, Some(soft)) = (last_hop(cred), schema.soft_expiry) {
                 if h.number >= t.ticket.epoch.saturating_add(soft) {
                     return Err(Refusal::Expired { credential: cred.clone(), issued: t.ticket.epoch, now: h.number });
+                }
+            }
+            if let (0, Some(hard)) = (i, schema.hard_expiry) {
+                if h.number >= t.ticket.epoch.saturating_add(hard) {
+                    return Err(Refusal::CoinExpired { issued: t.ticket.epoch, now: h.number });
                 }
             }
         }
         if let Some(d) = h.data {
             let data = know.epoch_data.get(&d).ok_or(Refusal::EpochDataMissing(d))?;
-            if data.revoked_groups.contains(&t.ticket.group) {
-                return Err(Refusal::Revoked { credential: cred.clone(), group: t.ticket.group });
+            if let Some(&at) = data.revoked.get(&t.ticket.group) {
+                if last_hop(cred) || crate::epochs::taints(t.ticket.epoch, at, policy.revocation_window) {
+                    return Err(Refusal::Revoked { credential: cred.clone(), group: t.ticket.group });
+                }
             }
         }
     }

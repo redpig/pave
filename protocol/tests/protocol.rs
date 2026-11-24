@@ -96,11 +96,17 @@ impl World {
     }
 }
 
-/// Roll a sequence one epoch on `site`, revoking `revoked` groups.
+/// Roll a sequence one epoch on `site`, revoking `revoked` groups as of
+/// this epoch.
 fn roll_on(site: &mut Site, clerk: &P, seq: Hash, revoked: &[u32]) -> Record {
+    let at = head(&site.view, &seq).unwrap().number + 1;
+    roll_with(site, clerk, seq, revoked.iter().map(|g| (*g, at)).collect())
+}
+
+fn roll_with(site: &mut Site, clerk: &P, seq: Hash, revoked: std::collections::BTreeMap<u32, u32>) -> Record {
     let h = head(&site.view, &seq).unwrap();
     let coin = site.view.coin(&h.state).unwrap().clone();
-    let data = EpochData { sequence: seq, number: h.number + 1, revoked_groups: revoked.iter().copied().collect() };
+    let data = EpochData { sequence: seq, number: h.number + 1, revoked };
     let rec = roll(&DevScheme, &clerk.key, &clerk.cred, &coin, &clerk.cred, &data);
     apply(site, &rec);
     assert!(site.know.add_epoch_data(&site.view, data));
@@ -122,9 +128,9 @@ fn epochs_roll_and_commit_their_data() {
     let h = head(&w.site.view, &w.seq_x).unwrap();
     assert_eq!(h.number, 2);
     let d = &w.site.know.epoch_data[&h.data.unwrap()];
-    assert_eq!((d.number, d.revoked_groups.contains(&3)), (2, true));
+    assert_eq!((d.number, d.revoked.contains_key(&3)), (2, true));
     // Data a roll didn't commit to is refused (fault "forge" for epoch data).
-    let fake = EpochData { sequence: w.seq_x, number: 2, revoked_groups: BTreeSet::new() };
+    let fake = EpochData { sequence: w.seq_x, number: 2, revoked: Default::default() };
     assert!(!w.site.know.add_epoch_data(&w.site.view, fake));
 }
 
@@ -161,24 +167,47 @@ fn recipients_honor_soft_expiry_and_the_kernel_doesnt() {
     pay(&mut w.site, &a, coin, &b); // the kernel moves it anyway
 }
 
-/// Fault `latestonly`: a coin's history holds tickets from two clerks that
-/// roll at different rates. The newest ticket is in date, an older one from
-/// the faster clerk has expired, so the coin is refused.
+/// Fault `latestonly`, and decision D1: soft expiry looks only at the last
+/// hop, and hard expiry at the first (mint-time) ticket, each against its
+/// own clerk's sequence. The clerks roll at different rates.
 #[test]
-fn every_ticket_is_checked_against_its_own_sequence() {
+fn expiry_follows_the_last_hop_and_the_mint() {
     let mut w = world();
     let (a, b, c) = (person(), person(), person());
-    w.ticket(&a, w.seq_y, 1);
+    w.ticket(&a, w.seq_y, 1); // mint-time ticket, from the faster clerk
     let coin = w.mint_to(&a, 10);
     roll_on(&mut w.site, &w.clerk_x, w.seq_x, &[]);
-    w.ticket(&b, w.seq_x, 1); // newer ticket, from the other clerk
+    w.ticket(&b, w.seq_x, 1);
     w.ticket(&c, w.seq_x, 1);
     let coin = pay(&mut w.site, &a, coin, &b);
+    let coin = pay(&mut w.site, &b, coin, &c);
+    roll_on(&mut w.site, &w.clerk_y, w.seq_y, &[]);
+    roll_on(&mut w.site, &w.clerk_y, w.seq_y, &[]);
+    // a's ticket is past soft expiry on its own sequence, but a is no longer
+    // on the last hop: the coin stays good while b and c are fresh.
     assert_eq!(check(&w.site.view, &w.site.know, &coin, &b.cred, &w.policy()), Ok(()));
+    // Until the coin's hard expiry, counted from a's ticket on clerk y.
     roll_on(&mut w.site, &w.clerk_y, w.seq_y, &[]);
     roll_on(&mut w.site, &w.clerk_y, w.seq_y, &[]);
-    let r = check(&w.site.view, &w.site.know, &coin, &b.cred, &w.policy());
-    assert_eq!(r, Err(Refusal::Expired { credential: a.cred.clone(), issued: 0, now: 2 }));
+    assert_eq!(check(&w.site.view, &w.site.know, &coin, &b.cred, &w.policy()), Err(Refusal::CoinExpired { issued: 0, now: 4 }));
+    // The last hop's soft expiry is on clerk x, which hasn't moved enough.
+    let mut no_hard = w.policy();
+    no_hard.honor_expiry = false;
+    assert_eq!(check(&w.site.view, &w.site.know, &coin, &b.cred, &no_hard), Ok(()));
+}
+
+/// Decision D1: a stale sender is refused, whatever came before.
+#[test]
+fn a_stale_sender_is_refused() {
+    let mut w = world();
+    let (a, b) = (person(), person());
+    w.ticket(&a, w.seq_x, 1);
+    w.ticket(&b, w.seq_x, 1);
+    let coin = w.mint_to(&a, 10);
+    roll_on(&mut w.site, &w.clerk_x, w.seq_x, &[]);
+    roll_on(&mut w.site, &w.clerk_x, w.seq_x, &[]);
+    let coin = pay(&mut w.site, &a, coin, &b);
+    assert_eq!(check(&w.site.view, &w.site.know, &coin, &a.cred, &w.policy()), Err(Refusal::Expired { credential: a.cred.clone(), issued: 0, now: 2 }));
 }
 
 /// Fault `nolimit`.
@@ -425,4 +454,38 @@ fn ticket_caps_are_honored() {
     assert!(matches!(check(&site.view, &site.know, &onward, &small.cred, &policy), Err(Refusal::OverMaxSpend { .. })));
     let lax = Policy { honor_ticket_caps: false, ..policy };
     assert_eq!(check(&site.view, &site.know, &onward, &small.cred, &lax), Ok(()));
+}
+
+/// Decision D2 (fault `nowindow`): a revoked group always stops the last hop,
+/// but stops earlier hops only if their ticket was issued within the
+/// recipient's window before the revocation, counted in the issuer's epochs.
+#[test]
+fn revocation_taints_history_only_within_its_window() {
+    let mut w = world();
+    let (a, b, c) = (person(), person(), person());
+    w.ticket(&a, w.seq_x, 42); // issued at epoch 0
+    let coin = w.mint_to(&a, 10);
+    roll_on(&mut w.site, &w.clerk_x, w.seq_x, &[]);
+    roll_on(&mut w.site, &w.clerk_x, w.seq_x, &[]);
+    w.ticket(&b, w.seq_x, 1); // issued at epoch 2
+    w.ticket(&c, w.seq_x, 1);
+    let coin = pay(&mut w.site, &a, coin, &b);
+    let coin = pay(&mut w.site, &b, coin, &c);
+    // Group 42 revoked at epoch 3.
+    roll_with(&mut w.site, &w.clerk_x, w.seq_x, [(42, 3)].into_iter().collect());
+    // Window 2: a's epoch-0 ticket is older than 3 - 2 = 1, so the honest
+    // coin that passed through a long ago is fine.
+    assert_eq!(w.policy().revocation_window, 2);
+    assert_eq!(check(&w.site.view, &w.site.know, &coin, &b.cred, &w.policy()), Ok(()));
+    // Window 3 reaches back to epoch 0: the coin is refused.
+    let wide = Policy { revocation_window: 3, ..w.policy() };
+    assert_eq!(check(&w.site.view, &w.site.know, &coin, &b.cred, &wide), Err(Refusal::Revoked { credential: a.cred.clone(), group: 42 }));
+
+    // But the last hop is always stopped, however narrow the window.
+    let d = person();
+    w.ticket(&d, w.seq_x, 7);
+    let fresh = w.mint_to(&d, 5);
+    roll_with(&mut w.site, &w.clerk_x, w.seq_x, [(42, 3), (7, 4)].into_iter().collect());
+    let none = Policy { revocation_window: 0, ..w.policy() };
+    assert!(matches!(check(&w.site.view, &w.site.know, &fresh, &d.cred, &none), Err(Refusal::Revoked { group: 7, .. })));
 }

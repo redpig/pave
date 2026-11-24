@@ -10,7 +10,7 @@
 use pave_kernel::hash::hash_of;
 use pave_kernel::{sign, Coin, Credential, Hash, Op, Record, Schema, Scheme, View};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 /// The schema epoch sequences use: one indivisible unit, no expiry of its own.
 pub fn epoch_schema(label: &str) -> Schema {
@@ -31,8 +31,23 @@ pub fn epoch_schema(label: &str) -> Schema {
 pub struct EpochData {
     pub sequence: Hash,
     pub number: u32,
-    /// Ticket groups this issuer has revoked, for its own tickets only.
-    pub revoked_groups: BTreeSet<u32>,
+    /// Ticket groups this issuer has revoked, for its own tickets only, each
+    /// with the epoch it was revoked in.
+    ///
+    /// A ticket in a revoked group always stops the coin it is sending or
+    /// receiving. Further back in a coin's history, it stops the coin only
+    /// if it was issued within the recipient's window before the revocation
+    /// (`Policy::revocation_window`): recent hops through a bad group, not
+    /// coins that passed through long before the trouble. The window is in
+    /// the issuer's own epochs, so an issuer that rolls faster when volume is
+    /// high shortens it in wall time without anyone changing a setting.
+    pub revoked: BTreeMap<u32, u32>,
+}
+
+/// Does a ticket issued in epoch `issued`, in a group revoked in epoch `at`,
+/// taint a coin's history under a window of `window` epochs?
+pub fn taints(issued: u32, at: u32, window: u32) -> bool {
+    issued.saturating_add(window) >= at
 }
 
 impl EpochData {

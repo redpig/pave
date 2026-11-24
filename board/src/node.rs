@@ -64,8 +64,9 @@ pub struct Operator {
     pub closed: BTreeSet<String>,
     /// The clerk's private map from ticket group to class. It names no one.
     pub groups: BTreeMap<u32, String>,
-    /// Every group revoked so far; revocation is cumulative.
-    pub revoked: BTreeSet<u32>,
+    /// Every group revoked so far, with the epoch it was revoked in;
+    /// revocation is cumulative.
+    pub revoked: BTreeMap<u32, u32>,
     /// Ticket requests this epoch, by request pseudonym, for the rate limit.
     pub asked: BTreeMap<Vec<u8>, usize>,
     pub asked_epoch: u32,
@@ -280,7 +281,7 @@ impl Node {
             access,
             closed: BTreeSet::new(),
             groups: BTreeMap::new(),
-            revoked: BTreeSet::new(),
+            revoked: BTreeMap::new(),
             asked: BTreeMap::new(),
             asked_epoch: 0,
             root,
@@ -315,7 +316,7 @@ impl Node {
         let op = self.operator.as_mut().ok_or("only the town operator assigns groups")?;
         loop {
             let g = rand::Rng::gen_range(&mut rand::rngs::OsRng, 1..GROUPS);
-            if op.revoked.contains(&g) {
+            if op.revoked.contains_key(&g) {
                 continue;
             }
             match op.groups.get(&g) {
@@ -758,24 +759,23 @@ impl Node {
     /// classes. Revocation is cumulative. A revoked class is closed: its
     /// wallets get no tickets until they update and enroll again.
     pub fn roll_epoch(&mut self, groups: BTreeSet<u32>, classes: BTreeSet<String>) -> Result<u32, String> {
+        let at = head(&self.view, &self.town.sequence).ok_or("no epoch")?.number + 1;
         let op = self.operator.as_mut().ok_or("only the town operator rolls epochs")?;
         for c in &classes {
             if !op.access.contains_key(c) {
                 return Err(format!("unknown class {c}"));
             }
         }
-        op.revoked.extend(groups);
-        for (g, c) in &op.groups {
-            if classes.contains(c) {
-                op.revoked.insert(*g);
-            }
+        let class_groups: Vec<u32> = op.groups.iter().filter(|(_, c)| classes.contains(*c)).map(|(g, _)| *g).collect();
+        for g in groups.into_iter().chain(class_groups) {
+            op.revoked.entry(g).or_insert(at);
         }
         op.closed.extend(classes);
         let revoked = op.revoked.clone();
         let op = self.operator.as_ref().unwrap();
         let h = head(&self.view, &self.town.sequence).ok_or("no epoch")?;
         let coin = self.view.coin(&h.state).ok_or("epoch state missing")?.clone();
-        let data = EpochData { sequence: self.town.sequence, number: h.number + 1, revoked_groups: revoked };
+        let data = EpochData { sequence: self.town.sequence, number: h.number + 1, revoked };
         let rec = roll(self.view.scheme(), &op.clerk, &self.town.clerk, &coin, &self.town.clerk, &data);
         apply_ok(&mut self.view, &rec)?;
         self.know.add_epoch_data(&self.view, data);

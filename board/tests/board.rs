@@ -140,8 +140,8 @@ fn the_whole_story_on_ecdaa() {
     town.roll_epoch(BTreeSet::new(), ["software".to_string()].into_iter().collect()).unwrap();
     let op = town.operator.as_ref().unwrap();
     let software: BTreeSet<u32> = op.groups.iter().filter(|(_, c)| *c == "software").map(|(g, _)| *g).collect();
-    assert!(software.is_subset(&op.revoked) && op.revoked.len() > before);
-    assert!(op.groups.iter().filter(|(_, c)| *c == "hardware").all(|(g, _)| !op.revoked.contains(g)));
+    assert!(software.iter().all(|g| op.revoked.contains_key(g)) && op.revoked.len() > before);
+    assert!(op.groups.iter().filter(|(_, c)| *c == "hardware").all(|(g, _)| !op.revoked.contains_key(g)));
     let terms = town.refill_terms().unwrap();
     let mut dave = join(&mut town, "dave", "hardware", &dir, &[]);
     assert!(dave.pool.is_empty());
