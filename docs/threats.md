@@ -58,6 +58,7 @@ We do not assume that any role behaves well (principle 10), that devices are tam
 14. Payment bridge and redemption
 15. Cross-cutting: the class break
 16. Civic reports
+17. Parcels
 
 ---
 
@@ -356,6 +357,25 @@ Where pave can do better once this is built:
 | RP15 | Paying for reports creates false ones | Pay for checking and forwarding, never for reporting | n/a | Design rule |
 | RP16 | Spam on the board | Endorsed posts come from enrolled members; per-issue counting caps what one person adds; rate limits | n/a | Partial |
 | RP17 | One person counts twice by filing a report under another thread | A report counts only under its own issue's thread | n/a | Built (mutation `anythread`) |
+
+---
+
+## 17. Parcels
+
+`board/src/parcel.rs`; [spec/parcels.md](../spec/parcels.md)
+
+**Attack surface:** the shipper's parcel budget; manifests; handoffs, takes and the addressee's retirement; per-hop pay. Briolette has no counterpart, so its column is omitted.
+
+| # | Attack | Prevent | React | Status |
+|---|---|---|---|---|
+| PC1 | A courier hands one parcel to two people | It is one state used twice | Kernel evidence; the cheat can't prove standing to anyone who knows of it, so can't hand off anything else; the shipper doesn't pay it | Built (mutations `takeunchecked`, `paycheat`) |
+| PC2 | A courier claims delivery | Only the addressee's retirement counts; a courier can't sign as the addressee | A courier who retires a parcel has visibly lost it | Built (mutations `anyconfirm`, `anyretire`) |
+| PC3 | The giver claims a handoff that didn't happen | The take is a record only the taker can sign | n/a | Built |
+| PC4 | A courier is shown a false manifest (higher pay, another address) | Every handoff's receipt commits to the manifest's hash and hop | n/a | Built (mutation `takeanymanifest`) |
+| PC5 | A courier is paid twice for one hop | Each payment's receipt names the parcel and courier | n/a | Built (mutation `paytwice`) |
+| PC6 | A courier keeps the parcel | The custody chain shows who holds it | Name the courier to the co-op | Gap: couriers taking under an identity |
+| PC7 | The addressee takes the parcel but won't retire it | The last handoff was to the addressee's own credential | A dispute | Gap |
+| PC8 | A shipper ships more than it was allowed | Parcels are minted from a budget the town issued | Budgets are capabilities (M1, M3) | Built |
 
 ---
 

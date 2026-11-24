@@ -59,6 +59,8 @@ pub struct Town {
     pub jobs: BoardInfo,
     /// The town's reports board, with its mirror and moderator roles.
     pub reports: BoardInfo,
+    /// The parcel schema: packages in custody. See [`crate::parcel`].
+    pub parcels: Hash,
 }
 
 /// The operator: registrar plus the root, clerk and minter roles, each its
@@ -184,6 +186,8 @@ pub struct Saved {
     pub identities: Vec<(String, Credential)>,
     #[serde(default)]
     pub contacts: Vec<(String, Credential)>,
+    #[serde(default)]
+    pub parcels: Vec<crate::parcel::Manifest>,
 }
 
 /// A summary of what a wallet has: id prefixes of its records, evidence
@@ -249,6 +253,8 @@ pub struct Node {
     pub identities: BTreeMap<String, Credential>,
     /// Stable credentials others shared with this wallet, by the name it knows them by.
     pub contacts: BTreeMap<String, Credential>,
+    /// Manifests of parcels this wallet shipped, carried or received.
+    pub parcels: BTreeMap<Hash, crate::parcel::Manifest>,
 }
 
 fn cash_schema() -> Schema {
@@ -334,6 +340,7 @@ impl Node {
             clerk: cc,
             cash: cash_schema().id(),
             classes,
+            parcels: crate::parcel::parcel_schema().id(),
             jobs: BoardInfo { scope: jobs.output(0), host: s.credential(&me), roles: BTreeMap::new() },
             reports: BoardInfo {
                 scope: reports.output(0),
@@ -383,6 +390,7 @@ impl Node {
             trade: None,
             identities: BTreeMap::new(),
             contacts: BTreeMap::new(),
+            parcels: BTreeMap::new(),
             vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(path)?)),
         };
         node.open_boards()?;
@@ -504,6 +512,7 @@ impl Node {
             trade: None,
             identities: BTreeMap::new(),
             contacts: BTreeMap::new(),
+            parcels: BTreeMap::new(),
             vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(out)?)),
         };
         for c in &e.creds {
@@ -559,6 +568,7 @@ impl Node {
             trade: saved.trade,
             identities: saved.identities.into_iter().collect(),
             contacts: saved.contacts.into_iter().collect(),
+            parcels: saved.parcels.into_iter().map(|m| (m.parcel, m)).collect(),
             vault: std::sync::Mutex::new(vault),
         };
         node.absorb_bundle(&Bundle {
@@ -611,6 +621,7 @@ impl Node {
             trade: self.trade.clone(),
             identities: self.identities.iter().map(|(l, c)| (l.clone(), c.clone())).collect(),
             contacts: self.contacts.iter().map(|(n, c)| (n.clone(), c.clone())).collect(),
+            parcels: self.parcels.values().cloned().collect(),
         };
         let bytes = pave_kernel::hash::encode(&saved);
         let mut vault = self.vault.lock().unwrap();
@@ -841,7 +852,7 @@ impl Node {
         n
     }
 
-    fn signed(&mut self, signer: &Credential, op: Op) -> Result<Record, String> {
+    pub(crate) fn signed(&mut self, signer: &Credential, op: Op) -> Result<Record, String> {
         let rec = sign(self.scheme(), &self.key, signer, op);
         self.guard(rec)
     }

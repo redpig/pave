@@ -72,5 +72,11 @@ The tests were checked against injected faults matching the TLA+ fault names. Ea
 | `vouchunnamed` (vouches) | A vouch counts for a contractor the worker didn't name | 1 |
 | `stableunchecked` (vouches) | A vouch shows a stable credential without its signature | 1 |
 | `stablenotbound` (vouches) | A stable credential's signature isn't bound to its vouch | 1 |
+| `takeanymanifest` (parcels) | A courier takes a parcel whatever manifest it was shown | 1 |
+| `takeunchecked` (parcels) | A courier takes a parcel without its usual coin checks | 1 |
+| `anyconfirm` (parcels) | Anyone holding a parcel can confirm delivery | 1 |
+| `anyretire` (parcels) | Any retirement counts as delivery | 1 |
+| `paycheat` (parcels) | A courier caught in a double handoff is paid | 1 |
+| `paytwice` (parcels) | A courier is paid again for the same hop | 1 |
 | `byunchecked` (boards) | A post's identity counts without its signature | 2 |
 | `bynotbound` (boards) | An identity's signature isn't bound to its post | 2 |

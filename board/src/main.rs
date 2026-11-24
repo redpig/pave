@@ -52,7 +52,7 @@ fn parse_cred(v: &Value, k: &str) -> Result<Credential, String> {
 
 const HELP: &[&str] = &[
     "whoami", "board", "post {title, pay}", "reply {job, note}", "accept {job, worker}", "done {job}",
-    "pay {job} or {job, vouch, note, as: identity}", "identities", "identity {label} (a stable credential to share with the people who should recognize you)", "add_contact {name, credential}", "reply {job, note, trade: true}", "reputation {contractor}", "receive", "check {state}", "spend {state, to}", "cheat {state, to}", "meet {peer}",
+    "pay {job} or {job, vouch, note, as: identity}", "parcel_budget {to, count} (town)", "ship {what, from, to, addressee, pay}", "handoff {parcel, to}", "take {manifest}", "deliver {manifest}", "custody {parcel}", "pay_couriers {parcel}", "identities", "identity {label} (a stable credential to share with the people who should recognize you)", "add_contact {name, credential}", "reply {job, note, trade: true}", "reputation {contractor}", "receive", "check {state}", "spend {state, to}", "cheat {state, to}", "meet {peer}",
     "gossip {peer}", "refill {peer, count}", "sync {peer} (send queued posts to the board host, fetch the boards)",
     "evidence", "issues", "report {category, lat, lon, observed, note, photo} or {issue, observed, note}", "respond {issue, text, permit}", "forward {issue, channel, receipt}", "clear {issue}", "reports_on {issue}", "mirror {file} (town)", "rule {report, malicious} (town)", "send {peer, amount, memo}", "resume {peer}", "swap {peer, state}", "collect {peer}", "roll {revoke: [group, ...], revoke_class: [class, ...]} (operator)", "help",
 ];
@@ -222,6 +222,38 @@ fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
             let (job, note) = (parse_hash(v, "job")?, v["note"].as_str().unwrap_or(""));
             let id = if v["trade"].as_bool() == Some(true) { n.reply_as_contractor(job, note)? } else { n.reply(job, note)? };
             Ok(json!({ "message": hx(&id), "contractor": n.contractor().as_ref().map(hx) }))
+        }
+        "parcel_budget" => Ok(json!({ "budget": hx(&n.issue_parcel_budget(parse_cred(v, "to")?, v["count"].as_u64().unwrap_or(10))?) })),
+        "ship" => {
+            let m = n.ship(v["what"].as_str().unwrap_or(""), v["from"].as_str().unwrap_or(""), v["to"].as_str().unwrap_or(""), parse_cred(v, "addressee")?, v["pay"].as_u64().unwrap_or(0))?;
+            Ok(json!({ "parcel": hx(&m.parcel), "manifest": hex::encode(pave_kernel::hash::encode(&m)) }))
+        }
+        "handoff" => {
+            let parcel = parse_hash(v, "parcel")?;
+            let state = n.hand_off(&parcel, parse_cred(v, "to")?)?;
+            Ok(json!({ "state": hx(&state), "manifest": hex::encode(pave_kernel::hash::encode(&n.parcels[&parcel])) }))
+        }
+        "take" | "deliver" => {
+            let bytes = hex::decode(v["manifest"].as_str().ok_or("missing manifest")?).map_err(|e| e.to_string())?;
+            let m: pave_board::parcel::Manifest = ciborium::from_reader(bytes.as_slice()).map_err(|e| e.to_string())?;
+            let id = if cmd == "take" { n.take_parcel(&m)? } else { n.confirm_delivery(&m)? };
+            Ok(json!({ "parcel": hx(&m.parcel), "record": hx(&id) }))
+        }
+        "custody" => {
+            let parcel = parse_hash(v, "parcel")?;
+            let m = n.parcels.get(&parcel).ok_or("no manifest for that parcel")?;
+            let c = n.custody(m);
+            let steps: Vec<Value> = c.steps.iter().map(|s| match s {
+                pave_board::parcel::Step::Handoff { from, to } => json!({ "handoff": { "from": cx(from), "to": cx(to) } }),
+                pave_board::parcel::Step::Take { by } => json!({ "take": cx(by) }),
+                pave_board::parcel::Step::Retired { by } => json!({ "retired": cx(by) }),
+            }).collect();
+            Ok(json!({ "what": m.what, "steps": steps, "holder": c.holder.as_ref().map(cx), "delivered": c.delivered }))
+        }
+        "pay_couriers" => {
+            let parcel = parse_hash(v, "parcel")?;
+            let m = n.parcels.get(&parcel).ok_or("no manifest for that parcel")?.clone();
+            Ok(json!({ "payments": n.pay_couriers(&m)?.iter().map(hx).collect::<Vec<_>>() }))
         }
         "identity" => Ok(json!({ "credential": cx(&n.identity(v["label"].as_str().ok_or("missing label")?)?) })),
         "identities" => Ok(json!({ "identities": n.identities.iter().map(|(l, c)| (l.clone(), cx(c))).collect::<std::collections::BTreeMap<_, _>>() })),

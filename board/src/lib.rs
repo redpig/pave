@@ -7,6 +7,7 @@
 //! - [`node`]: a wallet's view, knowledge and keys, saved as a record log
 //! - [`net`]: the peer link (meet, two-tier gossip) over TCP
 //! - [`report`]: the civic reports board
+//! - [`parcel`]: packages, with custody as a coin from shipper to addressee
 //! - [`pay`]: the payment handshake, sending only what a payment needs
 //! - [`swap`]: old coins in, fresh coins out
 //! - [`vault`]: sealing a wallet's state, and making old copies useless
@@ -15,6 +16,7 @@ pub mod board;
 pub mod bulletin;
 pub mod net;
 pub mod node;
+pub mod parcel;
 pub mod pay;
 pub mod report;
 pub mod swap;
