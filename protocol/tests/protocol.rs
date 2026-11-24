@@ -344,3 +344,59 @@ fn hints_suffice_across_a_relay() {
     assert!(gossip::wants(&site_c.view, &site_c.know, &relies, &watch).is_empty(), "quiet once proofs arrive");
     let _ = (&w.root, &w.minter);
 }
+
+/// Fault `nostanding`: once a recipient knows of a cheat, a sender must show
+/// it isn't one. Honest senders can; the cheat can't, under any credential.
+/// (Unlinkable credentials, where this matters most, are exercised with
+/// Briolette ECDAA in the board tests.)
+#[test]
+fn senders_show_standing_once_cheats_are_known() {
+    let mut w = world();
+    let (m, a, b, h) = (person(), person(), person(), person());
+    for p in [&m, &a, &b, &h] {
+        w.ticket(p, w.seq_x, 1);
+    }
+    let coin = w.mint_to(&m, 10);
+    let honest_coin = w.mint_to(&h, 7);
+    let mut site = w.site.clone();
+    // No cheats known: no proof needed.
+    let to_a = pay(&mut site, &h, honest_coin, &a);
+    assert_eq!(check(&site.view, &site.know, &to_a, &h.cred, &w.policy()), Ok(()));
+
+    let (mut s1, mut s2) = (site.clone(), site.clone());
+    pay(&mut s1, &m, coin, &a);
+    pay(&mut s2, &m, coin, &b);
+    s1.view.merge_from(&s2.view);
+    let list = cheat_list(&s1.view);
+    assert_eq!(list.len(), 1);
+
+    // Now the honest sender needs standing, and has it.
+    let policy = w.policy();
+    assert_eq!(check(&s1.view, &s1.know, &to_a, &h.cred, &policy), Err(Refusal::NoStanding(h.cred.clone())));
+    let st = Standing::prove(&DevScheme, &h.key, &h.cred, &list).unwrap();
+    assert!(s1.know.add_standing(&DevScheme, st.clone()));
+    assert!(!s1.know.add_standing(&DevScheme, st), "no gain, not replaced");
+    assert_eq!(check(&s1.view, &s1.know, &to_a, &h.cred, &policy), Ok(()));
+
+    // The cheat can't prove it, and a forged one doesn't verify.
+    assert!(Standing::prove(&DevScheme, &m.key, &m.cred, &list).is_none());
+    let forged = Standing { credential: m.cred.clone(), cheats: list.clone(), proof: vec![] };
+    assert!(!s1.know.add_standing(&DevScheme, forged));
+
+    // A standing that predates a newer cheat doesn't cover it.
+    let (m2, c) = (person(), person());
+    w.ticket(&m2, w.seq_x, 1);
+    w.ticket(&c, w.seq_x, 1);
+    let coin3 = w.mint_to(&m2, 3);
+    let mut s3 = s1.clone();
+    s3.view.merge_from(&w.site.view);
+    let (mut s4, mut s5) = (s3.clone(), s3.clone());
+    pay(&mut s4, &m2, coin3, &a);
+    pay(&mut s5, &m2, coin3, &c);
+    s4.view.merge_from(&s5.view);
+    assert_eq!(check(&s4.view, &s4.know, &to_a, &h.cred, &policy), Err(Refusal::NoStanding(h.cred.clone())));
+
+    // Mutation `nostanding`: without the rule the old standing is never asked for.
+    let lax = Policy { require_standing: false, ..policy };
+    assert_eq!(check(&s4.view, &s4.know, &to_a, &h.cred, &lax), Ok(()));
+}

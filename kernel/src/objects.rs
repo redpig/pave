@@ -207,3 +207,11 @@ pub struct Evidence {
     pub first: Record,
     pub second: Record,
 }
+
+impl Evidence {
+    /// The (basename, pseudonym) pair that identifies the cheat's key, for
+    /// asking anyone to prove they aren't it (`Scheme::prove_not_cheat`).
+    pub fn cheat(&self) -> (Vec<u8>, Vec<u8>) {
+        (self.basename.as_bytes().to_vec(), self.nym.clone())
+    }
+}

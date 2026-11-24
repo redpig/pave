@@ -94,3 +94,49 @@ fn join_keeps_the_secret_key_with_the_holder() {
     let s = scheme.sign(&key, &c, b"msg", Some(b"bsn"));
     assert!(scheme.verify(&c, b"msg", Some(b"bsn"), &s));
 }
+
+#[test]
+fn anyone_can_prove_they_are_not_the_cheat_except_the_cheat() {
+    let issuer = Issuer::new();
+    let scheme = issuer.scheme();
+    let (cheat, honest, other) = (issuer.join_locally(), issuer.join_locally(), issuer.join_locally());
+
+    // The cheat signs one state twice; that is what evidence holds.
+    let state = b"state-7";
+    let c1 = scheme.credential(&cheat);
+    let s1 = scheme.sign(&cheat, &c1, b"pay bob", Some(state));
+    let list = vec![(state.to_vec(), scheme.nym(&s1).unwrap())];
+
+    // An honest holder proves it, for any of its credentials.
+    let h = scheme.credential(&honest);
+    let proof = scheme.prove_not_cheat(&honest, &h, &list, b"pay alice").unwrap();
+    assert_eq!(proof.len(), pave_scheme_briolette::nonrevoked::ENTRY_PROOF_LENGTH);
+    assert!(scheme.verify_not_cheat(&h, &list, b"pay alice", &proof));
+    // Bound to its use, its credential and its list.
+    assert!(!scheme.verify_not_cheat(&h, &list, b"pay carol", &proof));
+    assert!(!scheme.verify_not_cheat(&scheme.credential(&honest), &list, b"pay alice", &proof));
+    assert!(!scheme.verify_not_cheat(&h, &[(b"state-8".to_vec(), list[0].1.clone())], b"pay alice", &proof));
+    let mut bad = proof.clone();
+    bad[60] ^= 1;
+    assert!(!scheme.verify_not_cheat(&h, &list, b"pay alice", &bad));
+    // Two proofs by the same holder share nothing: no linking.
+    let again = scheme.prove_not_cheat(&honest, &h, &list, b"pay alice").unwrap();
+    assert_ne!(proof[..48], again[..48]);
+
+    // The cheat can't, under any of its unlinkable credentials, and can't
+    // borrow someone else's proof.
+    for _ in 0..3 {
+        let c = scheme.credential(&cheat);
+        assert!(scheme.prove_not_cheat(&cheat, &c, &list, b"pay alice").is_none());
+        assert!(!scheme.verify_not_cheat(&c, &list, b"pay alice", &proof));
+    }
+    // Nor with a credential that isn't its own.
+    let o = scheme.credential(&other);
+    assert!(scheme.prove_not_cheat(&cheat, &o, &list, b"x").is_none());
+    // A credential from another issuer is refused.
+    let stranger = Issuer::new().join_locally();
+    let sc = Issuer::new().scheme().credential(&stranger);
+    assert!(!scheme.verify_not_cheat(&sc, &list, b"x", &[]));
+    // An empty list needs an empty proof.
+    assert!(scheme.verify_not_cheat(&h, &[], b"x", &scheme.prove_not_cheat(&honest, &h, &[], b"x").unwrap()));
+}

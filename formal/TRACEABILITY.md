@@ -25,6 +25,7 @@ Checked in [`pave-protocol`](../protocol) (`protocol/tests/protocol.rs`).
 | `KnownIsSigned` (`hintepoch`) | CivicTiered | `epochs::head` reads only the view's signed records | `false_head_hints_never_advance_an_epoch` |
 | `NoFalseFlag` with hints (`trusthint`); witness `NoFalseHintDelay` | CivicTiered | Hints never reach `View::flagged`; `Policy::wait_on_hints` can only hold off a coin | `false_fork_hints_only_delay` |
 | `HintsSuffice` (`notrigger`) | CivicTiered | `gossip::wants` asks per hint; `gossip::serve` answers only with proofs | `hints_suffice_across_a_relay` |
+| `HonestNoKnownCheat`, for a cheat's unlinkable credentials (`nostanding`) | (not yet modeled) | `accept::check` requires the sender's `Standing` once any cheat is known; `nonrevoked::prove` refuses for the cheat's key | `senders_show_standing_once_cheats_are_known`, `anyone_can_prove_they_are_not_the_cheat_except_the_cheat`, `the_whole_story_on_ecdaa` |
 | `GossipDiscloses` (`gossiprecords`) | CivicGossip, CivicTiered | `gossip::serve` sends only epoch rolls and evidence | `hints_suffice_across_a_relay` |
 
 ## Mutation checks
@@ -42,3 +43,5 @@ The tests were checked against injected faults matching the TLA+ fault names. Ea
 | `ignoreevidence` | Flagged senders are accepted | 2 |
 | `notrigger` | Fork hints never start a request | 2 |
 | `hintepoch` | Unsigned head hints count toward the known epoch | 2 |
+| `nostanding` | Standing is never required | 2 |
+| `identityproof` | The prover skips its own cheat check and the verifier accepts T = identity | 2 |

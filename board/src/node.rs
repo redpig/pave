@@ -74,6 +74,7 @@ pub struct Saved {
     pub tickets: Vec<SignedTicket>,
     pub epoch_data: Vec<EpochData>,
     pub hints: Vec<Hint>,
+    pub standing: Vec<Standing>,
     pub operator: Option<Operator>,
     pub outbox: Vec<Record>,
     pub cheat_states: Vec<Hash>,
@@ -292,6 +293,7 @@ impl Node {
             epoch_data: saved.epoch_data,
         });
         pave_protocol::gossip::absorb_hints(&mut node.know, &saved.hints);
+        node.absorb_standings(saved.standing);
         Ok(node)
     }
 
@@ -309,6 +311,7 @@ impl Node {
             tickets: self.know.tickets.values().cloned().collect(),
             epoch_data: self.know.epoch_data.values().cloned().collect(),
             hints: self.know.hints.iter().copied().collect(),
+            standing: self.know.standing.values().cloned().collect(),
             operator: self.operator.clone(),
             outbox: self.outbox.clone(),
             cheat_states: self.cheat_states.iter().copied().collect(),
@@ -365,6 +368,30 @@ impl Node {
             }
         }
         self.view.evidence().map(|e| e.basename).filter(|h| !before.contains(h)).collect()
+    }
+
+    /// Standing for every credential this wallet has paid others from,
+    /// against every cheat it knows of. A cheat gets none: its key is on the
+    /// list, whichever credential it asks about.
+    pub fn standings(&self) -> Vec<Standing> {
+        let list = cheat_list(&self.view);
+        if list.is_empty() {
+            return vec![];
+        }
+        let paid_from: BTreeSet<&Credential> = self
+            .view
+            .records()
+            .iter()
+            .chain(self.outbox.iter())
+            .filter(|r| self.mine.contains(&r.signer) && op_recipients(&r.op).iter().any(|c| !self.mine.contains(*c)))
+            .map(|r| &r.signer)
+            .collect();
+        paid_from.into_iter().filter_map(|c| Standing::prove(self.scheme(), &self.key, c, &list)).collect()
+    }
+
+    pub fn absorb_standings(&mut self, v: Vec<Standing>) -> usize {
+        let s = self.view.scheme().clone();
+        v.into_iter().filter(|st| self.know.add_standing(&s, st.clone())).count()
     }
 
     pub fn policy(&self) -> Policy {

@@ -8,6 +8,8 @@
 //! Sizes (v1): credential 192 B (four G1 points); signature 288 B, which
 //! embeds the signing credential, or 336 B with the 48 B pseudonym.
 
+pub mod nonrevoked;
+
 use briolette_crypto::v1;
 use pave_kernel::{Credential, Scheme, Sig};
 
@@ -177,5 +179,13 @@ impl Scheme for BrioletteV1 {
 
     fn nym(&self, sig: &Sig) -> Option<Vec<u8>> {
         (sig.0.len() >= SIGNATURE_WITH_NYM_LENGTH).then(|| sig.0[sig.0.len() - G1_LENGTH..].to_vec())
+    }
+
+    fn prove_not_cheat(&self, key: &HolderKey, cred: &Credential, cheats: &[(Vec<u8>, Vec<u8>)], ctx: &[u8]) -> Option<Vec<u8>> {
+        nonrevoked::prove(&key.secret_key, &cred.0, cheats, ctx)
+    }
+
+    fn verify_not_cheat(&self, cred: &Credential, cheats: &[(Vec<u8>, Vec<u8>)], ctx: &[u8], proof: &[u8]) -> bool {
+        v1::credential_in_group(&cred.0, &self.group_public_key) && nonrevoked::verify(&cred.0, cheats, ctx, proof)
     }
 }

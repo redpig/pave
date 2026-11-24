@@ -133,20 +133,26 @@ def main():
         print(f"  bob's wallet now refuses that coin: {RED}{r['refusal']}{OFF}")
         print(f"  first seen wins: each keeps the copy they saw first; the loser holds proof for a claim")
 
-        say("5. Carol's other coin is unlinkable, so it still passes")
+        say("5. Carol's other coin is unlinkable, but she can't prove she isn't the cheat")
         paid = carol("spend", state=other, to=alice("receive", quiet=True)["credential"])["state"]
         carol.meet(alice)
-        print(f"  alice would accept it: {GREEN}{alice('check', quiet=True, state=paid)['accept']}{OFF}")
+        r = alice("check", quiet=True, state=paid)
+        print(f"  alice knows of a cheat, so she asks the sender to prove it isn't one")
+        print(f"  carol can't, under any credential: {RED}{r['refusal']}{OFF}")
+        bobs = bob("whoami", quiet=True)["coins"]
+        from_bob = bob("spend", state=bobs[0]["state"], to=alice("receive", quiet=True)["credential"])["state"]
+        bob.meet(alice)
+        r = alice("check", quiet=True, state=from_bob)
+        print(f"  bob pays alice; his 144-byte proof links him to nothing: accept {GREEN}{r['accept']}{OFF}")
+        print(f"  no town and no revocation list, and nobody else is affected")
 
-        say("6. The town revokes Carol's ticket group; the epoch spreads by two-tier gossip")
+        say("6. The town also revokes Carol's ticket group; the epoch spreads by two-tier gossip")
         bob.meet(town)  # Bob reports in when he's next online
         epoch = town("roll", revoke=[carol.group])["epoch"]
-        print(f"  town rolls to epoch {epoch}, revoking group {carol.group}")
+        print(f"  town rolls to epoch {epoch}, revoking group {carol.group}, for wallets that only hear from the town")
         g = alice("gossip", quiet=True, peer=town.addr)
         print(f"  alice ⇄ town gossip: hints {g['compressed_bytes']} B (one packet), "
               f"{g['wants']} want(s), proofs {g['extended_bytes']} B")
-        r = alice("check", quiet=True, state=paid)
-        print(f"  alice now refuses carol's other coin: {RED}{r['refusal']}{OFF}")
         g = bob("gossip", quiet=True, peer=alice.addr)
         print(f"  bob ⇄ alice gossip: hints {g['compressed_bytes']} B, {g['wants']} want(s), proofs {g['extended_bytes']} B")
         g = bob("gossip", quiet=True, peer=alice.addr)

@@ -4,12 +4,54 @@
 //! recipient's choice: honoring expiry, transfer limits, revocation and
 //! evidence. This is the protocol's default policy (`HonestAcceptsInDate` and
 //! `HonestNoKnownCheat` in the TLA+ models).
+//!
+//! Evidence names one credential, but a cheat has many unlinkable ones. So a
+//! recipient that knows of cheats asks the sender for its *standing*: a proof
+//! that the sending credential's key is none of the cheats' keys. An honest
+//! sender proves it without revealing anything else; a cheat can't, under any
+//! credential. That stops a cheat everywhere the evidence has reached, with no
+//! clerk, no revocation list and no harm to anyone else.
 
 use crate::epochs::{head, EpochData};
 use crate::gossip::Hint;
 use crate::tickets::SignedTicket;
 use pave_kernel::{Credential, Hash, Scheme, View};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+
+/// What a standing proof is bound to.
+pub const STANDING_CONTEXT: &[u8] = b"pave/standing/v0";
+
+/// Every cheat `view` holds evidence for, as (basename, pseudonym), sorted.
+pub fn cheat_list<S: Scheme>(view: &View<S>) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let set: BTreeSet<_> = view.evidence().map(|e| e.cheat()).collect();
+    set.into_iter().collect()
+}
+
+/// A proof that a credential's key is none of `cheats`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Standing {
+    pub credential: Credential,
+    pub cheats: Vec<(Vec<u8>, Vec<u8>)>,
+    pub proof: Vec<u8>,
+}
+
+impl Standing {
+    /// None if the key is one of the cheats.
+    pub fn prove<S: Scheme>(scheme: &S, key: &S::HolderKey, credential: &Credential, cheats: &[(Vec<u8>, Vec<u8>)]) -> Option<Self> {
+        let proof = scheme.prove_not_cheat(key, credential, cheats, STANDING_CONTEXT)?;
+        Some(Standing { credential: credential.clone(), cheats: cheats.to_vec(), proof })
+    }
+
+    pub fn verify<S: Scheme>(&self, scheme: &S) -> bool {
+        scheme.verify_not_cheat(&self.credential, &self.cheats, STANDING_CONTEXT, &self.proof)
+    }
+
+    /// Does this cover every cheat in `list`?
+    pub fn covers(&self, list: &[(Vec<u8>, Vec<u8>)]) -> bool {
+        list.iter().all(|c| self.cheats.contains(c))
+    }
+}
 
 /// A wallet's knowledge beyond its view: tickets it has seen (they travel
 /// with a coin's provenance), epoch data, and unverified hints.
@@ -18,6 +60,8 @@ pub struct Knowledge {
     pub tickets: BTreeMap<Credential, SignedTicket>,
     pub epoch_data: BTreeMap<Hash, EpochData>,
     pub hints: BTreeSet<Hint>,
+    /// The best verified standing seen for each credential.
+    pub standing: BTreeMap<Credential, Standing>,
 }
 
 impl Knowledge {
@@ -27,6 +71,20 @@ impl Knowledge {
             return false;
         }
         self.tickets.insert(t.ticket.credential.clone(), t);
+        true
+    }
+
+    /// Keep a standing proof if it verifies and covers more than the one held.
+    pub fn add_standing<S: Scheme>(&mut self, scheme: &S, st: Standing) -> bool {
+        if let Some(have) = self.standing.get(&st.credential) {
+            if st.cheats.len() <= have.cheats.len() || !st.covers(&have.cheats) {
+                return false;
+            }
+        }
+        if !st.verify(scheme) {
+            return false;
+        }
+        self.standing.insert(st.credential.clone(), st);
         true
     }
 
@@ -51,12 +109,14 @@ pub struct Policy {
     pub refuse_known_cheats: bool,
     /// Hold off a coin offline while an unproven fork hint names its history.
     pub wait_on_hints: bool,
+    /// Once this recipient knows of any cheat, require the sender's standing.
+    pub require_standing: bool,
 }
 
 impl Policy {
     /// The default wallet policy: honor everything, don't wait on hints.
     pub fn wallet(trusted_clerks: BTreeMap<Credential, Hash>) -> Self {
-        Policy { trusted_clerks, honor_expiry: true, honor_transfer_limit: true, refuse_known_cheats: true, wait_on_hints: false }
+        Policy { trusted_clerks, honor_expiry: true, honor_transfer_limit: true, refuse_known_cheats: true, wait_on_hints: false, require_standing: true }
     }
 }
 
@@ -74,6 +134,8 @@ pub enum Refusal {
     Expired { credential: Credential, issued: u32, now: u32 },
     Revoked { credential: Credential, group: u32 },
     HintPending(Hash),
+    /// The recipient knows of cheats, and the sender hasn't shown it isn't one.
+    NoStanding(Credential),
 }
 
 /// Every state in a coin's provenance, from its current state back to mint.
@@ -104,6 +166,12 @@ pub fn check<S: Scheme>(
 
     if policy.refuse_known_cheats && view.flagged().contains(sender) {
         return Err(Refusal::KnownCheat);
+    }
+    if policy.require_standing {
+        let list = cheat_list(view);
+        if !list.is_empty() && !know.standing.get(sender).is_some_and(|st| st.covers(&list)) {
+            return Err(Refusal::NoStanding(sender.clone()));
+        }
     }
     if policy.honor_transfer_limit {
         if let Some(limit) = schema.offline_transfers {

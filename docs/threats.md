@@ -71,6 +71,7 @@ We do not assume that any role behaves well (principle 10), that devices are tam
 | K1 | Spend another holder's coin | A transfer needs a signature by the coin's holder credential (invariant 2) | n/a | Same, through the ECDAA chain | Built |
 | K2 | Create value by split, merge or mint | Every record conserves amount and kind (invariant 1); a split is one record, so its sum is checked offline by every recipient | n/a | Each half shows only `split <= original`; only the tokenmap sees the sum (audit H-5) | Built **+** |
 | K3 | Double spend offline | Not preventable offline | First seen wins. When two records consume one state under one signer and pseudonym, any view that holds both makes evidence (invariant 6). The evidence verifies on its own and travels anywhere (about 770 B) | Only the tokenmap sees the fork, once both copies are uploaded | Built **+** (proptest over partitions; CivicSequences) |
+| K3a | After being caught, keep spending other coins held under unlinkable credentials | Standing: once a recipient knows of a cheat, the sender proves its key isn't the cheat's (EPID's non-revoked proof, 144 B and about 3 ms per listed cheat). The cheat can't, under any credential | n/a | Revoke the cheat's ticket groups in a later epoch, which also hits everyone else in those groups until they pass the challenge test | Built **+** (mutations `nostanding`, `identityproof`) |
 | K4 | Frame an honest holder with fake evidence | Evidence needs two valid signatures with the same basename and pseudonym, which needs the holder's secret key | `no_false_flag` invariant | Non-frameability, provided the issuer never learns the secret key | Built; see S2 |
 | K5 | Blame the recipient instead of the cheat | Evidence names the signer's pseudonym, never the recipient | n/a | Same | Built (mutation `flagrecipient`) |
 | K6 | Change a schema's rules after minting | A schema's id is the hash of its settings (invariant 5) | n/a | Token descriptor fixed by the mint signature | Built |
@@ -148,7 +149,7 @@ We do not assume that any role behaves well (principle 10), that devices are tam
 | # | Attack | Prevent | React | Briolette | Status |
 |---|---|---|---|---|---|
 | C1 | Show different revocation lists to different people | A roll is a transfer of the sequence capability, so two rolls from one epoch are a double use | Evidence | Gossip comparison | Built **+** |
-| C2 | Suppress a known revocation | Evidence is public and verifies on its own; each recipient refuses known cheats whatever the clerk publishes | A signed epoch plus older evidence it ignores is proof of suppression | Optimistic challenge with stake; relays sign what they serve | Built (recipients refuse independently) **+**; Gap: a suppression-proof format |
+| C2 | Suppress a known revocation | Evidence is public and verifies on its own; each recipient refuses known cheats and asks for standing, whatever the clerk publishes | A signed epoch plus older evidence it ignores is proof of suppression | Optimistic challenge with stake; relays sign what they serve | Built (recipients refuse independently) **+**; Gap: a suppression-proof format |
 | C3 | Ticket groups link holders | Random group per ticket batch from a large space (Briolette allows up to 32768), mapped privately to a class | n/a | Randomized groups | **Bug**: one sequential group per wallet, shown in every ticket |
 | C4 | Ticket flooding: endless receiving addresses | Per-pseudonym limits on ticket requests per epoch | n/a | NAC basename = epoch; per-NAC ticket budget | Gap |
 | C5 | Replay an old epoch as current | The head is the longest valid chain of rolls, so an older epoch can't replace a newer one | n/a | Epoch monotonicity | Built |
@@ -186,7 +187,7 @@ We do not assume that any role behaves well (principle 10), that devices are tam
 | A1 | Pay with a coin held under an unticketed or foreign credential | Every credential in the history needs a valid ticket from a trusted clerk | n/a | Credential ↔ ticket binding | Built |
 | A2 | Pay with an expired coin | Soft expiry per ticket, per sequence | n/a | See C11 | Built (mutation `ignoreexpiry`) |
 | A3 | Exceed the offline hop limit | `offline_transfers` | n/a | Maximum provenance | Built (mutation `nolimit`) |
-| A4 | Pay with a coin from a known cheat | `refuse_known_cheats` | n/a | Revoked groups only | Built (mutation `ignoreevidence`) **+** |
+| A4 | Pay with a coin from a known cheat | `refuse_known_cheats` for the named credential; standing for every other credential (K3a) | n/a | Revoked groups only, after the next epoch | Built (mutations `ignoreevidence`, `nostanding`) **+** |
 | A5 | Pay before the recipient knows a revocation | The handshake exchanges hints first; `wait_on_hints` holds a coin when a fork hint is pending | n/a | Required state exchange before every transaction | Built (mutations `notrigger`, `hintepoch`) |
 | A6 | Pay to a ticket that is invalid or revoked (the payer gets stuck) | The payer checks the recipient's ticket | n/a | Payer validates payee | Gap |
 | A7 | Redirect a payment at a point of sale | Merchant identity tickets; receive-only tickets for points of sale | n/a | Same | Gap |
@@ -306,13 +307,14 @@ Not built, by design. Test credit only until there is an accountable operator (p
 
 The attack: someone finds a weakness in one device model's secure element or firmware. Combined with a phone exploit, they extract keys at scale. They can then double-spend every coin those devices hold, enroll fresh identities with the extracted attestation keys, and evade the per-device limits.
 
-Evidence alone does not handle this. It catches every double spend and names one credential each time. But a class breaker has thousands of identities, and each one can cheat once before it is revoked. Briolette's answer is containment by class, and pave needs the same layers:
+Evidence and standing don't handle this alone. Evidence catches every double spend, and standing stops each caught identity everywhere the evidence has reached. But a class breaker has thousands of identities, and each one can cheat once before it is caught. Briolette's answer is containment by class, and pave needs the same layers:
 
 | Layer | What it does | Briolette | pave |
 |---|---|---|---|
 | Prevent | The secure element signs each basename once, with anti-rollback storage; attestation at enrollment | Credstick bloom filter; Key Attestation and App Attest; split key | Gap (W2, R1) |
 | Bound | Lower-assurance classes get shorter ticket lifetimes, smaller `max_spend` and fewer tickets per epoch, so each extracted identity is worth little | GroupPolicy per NAC group; elastic lifetimes; per-NAC ticket budgets | Partial: schema-level expiry and hop limits; Gap: per-class policy (C4, C9) |
 | Detect | The first double spend that surfaces names the credential | Tokenmap, once tokens are uploaded | Built **+**: any two holders who meet detect it, with no service |
+| Contain one cheat | Standing: wherever its evidence has reached, a caught identity can't spend any coin under any credential, and no one else is affected | Group revocation, with collateral on the group | Built **+** |
 | Contain | The clerk maps each randomized ticket group to the class (attestation tier and model) that requested it. When evidence piles up in one class, the clerk revokes every group of that class in the next epoch, and recipients refuse those tickets | Groups ↔ NAC group; class revocation | Gap (C3 and R4 are bugs today) |
 | Recover | Honest members of the broken class update, re-attest and pass a challenge before getting new tickets. The challenge: sign the cheat's earlier request basename and show a different pseudonym. They swap stranded coins | Challenge test; re-registration after update; recovery | Gap |
 
@@ -326,6 +328,7 @@ Where pave can do better once this is built:
 ## Where pave is ahead of Briolette
 
 - **Offline detection.** Two holders who meet find a double spend on their own, with a portable 770-byte proof (K3).
+- **Individual revocation without groups.** Once the evidence reaches a recipient, a caught cheat can't spend under any of its unlinkable credentials, while honest senders prove they aren't the cheat in 144 bytes per listed cheat that link them to nothing (K3a). Briolette revokes a whole ticket group in the next epoch.
 - **Offline split conservation** (K2).
 - **Issuer equivocation is a kernel conflict** (K9, C1).
 - **Bounded minting.** Budgets are capabilities (M1, M3).
@@ -352,4 +355,4 @@ These are ranked by how much they matter before anyone other than us uses this.
 ## Decisions for Will
 
 - **D1. Expiry on the whole history, or only the current holder's ticket?** Briolette checks only the current holder's ticket, so a coin's life isn't capped by its oldest ticket. pave checks every ticket in the history. That stops a coin from carrying a long-stale ticket in its past, but it caps a coin's useful life at `soft_expiry` epochs from its oldest hop, forcing swaps.
-- **D2. Revocation window.** Briolette refuses a coin with a revoked group in its history only when that revoked ticket is recent (within a window). pave refuses for any revoked group anywhere, which strands honest holders downstream of a cheat. The proposal is to follow Briolette: refuse when the revoked ticket was issued within `w` epochs of the revocation, and keep evidence-based refusal for the cheat's own states.
+- **D2. Revocation window.** Briolette refuses a coin with a revoked group in its history only when that revoked ticket is recent (within a window). pave refuses for any revoked group anywhere, which strands honest holders downstream of a cheat. Standing now stops an individual cheat directly, so group revocation is needed mainly for class breaks. The proposal: check revoked groups only on the sender's own ticket and on tickets within `w` epochs of the revocation, as Briolette does, and leave individual cheats to evidence and standing.

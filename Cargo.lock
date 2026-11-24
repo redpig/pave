@@ -571,10 +571,13 @@ dependencies = [
 name = "pave-scheme-briolette"
 version = "0.1.0"
 dependencies = [
+ "bls12_381_plus",
  "briolette-crypto",
+ "ff",
  "pave-kernel",
  "rand 0.8.8",
  "serde",
+ "sha2",
 ]
 
 [[package]]

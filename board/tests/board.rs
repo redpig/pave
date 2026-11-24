@@ -4,7 +4,7 @@
 use pave_board::board::{jobs, Status};
 use pave_board::node::Node;
 use pave_protocol::gossip;
-use pave_protocol::Refusal;
+use pave_protocol::{check, Policy, Refusal};
 use std::collections::BTreeSet;
 
 fn meet(a: &mut Node, b: &mut Node) {
@@ -13,6 +13,9 @@ fn meet(a: &mut Node, b: &mut Node) {
     a.absorb_bundle(&bb);
     a.outbox.clear();
     b.outbox.clear();
+    let (sa, sb) = (a.standings(), b.standings());
+    b.absorb_standings(sa);
+    a.absorb_standings(sb);
 }
 
 /// Two-tier gossip from `from` to `to`, in process.
@@ -74,16 +77,28 @@ fn the_whole_story_on_ecdaa() {
     }
     assert_eq!(bob.check(&to_bob), Err(Refusal::KnownCheat));
 
-    // Carol's other coin is held under an unlinkable credential: still accepted...
+    // Carol's other coin is held under an unlinkable credential, but alice
+    // now knows of a cheat, so she asks the sender to prove it isn't one.
+    // Carol can't, under any credential. No town, no revocation list.
     let paid_alice = carol.spend(other, alice.receive().unwrap()).unwrap();
     meet(&mut carol, &mut alice);
-    assert_eq!(alice.check(&paid_alice), Ok(()));
+    assert!(carol.standings().is_empty(), "the cheat has no standing to give");
+    assert!(matches!(alice.check(&paid_alice), Err(Refusal::NoStanding(_))));
 
-    // ...until the town revokes her group and the epoch reaches alice by gossip.
+    // An honest payer proves it without being linked to anything.
+    let bobs = bob.my_coins();
+    let from_bob = bob.spend(bobs[0].state, alice.receive().unwrap()).unwrap();
+    meet(&mut bob, &mut alice);
+    assert_eq!(alice.check(&from_bob), Ok(()));
+
+    // The town can still revoke carol's ticket group, for recipients that
+    // haven't met the evidence; the epoch reaches alice by gossip.
     meet(&mut bob, &mut town);
     town.roll_epoch([carol.group].into_iter().collect()).unwrap();
     gossip_to(&town, &mut alice);
-    assert!(matches!(alice.check(&paid_alice), Err(Refusal::Revoked { group, .. }) if group == carol.group));
+    let carol_cred = alice.view.coin(&paid_alice).unwrap().history[0].clone();
+    let no_standing = Policy { require_standing: false, ..alice.policy() };
+    assert!(matches!(check(&alice.view, &alice.know, &paid_alice, &carol_cred, &no_standing), Err(Refusal::Revoked { group, .. }) if group == carol.group));
 
     // Tickets refill from the town, in the asker's group.
     let before = bob.pool.len();

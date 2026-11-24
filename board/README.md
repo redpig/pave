@@ -26,11 +26,11 @@ python3 demo/board_demo.py
 It enrolls three neighbors at the town office, then runs each person as a separate process, meeting only over local TCP:
 1. Alice posts a job, Bob replies, she accepts, he finishes and she pays.
 2. Carol spends the same coin to Bob and to Alice. Neither can tell, until Bob and Alice meet: the evidence, linked by a 48-byte pseudonym, leads only to Carol's ticket group, and that coin is refused.
-3. Carol's other coin is under an unlinkable credential, so it still passes.
-4. The town revokes Carol's group. The new epoch spreads by two-tier gossip (53 bytes of hints in one packet, then a 1.7 KB proof fetched because the hint asked for it), and her other coin is refused.
+3. Carol's other coin is under an unlinkable credential, but Alice now knows of a cheat, so she asks the sender to prove it isn't one. Carol can't, under any credential, and is refused with no help from the town. Bob pays Alice and proves it with 144 bytes that link him to nothing.
+4. The town also revokes Carol's ticket group. The new epoch spreads by two-tier gossip (53 bytes of hints in one packet, then a 1.7 KB proof fetched because the hint asked for it).
 5. Bob refills his tickets from the town.
 
-The whole run takes about 3 seconds. Measured on one core: randomizing a credential takes 1.8 ms, signing with a basename 1.9 ms, and verifying 7.4 ms (`cargo run --release -p pave-scheme-briolette --example timing`).
+The whole run takes about 3 seconds. Measured on one core: randomizing a credential takes 1.8 ms, signing with a basename 1.9 ms, verifying 7.4 ms, and proving or checking standing about 3 ms per known cheat (`cargo run --release -p pave-scheme-briolette --example timing`).
 
 ## Driving a node
 

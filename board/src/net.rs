@@ -1,12 +1,13 @@
 //! The peer link: length-prefixed CBOR over TCP.
 //!
-//! - Meet: two wallets swap bundles, as two phones would on meeting.
+//! - Meet: two wallets swap bundles, as two phones would on meeting, then
+//!   standing proofs against every cheat either now knows of.
 //! - Gossip: the two tiers. Hints first (fits one packet), then per-hint
 //!   wants answered with proofs.
 
 use crate::node::{Bundle, Node};
 use pave_kernel::{Credential, Sig};
-use pave_protocol::SignedTicket;
+use pave_protocol::{SignedTicket, Standing};
 use pave_protocol::gossip::{self, Hint, Proof, Want};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -22,6 +23,8 @@ pub enum Wire {
     /// Ask the town for tickets for these fresh credentials.
     Refill { creds: Vec<Credential>, by: Credential, sig: Sig },
     Tickets(Vec<SignedTicket>),
+    /// Proofs that the credentials a wallet paid from aren't known cheats.
+    Standing(Vec<Standing>),
 }
 
 pub fn write_msg(s: &mut TcpStream, m: &Wire) -> std::io::Result<usize> {
@@ -73,6 +76,10 @@ pub fn serve_peer(node: Arc<Mutex<Node>>, mut s: TcpStream) -> std::io::Result<(
                 }
                 Wire::Refill { creds, by, sig } => Wire::Tickets(n.answer_refill(&creds, &by, &sig).unwrap_or_default()),
                 Wire::Tickets(_) => Wire::Tickets(vec![]),
+                Wire::Standing(v) => {
+                    n.absorb_standings(v);
+                    Wire::Standing(n.standings())
+                }
             };
             let _ = n.save();
             r
@@ -97,8 +104,15 @@ pub fn meet(node: &Arc<Mutex<Node>>, addr: &str) -> std::io::Result<(Vec<pave_ke
         }
         _ => vec![],
     };
+    // Now both sides know the same cheats: swap standing against them.
+    let mine = n.standings();
+    let sent2 = write_msg(&mut s, &Wire::Standing(mine))?;
+    let (reply, got2) = read_msg(&mut s)?;
+    if let Wire::Standing(v) = reply {
+        n.absorb_standings(v);
+    }
     let _ = n.save();
-    Ok((new, sent + got))
+    Ok((new, sent + got + sent2 + got2))
 }
 
 /// Two-tier gossip with a peer. Returns (compressed bytes each way, extended bytes received, wants sent).

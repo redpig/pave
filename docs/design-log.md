@@ -41,7 +41,7 @@ Decisions behind the current [kernel](../spec/kernel.md) and [protocol](../spec/
   - *Compressed:* hints only (sequence heads and fork hints), sized to fit one APDU or mesh packet.
   - *Extended:* proofs (signed epochs and evidence), fetched per hint, have/want style.
   - A hint never flags anyone or moves an epoch. A recipient may choose to hold off one coin offline while an unproven fork hint names it.
-- **Evidence.** The shared basename plus two signatures with the same nym. With Briolette v1 crypto it is about 770 bytes, so it travels only in the extended tier. It names the forked coin and its ticket, not the cheater's other coins.
+- **Evidence.** The shared basename plus two signatures with the same nym. With Briolette v1 crypto it is about 770 bytes, so it travels only in the extended tier. It names the forked coin and its ticket. The cheat's other coins are under unlinkable credentials, so evidence alone can't name them. Standing closes that: once a recipient knows of a cheat, a sender proves its key isn't the cheat's (EPID's non-revoked proof), which the cheat can't do for any coin.
 - **Tokenmap stays, as an optional role.** Syncing to it records what you held, which helps recovery, and gives online double-spend detection. What it publishes is evidence, never a verdict.
 - **Issuer revocation bitfields still work per issuer,** for that issuer's own tickets, carried in its signed epochs. They are no longer the only revocation channel.
 

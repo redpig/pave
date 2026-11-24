@@ -62,6 +62,19 @@ pub trait Scheme {
 
     /// The pseudonym a basename-signature carries, if any.
     fn nym(&self, sig: &Sig) -> Option<Vec<u8>>;
+
+    /// Prove that `cred`'s key is none of the keys behind `cheats`, given as
+    /// (basename, pseudonym) pairs from evidence, without revealing anything
+    /// else about it. `ctx` binds the proof to one use. None if the key is
+    /// one of them, or if the scheme can't prove it.
+    fn prove_not_cheat(&self, _key: &Self::HolderKey, _cred: &Credential, _cheats: &[(Vec<u8>, Vec<u8>)], _ctx: &[u8]) -> Option<Vec<u8>> {
+        None
+    }
+
+    /// Check a proof from `prove_not_cheat`.
+    fn verify_not_cheat(&self, _cred: &Credential, _cheats: &[(Vec<u8>, Vec<u8>)], _ctx: &[u8], _proof: &[u8]) -> bool {
+        false
+    }
 }
 
 /// Test-only scheme over Ed25519. Not anonymous: every credential for a key
@@ -136,5 +149,15 @@ impl Scheme for DevScheme {
 
     fn nym(&self, sig: &Sig) -> Option<Vec<u8>> {
         (sig.0.len() == 96).then(|| sig.0[64..].to_vec())
+    }
+
+    // Not anonymous, so anyone can compute a credential's pseudonym and the
+    // proof is empty.
+    fn prove_not_cheat(&self, key: &SigningKey, cred: &Credential, cheats: &[(Vec<u8>, Vec<u8>)], ctx: &[u8]) -> Option<Vec<u8>> {
+        (self.credential(key) == *cred && self.verify_not_cheat(cred, cheats, ctx, &[])).then(Vec::new)
+    }
+
+    fn verify_not_cheat(&self, cred: &Credential, cheats: &[(Vec<u8>, Vec<u8>)], _ctx: &[u8], proof: &[u8]) -> bool {
+        proof.is_empty() && cheats.iter().all(|(b, k)| Self::nym_for(&cred.0, b) != *k)
     }
 }
