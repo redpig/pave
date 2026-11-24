@@ -533,6 +533,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "pave-board"
+version = "0.1.0"
+dependencies = [
+ "ciborium",
+ "ed25519-dalek",
+ "hex",
+ "pave-kernel",
+ "pave-protocol",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "pave-kernel"
 version = "0.1.0"
 dependencies = [

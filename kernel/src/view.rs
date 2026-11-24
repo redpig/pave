@@ -163,6 +163,10 @@ impl<S: Scheme> View<S> {
     pub fn unspent(&self) -> impl Iterator<Item = &Coin> {
         self.unspent.values()
     }
+    /// Records refused as conflicts, kept so their evidence can be relayed.
+    pub fn conflicts(&self) -> &[Record] {
+        &self.conflicts
+    }
     pub fn records(&self) -> &[Record] {
         &self.records
     }
