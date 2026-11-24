@@ -72,3 +72,5 @@ The tests were checked against injected faults matching the TLA+ fault names. Ea
 | `vouchunnamed` (vouches) | A vouch counts for a contractor the worker didn't name | 1 |
 | `stableunchecked` (vouches) | A vouch shows a stable credential without its signature | 1 |
 | `stablenotbound` (vouches) | A stable credential's signature isn't bound to its vouch | 1 |
+| `byunchecked` (boards) | A post's identity counts without its signature | 2 |
+| `bynotbound` (boards) | An identity's signature isn't bound to its post | 2 |

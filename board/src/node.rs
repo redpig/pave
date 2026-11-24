@@ -22,6 +22,11 @@ use std::path::{Path, PathBuf};
 
 pub type S = BrioletteV1;
 
+/// The identities a wallet starts with, from least to most identifiable:
+/// one shared with a few people, one with its contacts, one public. Posting
+/// with none is the anonymous tier.
+pub const IDENTITY_TIERS: [&str; 3] = ["close", "contacts", "public"];
+
 /// Tickets a wallet asks for at a time.
 pub const PREFETCH: usize = 8;
 /// Ticket groups are drawn at random from this many, one per batch.
@@ -176,7 +181,7 @@ pub struct Saved {
     #[serde(default)]
     pub trade: Option<Credential>,
     #[serde(default)]
-    pub stable: Vec<(String, Credential)>,
+    pub identities: Vec<(String, Credential)>,
     #[serde(default)]
     pub contacts: Vec<(String, Credential)>,
 }
@@ -241,7 +246,7 @@ pub struct Node {
     /// This wallet's trade key, once it replies as a contractor.
     pub trade: Option<Credential>,
     /// Stable credentials this wallet signs with for chosen audiences, by label.
-    pub stable: BTreeMap<String, Credential>,
+    pub identities: BTreeMap<String, Credential>,
     /// Stable credentials others shared with this wallet, by the name it knows them by.
     pub contacts: BTreeMap<String, Credential>,
 }
@@ -376,7 +381,7 @@ impl Node {
             boards: BTreeMap::new(),
             outgoing: vec![],
             trade: None,
-            stable: BTreeMap::new(),
+            identities: BTreeMap::new(),
             contacts: BTreeMap::new(),
             vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(path)?)),
         };
@@ -497,7 +502,7 @@ impl Node {
             boards: BTreeMap::new(),
             outgoing: vec![],
             trade: None,
-            stable: BTreeMap::new(),
+            identities: BTreeMap::new(),
             contacts: BTreeMap::new(),
             vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(out)?)),
         };
@@ -509,6 +514,11 @@ impl Node {
         }
         person.absorb_bundle(&e.bundle);
         person.open_boards()?;
+        // One identity per privacy tier, ready before the first post.
+        for tier in IDENTITY_TIERS {
+            let c = s.credential(&person.key);
+            person.identities.insert(tier.to_string(), c);
+        }
         person.save()?;
         Ok(person)
     }
@@ -547,7 +557,7 @@ impl Node {
             boards: BTreeMap::new(),
             outgoing: saved.outgoing,
             trade: saved.trade,
-            stable: saved.stable.into_iter().collect(),
+            identities: saved.identities.into_iter().collect(),
             contacts: saved.contacts.into_iter().collect(),
             vault: std::sync::Mutex::new(vault),
         };
@@ -599,7 +609,7 @@ impl Node {
             boards: self.boards.iter().map(|(s, c)| (*s, c.submissions(), c.receipts.values().cloned().collect())).collect(),
             outgoing: self.outgoing.clone(),
             trade: self.trade.clone(),
-            stable: self.stable.iter().map(|(l, c)| (l.clone(), c.clone())).collect(),
+            identities: self.identities.iter().map(|(l, c)| (l.clone(), c.clone())).collect(),
             contacts: self.contacts.iter().map(|(n, c)| (n.clone(), c.clone())).collect(),
         };
         let bytes = pave_kernel::hash::encode(&saved);
@@ -907,17 +917,18 @@ impl Node {
         self.send_as(&me, BoardMsg::Reply { job, note: note.into(), trade: None })
     }
 
-    /// A stable credential of this wallet's under `label` (made on first
-    /// use): share it with the people who should recognize what it signs,
-    /// such as one for neighbors and another for family. Anything signed
-    /// with it links to everything else signed with it.
-    pub fn stable(&mut self, label: &str) -> Result<Credential, String> {
-        if !self.stable.contains_key(label) {
+    /// This wallet's identity for `label`: a stable credential it can sign
+    /// posts with, made on first use. A wallet starts with one per privacy
+    /// tier ([`IDENTITY_TIERS`]). Share each with the people who should
+    /// recognize what it signs. Everything signed with one links to
+    /// everything else signed with it.
+    pub fn identity(&mut self, label: &str) -> Result<Credential, String> {
+        if !self.identities.contains_key(label) {
             let c = self.scheme().credential(&self.key);
-            self.stable.insert(label.into(), c);
+            self.identities.insert(label.into(), c);
             self.save()?;
         }
-        Ok(self.stable[label].clone())
+        Ok(self.identities[label].clone())
     }
 
     /// Recognize what `name`'s stable credential signs from now on.
@@ -978,8 +989,8 @@ impl Node {
     /// worker must have replied as a contractor.
     /// With `as_stable`, the vouch is also signed with that stable
     /// credential, so whoever was given it knows the vouch is this wallet's.
-    pub fn pay_and_vouch(&mut self, job_id: Hash, category: &str, note: &str, as_stable: Option<&str>) -> Result<Hash, String> {
-        self.pay_with(job_id, Some((category, note, as_stable)))
+    pub fn pay_and_vouch(&mut self, job_id: Hash, category: &str, note: &str, identity: Option<&str>) -> Result<Hash, String> {
+        self.pay_with(job_id, Some((category, note, identity)))
     }
 
     fn pay_with(&mut self, job_id: Hash, vouch: Option<(&str, &str, Option<&str>)>) -> Result<Hash, String> {
@@ -1013,18 +1024,10 @@ impl Node {
         apply_ok(&mut self.view, &rec)?;
         let payment = rec.output(0);
         self.send_as(&job.poster, BoardMsg::Paid { job: job_id, payment })?;
-        if let (Some((category, note, as_stable)), Some(who)) = (vouch, who) {
-            let by = match as_stable {
-                Some(label) => {
-                    let key = self.stable(label)?;
-                    let sig = self.scheme().sign(&self.key, &key, &board::known_bytes(&job_id, &who, category), None);
-                    Some(board::Trade { key, sig })
-                }
-                None => None,
-            };
-            let msg = BoardMsg::Vouch { job: job_id, category: category.into(), note: note.into(), payment: rec, by };
+        if let (Some((category, note, identity)), Some(who)) = (vouch, who) {
+            let msg = BoardMsg::Vouch { job: job_id, category: category.into(), note: note.into(), payment: Box::new(rec) };
             let scope = self.town.jobs.scope;
-            self.compose(&scope, &job.poster, msg.kind(), Some(who), msg.encode(), Some(&[]))?;
+            self.compose_as(&scope, &job.poster, msg.kind(), Some(who), msg.encode(), Some(&[]), identity)?;
         }
         Ok(payment)
     }

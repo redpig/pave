@@ -22,6 +22,17 @@ The record's `receipt` field is the content hash too, and the kernel checks the 
 
 **The signer is the author's key for that post.** It is a fresh credential, unlinkable to the author's others. The author signs later posts with the same key to act as the author: a poster accepting a worker, a worker marking a job done. Hosts index posts by the hash of that key and by content hash, so either finds the post.
 
+**Identities are the author's choice.** A post may also carry a signature over its binding by one of the author's stable credentials. A wallet starts with one per privacy tier, so the choice is ready at the first post:
+
+| Tier | Who can tell it's you |
+|---|---|
+| none (the default) | Nobody: a fresh key per post, and a per-thread pseudonym if endorsed |
+| `close` | The few people you gave it to |
+| `contacts` | Your network: the neighbors and friends you gave it to |
+| `public` | Anyone: you post it openly as yours |
+
+Whoever was given an identity knows who posted; anyone else sees one unnamed author behind every post it signed. Holding someone's identity doesn't let you sign with it, and its signature covers the binding, so it can't be moved to another post. A profile decides what an identity changes; counts don't depend on it.
+
 **Content is the profile's.** The host stores it beside the record, up to 64 KB per post. A reader who gets a post from anyone checks the record's signature and that the content hashes to the binding, so a copy needn't be trusted.
 
 ## Endorsements
@@ -59,7 +70,7 @@ A vouch is a reputational commitment for a job type, and it is a coin. It rides 
 - **The vouch coin.** The poster pays with a split whose second output is zero-value, to the worker, and whose receipt commits to (job, contractor, job type). That output goes to the contractor with the pay, is held like money and checks like money, offline too. It isn't money: it carries no value.
 - **The vouch post.** The poster also posts the vouch in the contractor's thread, signed by the job's poster key, carrying the payment record and endorsed with the contractor as basename.
 - **Counting.** A vouch counts only if it comes from the job's poster, the job is paid with that payment, the worker named this contractor with its trade key, the payment is signed and pays the worker with a vouch output whose receipt names this job, contractor and type, and the endorsement checks out. Each job counts once, and each person once per job type however many jobs they vouch for. A worker can't vouch for itself, a poster can't relabel a payment's job type, and nobody can credit a job to a contractor who didn't do it.
-- **Known to your contacts.** A voucher may also sign the vouch with a stable credential it chose: one it has given to its neighbors, say, but never posted anywhere as its own. A reader who was given that credential sees which contact vouched; anyone else sees only that one unnamed person is behind those vouches. A wallet can keep several, one per audience. The signature covers the job, contractor and type, so it can't be moved to another vouch, and holding someone's stable credential doesn't let you sign with it. Without one a vouch is anonymous, and the counts are the same for every reader.
+- **Known to your contacts.** A voucher may sign the vouch with one of its identities. A reader who was given it sees which contact vouched; anyone else sees one unnamed person behind those vouches. Without one a vouch is anonymous, and the counts are the same for every reader.
 - **Who it goes to.** The coin goes to the contractor and the post to the board. A friend asking who did your fence gets the contractor's id and checks the board, or asks the contractor to show their vouch coins.
 
 ## Civic reports
@@ -82,6 +93,8 @@ Public reports of problems in the street, such as a sidewalk blocked without a p
 **Rulings.** A report the moderator rules malicious stops counting, and its (basename, pseudonym) goes on the ruled list. A report counts only if its standing covers every ruling made before the report's epoch, so a ruled reporter can't count again even from a copy that hasn't heard of the ruling.
 
 **Permits.** An issue is *covered* when a mirrored permit's cell matches and its dates include the day it was seen, and *nearby* when a permit covers a neighboring area that day. A reply that points to a permit changes the issue's status only if that permit covers the issue's area on the day it opened.
+
+**Identified reporters.** A reporter may sign with an identity, on any of their reports. The thread shows how many counted reporters are identified, and each reader sees which of them are its contacts. A reporter is still counted once.
 
 **Facts, not verdicts.** A thread shows what was seen, how many distinct people saw it (by class), whether a permit covers it, replies, where it was forwarded and how many people confirmed it cleared. It never says "illegal".
 

@@ -52,7 +52,7 @@ fn parse_cred(v: &Value, k: &str) -> Result<Credential, String> {
 
 const HELP: &[&str] = &[
     "whoami", "board", "post {title, pay}", "reply {job, note}", "accept {job, worker}", "done {job}",
-    "pay {job} or {job, vouch, note, as: stable label}", "stable {label} (a stable credential to share with contacts)", "add_contact {name, credential}", "reply {job, note, trade: true}", "reputation {contractor}", "receive", "check {state}", "spend {state, to}", "cheat {state, to}", "meet {peer}",
+    "pay {job} or {job, vouch, note, as: identity}", "identities", "identity {label} (a stable credential to share with the people who should recognize you)", "add_contact {name, credential}", "reply {job, note, trade: true}", "reputation {contractor}", "receive", "check {state}", "spend {state, to}", "cheat {state, to}", "meet {peer}",
     "gossip {peer}", "refill {peer, count}", "sync {peer} (send queued posts to the board host, fetch the boards)",
     "evidence", "issues", "report {category, lat, lon, observed, note, photo} or {issue, observed, note}", "respond {issue, text, permit}", "forward {issue, channel, receipt}", "clear {issue}", "reports_on {issue}", "mirror {file} (town)", "rule {report, malicious} (town)", "send {peer, amount, memo}", "resume {peer}", "swap {peer, state}", "collect {peer}", "roll {revoke: [group, ...], revoke_class: [class, ...]} (operator)", "help",
 ];
@@ -137,7 +137,7 @@ fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
                     },
                     "replies": i.replies.iter().map(|(t, p)| json!({ "text": t, "permit": p.as_ref().map(hx) })).collect::<Vec<_>>(),
                     "forwarded": i.forwarded.iter().map(|(c, r)| json!({ "channel": c, "receipt": r })).collect::<Vec<_>>(),
-                    "cleared": i.cleared, "discounted": i.discounted,
+                    "cleared": i.cleared, "discounted": i.discounted, "identified": i.identified.len(), "known_by": i.known_by,
                 }))
                 .collect();
             Ok(json!({ "issues": issues, "queued": n.outgoing.len() }))
@@ -157,7 +157,7 @@ fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
                 let category = v["category"].as_str().ok_or("missing category")?;
                 let (lat, lon) = (v["lat"].as_f64().ok_or("missing lat")?, v["lon"].as_f64().ok_or("missing lon")?);
                 let key = report::IssueKey { category: category.into(), cell: report::cell(lat, lon, report::CELL_PRECISION), opened: observed.into() };
-                n.report(key, observed, note, photo)?
+                n.report_as(key, observed, note, photo, v["as"].as_str())?
             };
             Ok(json!({ "issue": hx(&issue), "queued": n.outgoing.len() }))
         }
@@ -223,7 +223,8 @@ fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
             let id = if v["trade"].as_bool() == Some(true) { n.reply_as_contractor(job, note)? } else { n.reply(job, note)? };
             Ok(json!({ "message": hx(&id), "contractor": n.contractor().as_ref().map(hx) }))
         }
-        "stable" => Ok(json!({ "credential": cx(&n.stable(v["label"].as_str().ok_or("missing label")?)?) })),
+        "identity" => Ok(json!({ "credential": cx(&n.identity(v["label"].as_str().ok_or("missing label")?)?) })),
+        "identities" => Ok(json!({ "identities": n.identities.iter().map(|(l, c)| (l.clone(), cx(c))).collect::<std::collections::BTreeMap<_, _>>() })),
         "add_contact" => {
             let name = v["name"].as_str().ok_or("missing name")?;
             n.add_contact(name, parse_cred(v, "credential")?)?;

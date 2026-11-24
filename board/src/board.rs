@@ -17,10 +17,9 @@
 //! type without learning who they are, and one person counts once however
 //! many jobs they vouch for.
 //!
-//! **Known to your contacts.** A voucher may sign a vouch with a stable
-//! credential it chose, such as one it has shared with its neighbors but
-//! never posted anywhere as its own. Contacts who were given that
-//! credential see who vouched; anyone else sees only that one unnamed
+//! **Known to your contacts.** Like any post, a vouch may be signed with
+//! one of the voucher's identities (see [`crate::bulletin`]): contacts who
+//! were given it see who vouched; anyone else sees only that one unnamed
 //! person vouched for several jobs. Without one, a vouch is anonymous.
 
 use crate::bulletin::{endorser, Copy};
@@ -63,9 +62,7 @@ pub enum BoardMsg {
         job: Hash,
         category: String,
         note: String,
-        payment: Record,
-        /// A stable credential of the voucher's, signing `known_bytes`.
-        by: Option<Trade>,
+        payment: Box<Record>,
     },
 }
 
@@ -99,11 +96,6 @@ impl BoardMsg {
 /// The receipt a payment for `job` commits to.
 pub fn pay_receipt(job: &Hash) -> Hash {
     hash_of("pave/board/pay", job)
-}
-
-/// The bytes a voucher's stable credential signs.
-pub fn known_bytes(job: &Hash, contractor: &Hash, category: &str) -> Vec<u8> {
-    pave_kernel::hash::encode(&("pave/board/known/v0", job, contractor, category))
 }
 
 /// The receipt a payment with a vouch commits to.
@@ -234,7 +226,7 @@ pub fn reputation(copy: &Copy, classes: &BTreeMap<String, Class>, contacts: &BTr
         if item.post.kind != "vouch" || item.post.thread != Some(*who) {
             continue;
         }
-        let Some(BoardMsg::Vouch { job, category, note, payment, by }) = BoardMsg::decode(item.content) else { continue };
+        let Some(BoardMsg::Vouch { job, category, note, payment }) = BoardMsg::decode(item.content) else { continue };
         let Some(j) = jobs.get(&job) else { continue };
         let Some(worker) = j.worker.as_ref() else { continue };
         let paid = j.status == Status::Paid && j.payment == Some(payment.output(0));
@@ -255,8 +247,7 @@ pub fn reputation(copy: &Copy, classes: &BTreeMap<String, Class>, contacts: &BTr
         }
         let Some((class, nym)) = endorser(classes, &scope, &item.post) else { continue };
         people.entry(category.clone()).or_default().insert(nym);
-        // A stable credential counts only with its own signature on this vouch.
-        let by = by.filter(|t| copy.scheme().verify(&t.key, &known_bytes(&job, who, &category), None, &t.sig)).map(|t| t.key);
+        let by = item.by.clone();
         let known_by = by.as_ref().and_then(|c| contacts.iter().find(|(_, k)| *k == c).map(|(n, _)| n.clone()));
         out.push(Vouched { job, category, note, coin: payment.output(1), class, by, known_by });
     }

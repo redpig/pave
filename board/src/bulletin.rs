@@ -19,6 +19,12 @@
 //!   thread and unrelated across threads, so a thread can count distinct
 //!   people without learning who they are. It carries standing against the
 //!   endorsements a profile has ruled out.
+//! - **Identities are the author's choice.** A post may also carry a
+//!   signature by one of the author's stable credentials over the binding.
+//!   A wallet keeps one per privacy tier: one shared with a few people, one
+//!   with its contacts, one public. Whoever was given that credential knows
+//!   who posted; anyone else sees one unnamed author behind every post it
+//!   signed. Without one, a post is as anonymous as its fresh key.
 //! - **Receipts make dropping visible.** The host answers every accepted post
 //!   with a signed receipt. If the host later omits the post, its author can
 //!   show the receipt.
@@ -67,6 +73,17 @@ pub struct Endorsement {
     pub standing: Standing,
 }
 
+/// A stable credential's signature over a post's binding.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Signed {
+    pub key: Credential,
+    pub sig: Sig,
+}
+
+fn by_bytes(scope: &Hash, kind: &str, thread: &Option<Hash>, content: &Hash, epoch: u32) -> Vec<u8> {
+    encode(&("pave/board/by/v0", scope, kind, thread, content, epoch))
+}
+
 /// The binding a post record carries in place of its content.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Post {
@@ -77,6 +94,8 @@ pub struct Post {
     pub content: Hash,
     pub epoch: u32,
     pub endorsement: Option<Endorsement>,
+    /// One of the author's stable credentials, if it chose to sign with one.
+    pub by: Option<Signed>,
 }
 
 impl Post {
@@ -170,6 +189,9 @@ pub struct Item<'a> {
     pub signer: &'a Credential,
     pub post: Post,
     pub content: &'a [u8],
+    /// The stable credential that signed this post's binding, if its
+    /// signature checks out.
+    pub by: Option<Credential>,
 }
 
 impl Item<'_> {
@@ -237,7 +259,10 @@ impl Copy {
                 let Op::Send { body, .. } = &r.op else {
                     return None;
                 };
-                Some(Item { id, signer: &r.signer, post: Post::decode(body)?, content })
+                let post = Post::decode(body)?;
+                let scope = self.info.scope;
+                let by = post.by.as_ref().filter(|b| self.view.scheme().verify(&b.key, &by_bytes(&scope, &post.kind, &post.thread, &post.content, post.epoch), None, &b.sig)).map(|b| b.key.clone());
+                Some(Item { id, signer: &r.signer, post, content, by })
             })
             .collect()
     }
@@ -302,6 +327,13 @@ impl Node {
     /// post carries an endorsement with standing against that list.
     /// Returns the post's record id.
     pub fn compose(&mut self, scope: &Hash, signer: &Credential, kind: &str, thread: Option<Hash>, content: Vec<u8>, endorse: Option<&[Cheat]>) -> Result<Hash, String> {
+        self.compose_as(scope, signer, kind, thread, content, endorse, None)
+    }
+
+    /// As [`Node::compose`], also signed with this wallet's identity
+    /// `identity` (see [`Node::identity`]) when given.
+    #[allow(clippy::too_many_arguments)]
+    pub fn compose_as(&mut self, scope: &Hash, signer: &Credential, kind: &str, thread: Option<Hash>, content: Vec<u8>, endorse: Option<&[Cheat]>, identity: Option<&str>) -> Result<Hash, String> {
         if content.len() > MAX_CONTENT {
             return Err(format!("content over {MAX_CONTENT} bytes"));
         }
@@ -318,7 +350,15 @@ impl Node {
                 Some(Endorsement { access, sig, standing })
             }
         };
-        let post = Post { kind: kind.into(), thread, content: ch, epoch, endorsement };
+        let by = match identity {
+            Some(label) => {
+                let key = self.identity(label)?;
+                let sig = self.view.scheme().sign(&self.key, &key, &by_bytes(scope, kind, &thread, &ch, epoch), None);
+                Some(Signed { key, sig })
+            }
+            None => None,
+        };
+        let post = Post { kind: kind.into(), thread, content: ch, epoch, endorsement, by };
         let record = pave_kernel::sign(self.view.scheme(), &self.key, signer, Op::Send { scope: *scope, presenting: None, body: post.encode(), receipt: ch });
         let id = record.id();
         let sub = Submission { record, content };

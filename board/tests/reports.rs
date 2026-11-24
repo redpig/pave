@@ -143,6 +143,20 @@ fn reports() {
     alice.sync_with(&mut town);
     assert_eq!(town.issues()[&issue].reporters, 2);
 
+    // Bob reports again, signed with his contacts identity. Alice, whom he
+    // gave it to, sees he's among the reporters; Carol doesn't. The count
+    // doesn't change: he was already counted.
+    let bobs = bob.identity("contacts").unwrap();
+    alice.add_contact("bob", bobs).unwrap();
+    bob.report_as(key.clone(), "2026-11-24", "it's me, Bob", None, Some("contacts")).unwrap();
+    bob.sync_with(&mut town);
+    alice.sync_with(&mut town);
+    carol.sync_with(&mut town);
+    assert_eq!(alice.issues()[&issue].known_by, vec!["bob".to_string()]);
+    assert!(carol.issues()[&issue].known_by.is_empty());
+    assert_eq!(carol.issues()[&issue].identified.len(), 1, "carol sees one identified, unnamed reporter");
+    assert_eq!(alice.issues()[&issue].reporters, 2);
+
     // Clearing counts each person once. Two clearings have the same
     // content, and a receipt for one doesn't stand for the other.
     dave.sync_with(&mut town);

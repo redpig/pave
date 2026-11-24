@@ -146,6 +146,10 @@ pub struct Issue {
     pub cleared: usize,
     /// Reports that didn't count: ruled malicious, or without standing.
     pub discounted: usize,
+    /// Counted reports signed with an identity, by credential. The reader's
+    /// own contacts among them are in `known_by`.
+    pub identified: BTreeSet<pave_kernel::Credential>,
+    pub known_by: Vec<String>,
 }
 
 /// One post, decoded, and only if its kind and thread match its content.
@@ -220,7 +224,7 @@ pub fn issues(copy: &Copy, classes: &BTreeMap<String, Class>) -> BTreeMap<Hash, 
         match &m.msg {
             ReportMsg::Report { key, observed, note, photo } => {
                 let issue = key.id();
-                let entry = out.entry(issue).or_insert_with(|| Issue { id: issue, key: key.clone(), reporters: 0, classes: BTreeMap::new(), notes: vec![], photos: 0, permit: permit_status(&permits, key, observed), replies: vec![], forwarded: vec![], cleared: 0, discounted: 0 });
+                let entry = out.entry(issue).or_insert_with(|| Issue { id: issue, key: key.clone(), reporters: 0, classes: BTreeMap::new(), notes: vec![], photos: 0, permit: permit_status(&permits, key, observed), replies: vec![], forwarded: vec![], cleared: 0, discounted: 0, identified: BTreeSet::new(), known_by: vec![] });
                 let standing_ok = |s: &pave_protocol::Standing| ruled_list.iter().filter(|(_, at)| *at < post.epoch).all(|(c, _)| s.cheats.contains(c));
                 let counted = endorser(classes, &scope, post).filter(|_| !ruled.contains(&m.item.id)).filter(|_| post.endorsement.as_ref().is_some_and(|e| standing_ok(&e.standing)));
                 match counted {
@@ -230,6 +234,10 @@ pub fn issues(copy: &Copy, classes: &BTreeMap<String, Class>) -> BTreeMap<Hash, 
                             *entry.classes.entry(class).or_default() += 1;
                             entry.notes.push(note.clone());
                             entry.photos += photo.is_some() as usize;
+                        }
+                        // An identity names the person, whichever of their reports carries it.
+                        if let Some(c) = &m.item.by {
+                            entry.identified.insert(c.clone());
                         }
                     }
                     None => entry.discounted += 1,
@@ -309,24 +317,35 @@ impl Node {
         self.copy(&self.town.reports.scope)
     }
 
+    /// The reports board, with the reader's contacts named on each issue.
     pub fn issues(&self) -> BTreeMap<Hash, Issue> {
-        self.reports().map(|c| issues(c, &self.town.classes)).unwrap_or_default()
+        let mut out = self.reports().map(|c| issues(c, &self.town.classes)).unwrap_or_default();
+        for i in out.values_mut() {
+            i.known_by = self.contacts.iter().filter(|(_, c)| i.identified.contains(*c)).map(|(n, _)| n.clone()).collect();
+        }
+        out
     }
 
     /// Post to the reports board under a fresh, unticketed credential,
-    /// endorsed when it counts a person.
-    fn post_report(&mut self, thread: Option<Hash>, msg: ReportMsg, endorse: bool) -> Result<Hash, String> {
+    /// endorsed when it counts a person, and signed with `identity` if given.
+    fn post_report(&mut self, thread: Option<Hash>, msg: ReportMsg, endorse: bool, identity: Option<&str>) -> Result<Hash, String> {
         let signer = self.view.scheme().credential(&self.key);
         let list = if endorse { Some(ruled(self.reports()?, &self.town.classes)) } else { None };
         let scope = self.town.reports.scope;
-        self.compose(&scope, &signer, msg.kind(), thread, msg.encode(), list.as_deref())
+        self.compose_as(&scope, &signer, msg.kind(), thread, msg.encode(), list.as_deref(), identity)
     }
 
     /// Report an issue, or add this wallet's report to one already open.
     /// The report goes out at the next sync. Returns the issue id.
     pub fn report(&mut self, key: IssueKey, observed: &str, note: &str, photo: Option<Hash>) -> Result<Hash, String> {
+        self.report_as(key, observed, note, photo, None)
+    }
+
+    /// Report, signed with one of this wallet's identities, so whoever
+    /// holds that identity knows the report is this wallet's.
+    pub fn report_as(&mut self, key: IssueKey, observed: &str, note: &str, photo: Option<Hash>, identity: Option<&str>) -> Result<Hash, String> {
         let issue = key.id();
-        self.post_report(Some(issue), ReportMsg::Report { key, observed: observed.into(), note: note.into(), photo }, true)?;
+        self.post_report(Some(issue), ReportMsg::Report { key, observed: observed.into(), note: note.into(), photo }, true, identity)?;
         Ok(issue)
     }
 
@@ -337,15 +356,15 @@ impl Node {
     }
 
     pub fn clear_issue(&mut self, issue: &Hash) -> Result<Hash, String> {
-        self.post_report(Some(*issue), ReportMsg::Cleared, true)
+        self.post_report(Some(*issue), ReportMsg::Cleared, true, None)
     }
 
     pub fn reply_issue(&mut self, issue: &Hash, text: &str, permit: Option<Hash>) -> Result<Hash, String> {
-        self.post_report(Some(*issue), ReportMsg::Reply { text: text.into(), permit }, false)
+        self.post_report(Some(*issue), ReportMsg::Reply { text: text.into(), permit }, false, None)
     }
 
     pub fn forward_issue(&mut self, issue: &Hash, channel: &str, receipt: &str) -> Result<Hash, String> {
-        self.post_report(Some(*issue), ReportMsg::Forwarded { channel: channel.into(), receipt: receipt.into() }, false)
+        self.post_report(Some(*issue), ReportMsg::Forwarded { channel: channel.into(), receipt: receipt.into() }, false, None)
     }
 
     fn post_as_role(&mut self, role: &str, msg: ReportMsg) -> Result<Hash, String> {
