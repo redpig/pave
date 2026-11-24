@@ -155,7 +155,8 @@ def main():
         print(f"  alice knows of a cheat, so she asks the sender to prove it isn't one")
         print(f"  carol can't, under any credential: {RED}{r['refusal']}{OFF}")
         bobs = bob("whoami", quiet=True)["coins"]
-        from_bob = bob("spend", state=bobs[0]["state"], to=alice("receive", quiet=True)["credential"])["state"]
+        honest = next(c for c in bobs if c["state"] != to_bob)  # not the copy carol double-spent to him
+        from_bob = bob("spend", state=honest["state"], to=alice("receive", quiet=True)["credential"])["state"]
         bob.meet(alice)
         r = alice("check", quiet=True, state=from_bob)
         print(f"  bob pays alice; his 144-byte proof links him to nothing: accept {GREEN}{r['accept']}{OFF}")

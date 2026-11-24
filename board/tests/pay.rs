@@ -26,6 +26,15 @@ fn meet(a: &mut Node, b: &mut Node) {
     a.absorb_standings(sb);
 }
 
+fn gossip_to(from: &Node, to: &mut Node) {
+    use pave_protocol::gossip;
+    let hints = gossip::hints(&from.view, &from.know, &from.carries());
+    gossip::absorb_hints(&mut to.know, &hints);
+    let wants = gossip::wants(&to.view, &to.know, &to.carries(), &to.watch());
+    let proofs = gossip::serve(&from.view, &from.know, &from.carries(), &wants);
+    gossip::absorb(&mut to.view, &mut to.know, proofs);
+}
+
 /// The handshake between two wallets, in process. Returns the records sent.
 fn pay(payer: &mut Node, payee: &mut Node, amount: u64) -> Result<usize, String> {
     let inv = payee.invoice(amount, "test")?;
@@ -101,5 +110,19 @@ fn payments() {
     let err = pay(&mut carol, &mut bob, 20).unwrap_err();
     assert!(err.contains("known cheat") || err.contains("NoStanding") || err.contains("Refuse"), "{err}");
 
+
+    // The payee judges the coin itself: once dave knows the town is past
+    // alice's coin's hard expiry, he refuses it, whatever the payer thinks.
+    let mut dave = join(&mut town, "dave", "hardware", &dir, &[]);
+    for _ in 0..8 {
+        town.roll_epoch(BTreeSet::new(), BTreeSet::new()).unwrap();
+    }
+    gossip_to(&town, &mut dave);
+    let before = alice.my_coins();
+    let err = pay(&mut alice, &mut dave, 5).unwrap_err();
+    assert!(err.contains("Expired"), "{err}");
+    // Refused at the proposal, so alice never signed her coin away.
+    assert!(alice.pending.is_empty());
+    assert_eq!(alice.my_coins(), before);
     let _ = std::fs::remove_dir_all(&dir);
 }
