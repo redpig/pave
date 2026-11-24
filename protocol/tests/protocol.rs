@@ -400,3 +400,29 @@ fn senders_show_standing_once_cheats_are_known() {
     let lax = Policy { require_standing: false, ..policy };
     assert_eq!(check(&s4.view, &s4.know, &to_a, &h.cred, &lax), Ok(()));
 }
+
+/// Fault `nocap`: a ticket's `max_spend` bounds what one coin may carry to or
+/// from it.
+#[test]
+fn ticket_caps_are_honored() {
+    let mut w = world();
+    let (m, a, small) = (person(), person(), person());
+    w.ticket(&m, w.seq_x, 1);
+    w.ticket(&a, w.seq_x, 1);
+    let epoch = head(&w.site.view, &w.seq_x).unwrap().number;
+    let t = SignedTicket::issue(&DevScheme, &w.clerk_x.key, &w.clerk_x.cred, Ticket { credential: small.cred.clone(), sequence: w.seq_x, epoch, group: 2, max_spend: Some(50) });
+    assert!(w.site.know.add_ticket(&DevScheme, t));
+    let big = w.mint_to(&m, 80);
+    let ok = w.mint_to(&m, 40);
+    let policy = w.policy();
+    let mut site = w.site.clone();
+    let to_small = pay(&mut site, &m, big, &small);
+    assert_eq!(check(&site.view, &site.know, &to_small, &m.cred, &policy), Err(Refusal::OverMaxSpend { credential: small.cred.clone(), amount: 80, max: 50 }));
+    let fine = pay(&mut site, &m, ok, &small);
+    assert_eq!(check(&site.view, &site.know, &fine, &m.cred, &policy), Ok(()));
+    // And from it: the capped holder can't pass on more than its cap.
+    let onward = pay(&mut site, &small, to_small, &a);
+    assert!(matches!(check(&site.view, &site.know, &onward, &small.cred, &policy), Err(Refusal::OverMaxSpend { .. })));
+    let lax = Policy { honor_ticket_caps: false, ..policy };
+    assert_eq!(check(&site.view, &site.know, &onward, &small.cred, &lax), Ok(()));
+}

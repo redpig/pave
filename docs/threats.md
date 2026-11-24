@@ -130,10 +130,10 @@ We do not assume that any role behaves well (principle 10), that devices are tam
 
 | # | Attack | Prevent | React | Briolette | Status |
 |---|---|---|---|---|---|
-| R1 | Sybil enrollment | Hardware attestation; rate limits per attestation key; lower assurance gets tighter limits (principle 18) | Revoke a class or group | Tiered NAC (low, medium, high); `Algorithm::NONE` online-only; `--require-attestation` | Gap: the operator enrolls whoever it is told to. Test credit only (principle 24) |
-| R2 | Class break: a whole device model's keys extracted | See section 15 | See section 15 | NAC tier ↔ randomized ticket groups; class revocation; challenge test | Gap |
+| R1 | Sybil enrollment | Hardware attestation; rate limits per attestation key; lower assurance gets tighter limits (principle 18) | Revoke a class or group | Tiered NAC (low, medium, high); `Algorithm::NONE` online-only; `--require-attestation` | Partial: classes with their own access issuers and ticket terms are built; Gap: attestation decides the class. Today the operator enrolls whoever it is told to. Test credit only (principle 24) |
+| R2 | Class break: a whole device model's keys extracted | See section 15 | See section 15 | NAC tier ↔ randomized ticket groups; class revocation; challenge test | Built (containment); see section 15 |
 | R3 | Impersonate a service (registrar, clerk) | Services authenticate to wallets; genesis pins the root | n/a | Service identities from deterministic nonces (audit H-3, fixed) | Partial: genesis and the clerk credential are pinned in `Town`; Gap: authenticated service endpoints |
-| R4 | The registrar or clerk links a person to all their tickets | Anonymous ticket requests: signed under the member credential with basename = epoch, linkable only within one epoch; random groups per batch, mapped to a class and not to a person | n/a | NAC signatures with epoch basenames; randomized groups mapped to a NAC group | **Bug**: each wallet gets one sequential group, and refills are signed by one of its own credentials. The clerk can link every ticket a wallet ever holds to its enrollment |
+| R4 | The registrar or clerk links a person to all their tickets | Anonymous ticket requests, signed with a fresh randomization of a per-class access credential and basename = epoch, so linkable only within one epoch; a random group per batch, mapped to a class and not to a person; enrollment tickets cover only the minted credit | n/a | NAC signatures with epoch basenames; randomized groups mapped to a NAC group | **Fixed** in this audit. Previously each wallet had one sequential group, and refills were signed by its own ticketed credentials, so the clerk could link all of a wallet's tickets to its enrollment |
 | R5 | The registrar's key is compromised | Offline or HSM key | Rotate the group key by epoch data; drop the old key | Repeated key fields in epoch data (audit L-2) | Gap |
 | R6 | A registrar refuses someone (exclusion) | Many registrars; each recipient chooses roots (principles 9 and 12) | n/a | One operator trust list | Modeled **+** |
 | R7 | The holder side accepts a bogus credential | `finish` checks the credential is in the group and bound to the holder's key, and that every pooled credential signs | n/a | n/a | Built (Fixed with S2) |
@@ -150,14 +150,15 @@ We do not assume that any role behaves well (principle 10), that devices are tam
 |---|---|---|---|---|---|
 | C1 | Show different revocation lists to different people | A roll is a transfer of the sequence capability, so two rolls from one epoch are a double use | Evidence | Gossip comparison | Built **+** |
 | C2 | Suppress a known revocation | Evidence is public and verifies on its own; each recipient refuses known cheats and asks for standing, whatever the clerk publishes | A signed epoch plus older evidence it ignores is proof of suppression | Optimistic challenge with stake; relays sign what they serve | Built (recipients refuse independently) **+**; Gap: a suppression-proof format |
-| C3 | Ticket groups link holders | Random group per ticket batch from a large space (Briolette allows up to 32768), mapped privately to a class | n/a | Randomized groups | **Bug**: one sequential group per wallet, shown in every ticket |
-| C4 | Ticket flooding: endless receiving addresses | Per-pseudonym limits on ticket requests per epoch | n/a | NAC basename = epoch; per-NAC ticket budget | Gap |
+| C3 | Ticket groups link holders | Random group per ticket batch out of 4096 (Briolette allows up to 32768), mapped privately to a class | n/a | Randomized groups | **Fixed** (see R4) |
+| C4 | Ticket flooding: endless receiving addresses | At most 2 requests of at most 16 credentials per access pseudonym per epoch | n/a | NAC basename = epoch; per-NAC ticket budget | Built; Gap: per-class budgets |
+| C4a | A caught cheat gets fresh tickets | Every requested credential needs standing against every cheat the clerk knows of | n/a | Challenge test: sign the cheat's earlier request basename and show a different pseudonym | Built **+**: standing reveals nothing, while a challenge answer can link an honest wallet's requests across epochs |
 | C5 | Replay an old epoch as current | The head is the longest valid chain of rolls, so an older epoch can't replace a newer one | n/a | Epoch monotonicity | Built |
 | C6 | A holder stays offline to dodge revocation | Tickets expire after `soft_expiry` epochs, so a revoked or stale holder's coins stop being accepted | n/a | Elastic ticket lifetimes (short, medium, long); `T_evict = T_detect + 1 + D + T_life`; refresh | Built (per schema); Gap: per-ticket elastic lifetimes and refresh |
 | C7 | The clerk key is compromised | Offline signing of rolls; separate keys for tickets and epochs | Rotate keys through epoch data; trust in the old key ends with the roll | Repeated key fields; the state key can be air-gapped | Gap: rotation |
 | C8 | The clerk refuses tickets to someone | Several clerks and sequences; recipients choose (principle 9) | n/a | One clerk | Modeled |
-| C9 | Spend more than the ticket allows | `max_spend` on tickets | Server-side velocity sums | `max_spend`; velocity | **Bug**: the field exists, but `accept::check` ignores it |
-| C10 | Revocation strands honest holders downstream | Only a recent revoked ticket taints a coin (a window) | Swap for a fresh coin | Within a revocation epoch window only | **Bug**: any revoked group anywhere in a coin's history refuses it. Decision D2 |
+| C9 | Spend more than the ticket allows | `max_spend` on tickets, set from the class's terms; recipients check the sender's and holder's tickets | Server-side velocity sums | `max_spend`; velocity | **Fixed** (mutation `nocap`); Gap: velocity |
+| C10 | Revocation strands honest holders downstream | Only a recent revoked ticket taints a coin (a window) | Swap for a fresh coin | Within a revocation epoch window only | **Bug**: any revoked group anywhere in a coin's history refuses it, and revocation is cumulative, so closing a class strands every coin that ever passed through it. Decision D2 |
 | C11 | Expiry applied to the whole history caps a coin's life | Briolette checks expiry only on the current holder's ticket | n/a | Current ticket only | Different. Decision D1 |
 
 ---
@@ -312,11 +313,11 @@ Evidence and standing don't handle this alone. Evidence catches every double spe
 | Layer | What it does | Briolette | pave |
 |---|---|---|---|
 | Prevent | The secure element signs each basename once, with anti-rollback storage; attestation at enrollment | Credstick bloom filter; Key Attestation and App Attest; split key | Gap (W2, R1) |
-| Bound | Lower-assurance classes get shorter ticket lifetimes, smaller `max_spend` and fewer tickets per epoch, so each extracted identity is worth little | GroupPolicy per NAC group; elastic lifetimes; per-NAC ticket budgets | Partial: schema-level expiry and hop limits; Gap: per-class policy (C4, C9) |
+| Bound | Lower-assurance classes get shorter ticket lifetimes, smaller `max_spend` and fewer tickets per epoch, so each extracted identity is worth little | GroupPolicy per NAC group; elastic lifetimes; per-NAC ticket budgets | Partial: per-class `max_spend`, ticket requests limited per epoch, schema-level expiry and hop limits; Gap: per-class lifetimes and budgets |
 | Detect | The first double spend that surfaces names the credential | Tokenmap, once tokens are uploaded | Built **+**: any two holders who meet detect it, with no service |
 | Contain one cheat | Standing: wherever its evidence has reached, a caught identity can't spend any coin under any credential, and no one else is affected | Group revocation, with collateral on the group | Built **+** |
-| Contain | The clerk maps each randomized ticket group to the class (attestation tier and model) that requested it. When evidence piles up in one class, the clerk revokes every group of that class in the next epoch, and recipients refuse those tickets | Groups ↔ NAC group; class revocation | Gap (C3 and R4 are bugs today) |
-| Recover | Honest members of the broken class update, re-attest and pass a challenge before getting new tickets. The challenge: sign the cheat's earlier request basename and show a different pseudonym. They swap stranded coins | Challenge test; re-registration after update; recovery | Gap |
+| Contain | The clerk maps each randomized ticket group to the class (attestation tier and model) that requested it. When evidence piles up in one class, the clerk revokes every group of that class in the next epoch and closes the class to new tickets, and recipients refuse those tickets | Groups ↔ NAC group; class revocation | Built (`roll` with `revoke_class`); D2 decides how far back the taint reaches |
+| Recover | Honest members of the broken class update and enroll again under a new class, then swap stranded coins. Standing replaces the challenge test | Challenge test; re-registration after update; recovery | Partial: re-enrollment works; Gap: attestation of the update, and the swapper |
 
 Where pave can do better once this is built:
 - Detection needs no tokenmap, so a class break shows up wherever the cloned coins meet, including entirely offline.
@@ -328,6 +329,7 @@ Where pave can do better once this is built:
 ## Where pave is ahead of Briolette
 
 - **Offline detection.** Two holders who meet find a double spend on their own, with a portable 770-byte proof (K3).
+- **Anonymous refills without the challenge test.** Standing keeps cheats out of the clerk's tickets and reveals nothing, where a challenge answer reveals a pseudonym the clerk can compare across epochs (C4a).
 - **Individual revocation without groups.** Once the evidence reaches a recipient, a caught cheat can't spend under any of its unlinkable credentials, while honest senders prove they aren't the cheat in 144 bytes per listed cheat that link them to nothing (K3a). Briolette revokes a whole ticket group in the next epoch.
 - **Offline split conservation** (K2).
 - **Issuer equivocation is a kernel conflict** (K9, C1).
@@ -340,19 +342,45 @@ Where pave can do better once this is built:
 
 These are ranked by how much they matter before anyone other than us uses this.
 
-1. **Groups and anonymous refills** (C3, R4; bugs). The clerk can link every ticket a wallet holds to its enrollment. Fix: ticket requests signed with basename = epoch; random groups per batch mapped to a class; class revocation; the challenge test. This is also the containment layer for the class break.
-2. **Revocation scope** (C10; bug, decision D2) and **`max_spend`** (C9; bug).
-3. **The wallet never signs a basename twice**, with anti-rollback (W2), and **keys encrypted at rest** (W1, O1).
-4. **Attestation and per-class policy** (R1, R2): assurance tiers, lifetimes per tier, ticket budgets.
-5. **Encrypted peer channel** (P1) and **no-panic fuzzing** (K10).
-6. **Payment handshake**: propose and accept, recipient ticket check, resume after interruption (A6, A7, A9, W10).
-7. **Swapper and validator services** (V1, V3, K11).
-8. **Recovery** (section 11).
-9. **Key rotation** for every role (R5, C7, M2, O4).
-10. **Trusted display and PIN** once there is hardware (W4, W5), and caps for agents (W6).
-11. **Post-quantum scheme** (S5) and an external review of the ECDAA implementation (S3).
+1. **Revocation scope** (C10; bug, decision D2) and **expiry scope** (decision D1). Closing a class makes this urgent.
+2. **The wallet never signs a basename twice**, with anti-rollback (W2), and **keys encrypted at rest** (W1, O1).
+3. **Attestation and per-class policy** (R1, R2): assurance tiers, lifetimes per tier, ticket budgets.
+4. **Encrypted peer channel** (P1) and **no-panic fuzzing** (K10).
+5. **Payment handshake**: propose and accept, recipient ticket check, resume after interruption (A6, A7, A9, W10).
+6. **Swapper and validator services** (V1, V3, K11).
+7. **Recovery** (section 11).
+8. **Key rotation** for every role (R5, C7, M2, O4).
+9. **Trusted display and PIN** once there is hardware (W4, W5), and caps for agents (W6).
+10. **Post-quantum scheme** (S5) and an external review of the ECDAA implementation (S3).
 
-## Decisions for Will
+## Open decisions
 
-- **D1. Expiry on the whole history, or only the current holder's ticket?** Briolette checks only the current holder's ticket, so a coin's life isn't capped by its oldest ticket. pave checks every ticket in the history. That stops a coin from carrying a long-stale ticket in its past, but it caps a coin's useful life at `soft_expiry` epochs from its oldest hop, forcing swaps.
-- **D2. Revocation window.** Briolette refuses a coin with a revoked group in its history only when that revoked ticket is recent (within a window). pave refuses for any revoked group anywhere, which strands honest holders downstream of a cheat. Standing now stops an individual cheat directly, so group revocation is needed mainly for class breaks. The proposal: check revoked groups only on the sender's own ticket and on tickets within `w` epochs of the revocation, as Briolette does, and leave individual cheats to evidence and standing.
+The examples use the test town's numbers: an epoch is a day, `soft_expiry` is 4 and `hard_expiry` is 8. `hard_expiry` is declared in schemas but not yet enforced.
+
+### D1. Which tickets does expiry look at?
+
+**Today** `accept::check` refuses a coin if any ticket in its history is at least `soft_expiry` epochs old. On day 0 the mint pays Alice (ticket from day 0). On day 3 Alice pays Bob (ticket from day 2). On day 4 Bob pays Carol, and Carol refuses: Alice's ticket is 4 days old, though Bob's is fresh. Every coin dies `soft_expiry` epochs after its oldest hop and must be swapped.
+
+**Briolette** checks expiry only on the sender's ticket, and caps a coin's life with a separate `valid_until` set at mint. Carol accepts until Bob's ticket ages out on day 6.
+
+| Option | Undetected copies circulate at most | Cost |
+|---|---|---|
+| A. Every ticket against `soft_expiry` (today) | 4 days | Forced swaps; a hidden lifetime cap that hits people who rarely transact |
+| B. Sender's and holder's tickets against `soft_expiry`; the first (mint-time) ticket against `hard_expiry`, which acts as `valid_until` with no new field | 8 days, and 5 hops | Longer detection window |
+| C. Last hop against `soft_expiry`; every ticket against `hard_expiry` | 8 days | Like B, slightly stricter |
+
+### D2. How far back does a revoked group taint a coin?
+
+**Today** `accept::check` refuses a coin if any ticket anywhere in its history is in a revoked group, and revocation is cumulative. On day 1 Carol (group 1188) honestly pays Dave, on day 2 Dave pays Erin, and on day 3 the town revokes 1188. Erin pays Frank, and Frank refuses: Erin did nothing wrong and is stranded until she swaps online. Closing a class revokes every group it ever had, so every coin that ever passed through any wallet of that class is stranded, which could be most coins in circulation.
+
+**Briolette** taints only within a window: a coin is refused only if the revoked ticket was issued within `w` epochs before the revocation.
+
+Standing already stops an individual cheat wherever its evidence reaches, so taint matters mainly for class breaks: cloned devices pay accomplices, who pay honest people, and tainting recent hops stops those coins while detection catches up.
+
+| Option | Containment | Stranding |
+|---|---|---|
+| A. Whole history, forever (today) | Most | Most: every coin that ever touched the group or class |
+| B. Sender's ticket only | Laundered coins spread until they expire | None |
+| C. Window: refuse if a history ticket is in a revoked group and was issued at or after (revocation epoch − `w`). Epoch data records when each group was revoked | Coins that passed through in the last `w` epochs | Only coins that touched the group recently |
+
+Under C, `w` should cover how long a class break goes unnoticed, perhaps 2 to 3 epochs, and could be longer for a class than for one group.

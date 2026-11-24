@@ -3,7 +3,7 @@
 //! ```text
 //! pave-node init   --town town.pave [--label NAME]
 //! pave-node join   --key alice.key --request alice.join          (wallet)
-//! pave-node enroll --town town.pave --request alice.join --reply alice.reply [--credit 100,20]
+//! pave-node enroll --town town.pave --request alice.join --reply alice.reply [--class hardware|software] [--credit 100,20]
 //! pave-node finish --key alice.key --reply alice.reply --name alice --out alice.pave
 //! pave-node run    --state alice.pave --listen 127.0.0.1:7001
 //! ```
@@ -12,8 +12,7 @@
 //! answering with one JSON object per line on stdout, so a person, a script
 //! or an agent can drive it the same way. Send `{"cmd":"help"}` for the list.
 
-use pave_board::node::{Enrollment, Node};
-use pave_scheme_briolette::{join_nonce, JoinRequest, PendingKey};
+use pave_board::node::{Enrollment, Join, Node, PendingJoin};
 use pave_board::{board, net};
 use pave_kernel::{Credential, Hash};
 use serde_json::{json, Value};
@@ -54,7 +53,7 @@ const HELP: &[&str] = &[
     "whoami", "board", "post {title, pay}", "reply {job, note}", "accept {job, worker}", "done {job}",
     "pay {job}", "receive", "check {state}", "spend {state, to}", "cheat {state, to}", "meet {peer}",
     "gossip {peer}", "refill {peer, count}",
-    "evidence", "roll {revoke: [group, ...]} (operator)", "help",
+    "evidence", "roll {revoke: [group, ...], revoke_class: [class, ...]} (operator)", "help",
 ];
 
 fn command(node: &Arc<Mutex<Node>>, v: &Value) -> Result<Value, String> {
@@ -93,7 +92,7 @@ fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
             let epoch = pave_protocol::head(&n.view, &n.town.sequence).map(|h| h.number);
             let flagged: Vec<Value> = n.view.flagged().iter().map(|c| json!(n.group_of(c))).collect();
             Ok(json!({
-                "name": n.name, "group": n.group, "balance": balance, "coins": coins, "epoch": epoch,
+                "name": n.name, "class": n.class, "group": n.group, "balance": balance, "coins": coins, "epoch": epoch,
                 "tickets_left": n.pool.len(), "flagged_groups": flagged,
             }))
         }
@@ -133,8 +132,11 @@ fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
             })).collect::<Vec<_>>()
         })),
         "roll" => {
-            let revoked: BTreeSet<u32> = v["revoke"].as_array().map(|a| a.iter().filter_map(|x| x.as_u64()).map(|x| x as u32).collect()).unwrap_or_default();
-            Ok(json!({ "epoch": n.roll_epoch(revoked)? }))
+            let groups: BTreeSet<u32> = v["revoke"].as_array().map(|a| a.iter().filter_map(|x| x.as_u64()).map(|x| x as u32).collect()).unwrap_or_default();
+            let classes: BTreeSet<String> = v["revoke_class"].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).map(String::from).collect()).unwrap_or_default();
+            let epoch = n.roll_epoch(groups, classes)?;
+            let revoked = n.operator.as_ref().map(|o| o.revoked.len()).unwrap_or(0);
+            Ok(json!({ "epoch": epoch, "revoked_groups": revoked }))
         }
         other => Err(format!("unknown command {other}; try help")),
     }
@@ -199,7 +201,7 @@ fn main() {
             // Wallet side: generate a key here and write a join request.
             let key = PathBuf::from(need(&args, "--key"));
             let request = PathBuf::from(need(&args, "--request"));
-            let (pending, req) = PendingKey::generate(&join_nonce());
+            let (pending, req) = PendingJoin::generate();
             write_cbor(&key, &pending);
             write_cbor(&request, &req);
             println!("{}", json!({ "ok": true, "key": key, "request": request }));
@@ -207,22 +209,23 @@ fn main() {
         Some("enroll") => {
             // Town side: answer a join request.
             let town = PathBuf::from(need(&args, "--town"));
-            let request: JoinRequest = read_cbor(&PathBuf::from(need(&args, "--request")));
+            let request: Join = read_cbor(&PathBuf::from(need(&args, "--request")));
+            let class = arg(&args, "--class").unwrap_or_else(|| "hardware".into());
             let reply = PathBuf::from(need(&args, "--reply"));
             let credits: Vec<u64> = arg(&args, "--credit").map(|c| c.split(',').filter_map(|x| x.parse().ok()).collect()).unwrap_or_default();
             let mut t = Node::load(&town).unwrap_or_else(|e| die(e));
-            let e = t.enroll(&request, &credits).unwrap_or_else(|e| die(e));
+            let e = t.enroll(&request, &class, &credits).unwrap_or_else(|e| die(e));
             write_cbor(&reply, &e);
-            println!("{}", json!({ "ok": true, "group": e.group, "credit": credits, "tickets": e.creds.len() - e.credited, "reply": reply }));
+            println!("{}", json!({ "ok": true, "class": class, "group": e.group, "credit": credits, "reply": reply }));
         }
         Some("finish") => {
             // Wallet side: take the town's answer and become a node.
-            let key: PendingKey = read_cbor(&PathBuf::from(need(&args, "--key")));
+            let key: PendingJoin = read_cbor(&PathBuf::from(need(&args, "--key")));
             let e: Enrollment = read_cbor(&PathBuf::from(need(&args, "--reply")));
             let name = need(&args, "--name");
             let out = PathBuf::from(need(&args, "--out"));
             let p = Node::finish_enrollment(key, &e, &name, &out).unwrap_or_else(|e| die(e));
-            println!("{}", json!({ "ok": true, "name": name, "group": p.group, "tickets": p.pool.len(), "out": out }));
+            println!("{}", json!({ "ok": true, "name": name, "class": p.class, "group": p.group, "out": out }));
         }
         Some("run") => run(PathBuf::from(need(&args, "--state")), need(&args, "--listen")),
         _ => {

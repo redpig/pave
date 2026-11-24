@@ -111,12 +111,14 @@ pub struct Policy {
     pub wait_on_hints: bool,
     /// Once this recipient knows of any cheat, require the sender's standing.
     pub require_standing: bool,
+    /// Honor `max_spend` on the sender's and holder's tickets.
+    pub honor_ticket_caps: bool,
 }
 
 impl Policy {
     /// The default wallet policy: honor everything, don't wait on hints.
     pub fn wallet(trusted_clerks: BTreeMap<Credential, Hash>) -> Self {
-        Policy { trusted_clerks, honor_expiry: true, honor_transfer_limit: true, refuse_known_cheats: true, wait_on_hints: false, require_standing: true }
+        Policy { trusted_clerks, honor_expiry: true, honor_transfer_limit: true, refuse_known_cheats: true, wait_on_hints: false, require_standing: true, honor_ticket_caps: true }
     }
 }
 
@@ -136,6 +138,8 @@ pub enum Refusal {
     HintPending(Hash),
     /// The recipient knows of cheats, and the sender hasn't shown it isn't one.
     NoStanding(Credential),
+    /// More than the sender's or holder's ticket allows in one coin.
+    OverMaxSpend { credential: Credential, amount: u64, max: u64 },
 }
 
 /// Every state in a coin's provenance, from its current state back to mint.
@@ -177,6 +181,20 @@ pub fn check<S: Scheme>(
         if let Some(limit) = schema.offline_transfers {
             if coin.hops >= limit {
                 return Err(Refusal::OverTransferLimit);
+            }
+        }
+    }
+
+    // Ticket caps on the last hop, for both ends. Each recipient checks this
+    // when it receives, so an honest chain enforces every hop. (A holder
+    // that received over its cap and then split stays bounded by the cap
+    // per payment it makes onward.)
+    if policy.honor_ticket_caps {
+        for cred in [sender, &coin.holder] {
+            if let Some(max) = know.tickets.get(cred).and_then(|t| t.ticket.max_spend) {
+                if coin.amount > max {
+                    return Err(Refusal::OverMaxSpend { credential: cred.clone(), amount: coin.amount, max });
+                }
             }
         }
     }

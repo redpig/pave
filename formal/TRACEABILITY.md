@@ -45,3 +45,6 @@ The tests were checked against injected faults matching the TLA+ fault names. Ea
 | `hintepoch` | Unsigned head hints count toward the known epoch | 2 |
 | `nostanding` | Standing is never required | 2 |
 | `identityproof` | The prover skips its own cheat check and the verifier accepts T = identity | 2 |
+| `nocap` | Ticket `max_spend` is never checked | 2 |
+| `norate` | Ticket requests aren't counted per epoch | 1 |
+| `noclassrevoke` | Closing a class doesn't revoke its groups | 1 |

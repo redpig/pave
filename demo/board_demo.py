@@ -33,7 +33,7 @@ class Node:
         ready = json.loads(self.p.stdout.readline())
         self.group = ready["group"]
 
-    def __call__(self, cmd, quiet=False, **kw):
+    def __call__(self, cmd, quiet=False, may_fail=False, **kw):
         req = {"cmd": cmd, **kw}
         self.p.stdin.write(json.dumps(req) + "\n")
         self.p.stdin.flush()
@@ -41,7 +41,7 @@ class Node:
         if not quiet:
             shown = {k: (v[:12] + "…" if isinstance(v, str) and len(v) > 16 else v) for k, v in kw.items()}
             print(f"  {DIM}{self.name:>5} ▸ {cmd} {json.dumps(shown) if shown else ''}{OFF}")
-        if not r.get("ok"):
+        if not r.get("ok") and not may_fail:
             raise SystemExit(f"{RED}{self.name} {cmd} failed: {r.get('error')}{OFF}")
         return r
 
@@ -75,23 +75,28 @@ def main():
         out = subprocess.run([args.bin, *a], check=True, capture_output=True, text=True).stdout
         return json.loads(out)
 
-    say("At the town office (online, once): create the town and enroll three neighbors")
+    say("At the town office (online, once): create the town and enroll four neighbors")
     cli("init", "--town", town_file, "--label", "Elm Street")
     people = {}
-    for name, credit in [("alice", "100"), ("bob", "20"), ("carol", "20,20")]:
+    for name, cls, credit in [("alice", "hardware", "100"), ("bob", "hardware", "20"), ("carol", "software", "20,20"), ("dave", "software", "")]:
         key, req, reply = (os.path.join(d, f"{name}.{x}") for x in ("key", "join", "reply"))
         cli("join", "--key", key, "--request", req)  # on the wallet: its key never leaves
-        r = cli("enroll", "--town", town_file, "--request", req, "--reply", reply, "--credit", credit)
+        r = cli("enroll", "--town", town_file, "--request", req, "--reply", reply, "--class", cls, *(["--credit", credit] if credit else []))
         cli("finish", "--key", key, "--reply", reply, "--name", name, "--out", os.path.join(d, f"{name}.pave"))
         os.remove(key)
-        print(f"  enrolled {name}: group {r['group']}, {r['tickets']} prefetched tickets, test credit {credit}")
+        print(f"  enrolled {name}: {cls} wallet, test credit {credit or 'none'}" + (f" (ticket group {r['group']})" if credit else ""))
     nodes = [Node(args.bin, town_file, args.port, "town")]
-    for i, name in enumerate(["alice", "bob", "carol"]):
+    for i, name in enumerate(["alice", "bob", "carol", "dave"]):
         people[name] = Node(args.bin, os.path.join(d, f"{name}.pave"), args.port + 1 + i, name)
-    town, alice, bob, carol = nodes[0], people["alice"], people["bob"], people["carol"]
-    nodes += [alice, bob, carol]
+    town, alice, bob, carol, dave = nodes[0], people["alice"], people["bob"], people["carol"], people["dave"]
+    nodes += [alice, bob, carol, dave]
 
     try:
+        say("0. Each wallet fetches tickets anonymously: the town sees only its class")
+        for p in (alice, bob, carol, dave):
+            got = p("refill", quiet=True, peer=town.addr, count=8)["tickets"]
+            print(f"  {p.name}: {got} tickets, in a fresh random group, unlinkable to its enrollment")
+
         say("1. Offline: Alice posts a job, with proof she holds the pay")
         job = alice("post", title="Fix the back fence", pay=30)["job"]
         alice.meet(bob)
@@ -158,10 +163,19 @@ def main():
         g = bob("gossip", quiet=True, peer=alice.addr)
         print(f"  again: {g['wants']} wants — quiet once everyone is current")
 
-        say("7. Bob tops up his tickets when he next sees the town")
-        left = bob("whoami", quiet=True)["tickets_left"]
+        say("7. Carol can't get new tickets: she can't prove she isn't the cheat")
+        r = carol("refill", quiet=True, may_fail=True, peer=town.addr, count=8)
+        print(f"  carol's refill: {RED}{r.get('error', r)}{OFF}")
         got = bob("refill", quiet=True, peer=town.addr, count=8)["tickets"]
-        print(f"  bob had {left} unused tickets, received {got} more in group {bob.group}")
+        print(f"  bob's refill: {GREEN}{got} tickets{OFF}, with standing proofs that link him to nothing")
+
+        say("8. A flaw is found in the software wallet: the town closes that class")
+        r = town("roll", revoke_class=["software"])
+        print(f"  epoch {r['epoch']}: every group ever given to software wallets is revoked ({r['revoked_groups']} groups so far)")
+        r = dave("refill", quiet=True, may_fail=True, peer=town.addr, count=8)
+        print(f"  dave's software wallet, honest but the same model: {RED}{r.get('error', r)}{OFF}")
+        got = alice("refill", quiet=True, peer=town.addr, count=8)["tickets"]
+        print(f"  alice's hardware wallet carries on: {GREEN}{got} tickets{OFF}")
     finally:
         for n in nodes:
             n.stop()

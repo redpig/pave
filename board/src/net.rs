@@ -5,8 +5,7 @@
 //! - Gossip: the two tiers. Hints first (fits one packet), then per-hint
 //!   wants answered with proofs.
 
-use crate::node::{Bundle, Node};
-use pave_kernel::{Credential, Sig};
+use crate::node::{Bundle, Node, RefillRequest, RefillTerms};
 use pave_protocol::{SignedTicket, Standing};
 use pave_protocol::gossip::{self, Hint, Proof, Want};
 use serde::{Deserialize, Serialize};
@@ -20,9 +19,13 @@ pub enum Wire {
     Hints(Vec<Hint>),
     Wants(Vec<Want>),
     Proofs(Vec<Proof>),
-    /// Ask the town for tickets for these fresh credentials.
-    Refill { creds: Vec<Credential>, by: Credential, sig: Sig },
+    /// Ask the town what a ticket request must meet this epoch.
+    RefillAsk,
+    RefillTerms(RefillTerms),
+    /// An anonymous ticket request.
+    Refill(Box<RefillRequest>),
     Tickets(Vec<SignedTicket>),
+    Refused(String),
     /// Proofs that the credentials a wallet paid from aren't known cheats.
     Standing(Vec<Standing>),
 }
@@ -74,8 +77,15 @@ pub fn serve_peer(node: Arc<Mutex<Node>>, mut s: TcpStream) -> std::io::Result<(
                     gossip::absorb(&mut n.view, &mut n.know, p);
                     Wire::Proofs(vec![])
                 }
-                Wire::Refill { creds, by, sig } => Wire::Tickets(n.answer_refill(&creds, &by, &sig).unwrap_or_default()),
-                Wire::Tickets(_) => Wire::Tickets(vec![]),
+                Wire::RefillAsk => match n.refill_terms() {
+                    Ok(t) => Wire::RefillTerms(t),
+                    Err(e) => Wire::Refused(e),
+                },
+                Wire::Refill(req) => match n.answer_refill(&req) {
+                    Ok(t) => Wire::Tickets(t),
+                    Err(e) => Wire::Refused(e),
+                },
+                Wire::RefillTerms(_) | Wire::Tickets(_) | Wire::Refused(_) => Wire::Refused("unexpected".into()),
                 Wire::Standing(v) => {
                     n.absorb_standings(v);
                     Wire::Standing(n.standings())
@@ -149,15 +159,23 @@ pub fn gossip_with(node: &Arc<Mutex<Node>>, addr: &str) -> std::io::Result<(usiz
     Ok((compressed.max(theirs_bytes), got, n_wants))
 }
 
-/// Refill this wallet's ticket pool from the town. Returns tickets received.
+/// Refill this wallet's ticket pool from the town, anonymously. Returns
+/// tickets received.
 pub fn refill(node: &Arc<Mutex<Node>>, addr: &str, count: usize) -> std::io::Result<usize> {
-    let (creds, by, sig) = node.lock().unwrap().refill_request(count).map_err(std::io::Error::other)?;
     let mut s = TcpStream::connect(addr)?;
-    write_msg(&mut s, &Wire::Refill { creds, by, sig })?;
+    write_msg(&mut s, &Wire::RefillAsk)?;
+    let terms = match read_msg(&mut s)?.0 {
+        Wire::RefillTerms(t) => t,
+        Wire::Refused(e) => return Err(std::io::Error::other(e)),
+        _ => return Err(std::io::Error::other("unexpected reply")),
+    };
+    let req = node.lock().unwrap().refill_request(&terms, count).map_err(std::io::Error::other)?;
+    write_msg(&mut s, &Wire::Refill(Box::new(req)))?;
     let (reply, _) = read_msg(&mut s)?;
     let mut n = node.lock().unwrap();
     let got = match reply {
         Wire::Tickets(t) => n.take_tickets(t),
+        Wire::Refused(e) => return Err(std::io::Error::other(e)),
         _ => 0,
     };
     let _ = n.save();

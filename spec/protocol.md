@@ -58,7 +58,7 @@ These follow from the axioms and are stated so no one adds a feature that duplic
 What each role must guarantee lives in the presentation, so it never depends on the role behaving. Each role keeps some latitude, on public terms with signed answers.
 
 - **Registrar.** Must hold: every enrollment proof is checkable against the root's public keys, and enrollments are public commitments anyone can recount. Latitude: which roots it accepts.
-- **Ticket and epoch issuer.** Must hold: tickets are issued blind in randomized groups; issuance counts and epochs are public and checkable, and equivocation is a detectable conflict. Latitude: its epoch policy, published.
+- **Ticket and epoch issuer.** Must hold: tickets are issued to anonymous requests (signed under a per-class access credential with the epoch as basename, so the issuer learns only the class and a per-epoch count), in a random group per batch that it maps to a class and never to a person, and only for credentials with standing against every cheat it knows of; issuance counts and epochs are public and checkable, and equivocation is a detectable conflict. Latitude: its epoch policy, published.
 - **Mint.** Must hold: what is outstanding is publicly checkable against the mint limit. Latitude: what and how much to mint within its right.
 - **Swapper.** Never mints and never pays out without taking something in. It may choose whom it serves, as a bank serves its own customers, but the minter can't choose for it, and a refusal that breaks its own terms is evidence.
 - **Validator.** Its approval is a signed statement, so approving a double spend leaves its own signature as evidence against its bond.

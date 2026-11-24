@@ -18,3 +18,4 @@ serde_json = "1"
 ciborium = "0.2"
 hex = "0.4"
 pave-scheme-briolette = { path = "../schemes/briolette" }
+rand = "0.8"

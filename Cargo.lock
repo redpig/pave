@@ -541,6 +541,7 @@ dependencies = [
  "pave-kernel",
  "pave-protocol",
  "pave-scheme-briolette",
+ "rand 0.8.8",
  "serde",
  "serde_json",
 ]

@@ -13,15 +13,31 @@ use pave_kernel::receipt::Receipt;
 use pave_kernel::*;
 use pave_protocol::gossip::Hint;
 use pave_protocol::*;
-use pave_scheme_briolette::{randomize, BrioletteV1, HolderKey, Issuer, JoinReply, JoinRequest, PendingKey};
+use pave_scheme_briolette::{join_nonce, randomize, BrioletteV1, HolderKey, Issuer, JoinReply, JoinRequest, PendingKey};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 pub type S = BrioletteV1;
 
-/// Tickets a wallet gets at enrollment, beyond the ones its credit uses.
+/// Tickets a wallet asks for at a time.
 pub const PREFETCH: usize = 8;
+/// Ticket groups are drawn at random from this many, one per batch.
+pub const GROUPS: u32 = 4096;
+/// Most credentials one ticket request may name.
+pub const MAX_BATCH: usize = 16;
+/// Most ticket requests one wallet may make per epoch.
+pub const BATCHES_PER_EPOCH: usize = 2;
+
+/// A class of wallet: a kind of device or level of assurance. Each class has
+/// its own network-access issuer, so a wallet's requests show its class and
+/// nothing else, and its own ticket terms. Recipients see only the terms.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Class {
+    pub group_public_key: Vec<u8>,
+    /// Most one ticket may receive in one coin.
+    pub max_spend: Option<u64>,
+}
 
 /// What every member of a town knows about it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -32,30 +48,89 @@ pub struct Town {
     pub sequence: Hash,
     pub clerk: Credential,
     pub cash: Hash,
+    pub classes: BTreeMap<String, Class>,
 }
 
 /// The operator: registrar plus the root, clerk and minter roles, each its
 /// own enrolled key with a fixed credential.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Operator {
+    /// Issues transfer credentials. One group for everyone, so coins don't
+    /// show what kind of wallet holds them.
     pub registrar: Issuer,
+    /// Issues network-access credentials, one issuer per class.
+    pub access: BTreeMap<String, Issuer>,
+    /// Classes no longer served, after a class break, until members re-attest.
+    pub closed: BTreeSet<String>,
+    /// The clerk's private map from ticket group to class. It names no one.
+    pub groups: BTreeMap<u32, String>,
+    /// Every group revoked so far; revocation is cumulative.
+    pub revoked: BTreeSet<u32>,
+    /// Ticket requests this epoch, by request pseudonym, for the rate limit.
+    pub asked: BTreeMap<Vec<u8>, usize>,
+    pub asked_epoch: u32,
     pub root: HolderKey,
     pub root_cred: Credential,
     pub clerk: HolderKey,
     pub minter: HolderKey,
     pub minter_cred: Credential,
     pub cash_budget: Hash,
-    pub next_group: u32,
+}
+
+/// A wallet's join request: a transfer key and a network-access key, both
+/// generated on the wallet.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Join {
+    pub transfer: JoinRequest,
+    pub access: JoinRequest,
+}
+
+/// The wallet's side of a join until the town answers. Keep it secret.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PendingJoin {
+    pub transfer: PendingKey,
+    pub access: PendingKey,
+}
+
+impl PendingJoin {
+    pub fn generate() -> (PendingJoin, Join) {
+        let (t, tr) = PendingKey::generate(&join_nonce());
+        let (a, ar) = PendingKey::generate(&join_nonce());
+        (PendingJoin { transfer: t, access: a }, Join { transfer: tr, access: ar })
+    }
+}
+
+/// What the clerk asks of a ticket request this epoch.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RefillTerms {
+    pub epoch: u32,
+    /// Every cheat the clerk knows of: each requested credential needs standing against all of them.
+    pub cheats: Vec<(Vec<u8>, Vec<u8>)>,
+}
+
+/// An anonymous ticket request. It is signed with a fresh randomization of
+/// the wallet's access credential, with the epoch as basename: the clerk
+/// learns the wallet's class and can count its requests this epoch, and
+/// nothing links it to the wallet's tickets, its other requests or its name.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RefillRequest {
+    pub epoch: u32,
+    pub creds: Vec<Credential>,
+    pub standing: Vec<Standing>,
+    pub access: Credential,
+    pub sig: Sig,
 }
 
 /// The town's answer to a join request.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Enrollment {
     pub town: Town,
-    pub join: JoinReply,
+    pub transfer: JoinReply,
+    pub access: JoinReply,
+    pub class: String,
     pub group: u32,
-    /// The first `credited` credentials hold the test credit.
-    pub credited: usize,
+    /// Credentials holding the test credit. The wallet's other tickets come
+    /// from anonymous refills, so the town can't tie them to this enrollment.
     pub creds: Vec<Credential>,
     pub bundle: Bundle,
 }
@@ -64,6 +139,8 @@ pub struct Enrollment {
 pub struct Saved {
     pub name: String,
     pub key: HolderKey,
+    pub access: HolderKey,
+    pub class: String,
     pub group: u32,
     pub pool: Vec<Credential>,
     pub mine: Vec<Credential>,
@@ -97,6 +174,10 @@ pub struct Node {
     pub path: PathBuf,
     pub name: String,
     pub key: HolderKey,
+    /// Network-access key, for anonymous requests to the town's services.
+    pub access: HolderKey,
+    pub class: String,
+    /// The ticket group of this wallet's enrollment batch.
     pub group: u32,
     /// Credentials with tickets, not yet used.
     pub pool: Vec<Credential>,
@@ -139,9 +220,19 @@ fn op_recipients(op: &Op) -> Vec<&Credential> {
     }
 }
 
-/// The bytes a ticket refill request signs.
-pub fn refill_bytes(creds: &[Credential]) -> Vec<u8> {
-    pave_kernel::hash::encode(&("pave/ticket-request/v0", creds))
+/// The basename a ticket request is signed with: one per clerk epoch.
+pub fn refill_basename(sequence: &Hash, epoch: u32) -> Vec<u8> {
+    pave_kernel::hash::encode(&("pave/ticket-request/v0", sequence, epoch))
+}
+
+/// The bytes a ticket request signs.
+pub fn refill_bytes(epoch: u32, creds: &[Credential], standing: &[Standing]) -> Vec<u8> {
+    pave_kernel::hash::encode(&("pave/ticket-request/v0", epoch, creds, standing))
+}
+
+/// The classes a test town starts with.
+fn default_classes() -> Vec<(&'static str, Option<u64>)> {
+    vec![("hardware", None), ("software", Some(50))]
 }
 
 impl Node {
@@ -169,6 +260,11 @@ impl Node {
         let board = sign(&s, &root, &rc, Op::CreateScope { parent: genesis.root_scope(), rules: ScopeRules::default(), authority: auth });
         apply_ok(&mut view, &board)?;
 
+        let access: BTreeMap<String, Issuer> = default_classes().iter().map(|(c, _)| (c.to_string(), Issuer::new())).collect();
+        let classes = default_classes()
+            .into_iter()
+            .map(|(c, max_spend)| (c.to_string(), Class { group_public_key: access[c].group_public_key.clone(), max_spend }))
+            .collect();
         let town = Town {
             genesis,
             group_public_key: registrar.group_public_key.clone(),
@@ -176,12 +272,30 @@ impl Node {
             sequence: seq.output(0),
             clerk: cc,
             cash: cash_schema().id(),
+            classes,
         };
-        let operator = Operator { registrar, root, root_cred: rc, clerk, minter, minter_cred: mc, cash_budget: cash.output(0), next_group: 1 };
+        let my_access = access["hardware"].join_locally();
+        let operator = Operator {
+            registrar,
+            access,
+            closed: BTreeSet::new(),
+            groups: BTreeMap::new(),
+            revoked: BTreeSet::new(),
+            asked: BTreeMap::new(),
+            asked_epoch: 0,
+            root,
+            root_cred: rc,
+            clerk,
+            minter,
+            minter_cred: mc,
+            cash_budget: cash.output(0),
+        };
         let node = Node {
             path: path.into(),
             name: "town".into(),
             key: me,
+            access: my_access,
+            class: "hardware".into(),
             group: 0,
             pool: vec![],
             mine: BTreeSet::new(),
@@ -196,33 +310,58 @@ impl Node {
         Ok(node)
     }
 
-    /// Operator: the clerk certifies credentials into `group` at the current epoch.
-    pub fn issue_tickets(&mut self, creds: &[Credential], group: u32) -> Result<Vec<SignedTicket>, String> {
+    /// Operator: a fresh random ticket group for a batch from `class`.
+    fn new_group(&mut self, class: &str) -> Result<u32, String> {
+        let op = self.operator.as_mut().ok_or("only the town operator assigns groups")?;
+        loop {
+            let g = rand::Rng::gen_range(&mut rand::rngs::OsRng, 1..GROUPS);
+            if op.revoked.contains(&g) {
+                continue;
+            }
+            match op.groups.get(&g) {
+                Some(c) if c != class => continue,
+                _ => {
+                    op.groups.insert(g, class.to_string());
+                    return Ok(g);
+                }
+            }
+        }
+    }
+
+    /// Operator: the clerk certifies a batch of credentials from `class`, in
+    /// a fresh random group, at the current epoch, on the class's terms.
+    pub fn issue_tickets(&mut self, creds: &[Credential], class: &str) -> Result<(u32, Vec<SignedTicket>), String> {
+        let group = self.new_group(class)?;
+        let max_spend = self.town.classes.get(class).ok_or("unknown class")?.max_spend;
         let op = self.operator.as_ref().ok_or("only the town operator issues tickets")?;
         let epoch = head(&self.view, &self.town.sequence).ok_or("no epoch")?.number;
         let s = self.view.scheme().clone();
         let out: Vec<SignedTicket> = creds
             .iter()
-            .map(|c| SignedTicket::issue(&s, &op.clerk, &self.town.clerk, Ticket { credential: c.clone(), sequence: self.town.sequence, epoch, group, max_spend: None }))
+            .map(|c| SignedTicket::issue(&s, &op.clerk, &self.town.clerk, Ticket { credential: c.clone(), sequence: self.town.sequence, epoch, group, max_spend }))
             .collect();
         for t in &out {
             self.know.add_ticket(&s, t.clone());
         }
-        Ok(out)
+        Ok((group, out))
     }
 
-    /// Operator: enroll a person (online, once). The wallet generated its own
-    /// key and sends only a join request, so the registrar never holds a
-    /// member's secret key. The town answers with the credential, a group, a
-    /// batch of ticketed credentials and test credit minted to some of them.
-    pub fn enroll(&mut self, req: &JoinRequest, credits: &[u64]) -> Result<Enrollment, String> {
+    /// Operator: enroll a person (online, once) into a class. The wallet
+    /// generated its own keys and sends only public keys with proofs, so the
+    /// registrar never holds a member's secret. The town answers with a
+    /// transfer credential, an access credential for the class, and test
+    /// credit minted to ticketed credentials. Everything else the wallet gets
+    /// later through anonymous refills.
+    pub fn enroll(&mut self, join: &Join, class: &str, credits: &[u64]) -> Result<Enrollment, String> {
         let op = self.operator.as_mut().ok_or("only the town operator can enroll")?;
-        let join = op.registrar.issue(req)?;
-        let group = op.next_group;
-        op.next_group += 1;
+        if op.closed.contains(class) {
+            return Err(format!("class {class} is closed"));
+        }
+        let transfer = op.registrar.issue(&join.transfer)?;
+        let access = op.access.get(class).ok_or("unknown class")?.issue(&join.access)?;
         let s = self.view.scheme().clone();
-        let creds: Vec<Credential> = (0..PREFETCH + credits.len()).map(|_| randomize(&join.credential)).collect();
-        self.issue_tickets(&creds, group)?;
+        let creds: Vec<Credential> = credits.iter().map(|_| randomize(&transfer.credential)).collect();
+        let group = if creds.is_empty() { 0 } else { self.issue_tickets(&creds, class)?.0 };
         for (i, amount) in credits.iter().enumerate() {
             let op = self.operator.as_mut().unwrap();
             let mint = sign(&s, &op.minter, &op.minter_cred, Op::Mint { budget: op.cash_budget, amount: *amount, to: creds[i].clone(), change_to: op.minter_cred.clone() });
@@ -232,20 +371,24 @@ impl Node {
         self.save()?;
         let mut bundle = self.bundle();
         bundle.tickets = self.know.tickets.values().filter(|t| creds.contains(&t.ticket.credential)).cloned().collect();
-        Ok(Enrollment { town: self.town.clone(), join, group, credited: credits.len(), creds, bundle })
+        Ok(Enrollment { town: self.town.clone(), transfer, access, class: class.into(), group, creds, bundle })
     }
 
     /// Wallet: finish enrolling with the town's answer to this wallet's join
-    /// request, checking that the credential is bound to its own key.
-    pub fn finish_enrollment(pending: PendingKey, e: &Enrollment, name: &str, out: &Path) -> Result<Node, String> {
+    /// request, checking that both credentials are bound to its own keys.
+    pub fn finish_enrollment(pending: PendingJoin, e: &Enrollment, name: &str, out: &Path) -> Result<Node, String> {
         let s = BrioletteV1 { group_public_key: e.town.group_public_key.clone() };
-        let key = pending.finish(&s, &e.join)?;
+        let class = e.town.classes.get(&e.class).ok_or("unknown class")?;
+        let key = pending.transfer.finish(&s, &e.transfer)?;
+        let access = pending.access.finish(&BrioletteV1 { group_public_key: class.group_public_key.clone() }, &e.access)?;
         let mut person = Node {
             path: out.into(),
             name: name.into(),
             key,
+            access,
+            class: e.class.clone(),
             group: e.group,
-            pool: e.creds[e.credited..].to_vec(),
+            pool: vec![],
             mine: e.creds.iter().cloned().collect(),
             town: e.town.clone(),
             view: View::new(s.clone(), e.town.genesis.clone()),
@@ -254,7 +397,6 @@ impl Node {
             outbox: vec![],
             cheat_states: BTreeSet::new(),
         };
-        // The pool must be signable: each credential randomizes our own.
         for c in &e.creds {
             let sig = s.sign(&person.key, c, b"pave/enroll-check", None);
             if !s.verify(c, b"pave/enroll-check", None, &sig) {
@@ -274,6 +416,8 @@ impl Node {
             path: path.into(),
             name: saved.name,
             key: saved.key,
+            access: saved.access,
+            class: saved.class,
             group: saved.group,
             pool: saved.pool,
             mine: saved.mine.into_iter().collect(),
@@ -301,6 +445,8 @@ impl Node {
         let saved = Saved {
             name: self.name.clone(),
             key: self.key.clone(),
+            access: self.access.clone(),
+            class: self.class.clone(),
             group: self.group,
             pool: self.pool.clone(),
             mine: self.mine.iter().cloned().collect(),
@@ -427,22 +573,70 @@ impl Node {
         self.pool.pop().ok_or_else(|| "out of tickets: refill when you next meet the town".into())
     }
 
-    /// Ask the town for `count` more tickets, authenticated by one of this
-    /// wallet's ticketed credentials so the clerk knows its group.
-    pub fn refill_request(&mut self, count: usize) -> Result<(Vec<Credential>, Credential, Sig), String> {
-        let by = self.mine.iter().next().cloned().ok_or("no credential to ask with")?;
-        let creds: Vec<Credential> = (0..count).map(|_| self.scheme().credential(&self.key)).collect();
-        let sig = self.scheme().sign(&self.key, &by, &refill_bytes(&creds), None);
-        Ok((creds, by, sig))
+    /// Operator: what a ticket request must meet this epoch.
+    pub fn refill_terms(&self) -> Result<RefillTerms, String> {
+        let epoch = head(&self.view, &self.town.sequence).ok_or("no epoch")?.number;
+        Ok(RefillTerms { epoch, cheats: cheat_list(&self.view) })
     }
 
-    /// Operator: answer a refill request with tickets in the asker's group.
-    pub fn answer_refill(&mut self, creds: &[Credential], by: &Credential, sig: &Sig) -> Result<Vec<SignedTicket>, String> {
-        if !self.view.scheme().verify(by, &refill_bytes(creds), None, sig) {
-            return Err("bad refill request".into());
+    /// Ask for `count` more tickets, anonymously: fresh credentials, each
+    /// with standing against every cheat the clerk knows of, signed with a
+    /// fresh randomization of this wallet's access credential.
+    pub fn refill_request(&self, terms: &RefillTerms, count: usize) -> Result<RefillRequest, String> {
+        let s = self.scheme();
+        let creds: Vec<Credential> = (0..count).map(|_| s.credential(&self.key)).collect();
+        let standing = creds
+            .iter()
+            .map(|c| Standing::prove(s, &self.key, c, &terms.cheats).ok_or_else(|| "this wallet is a known cheat".to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let a = BrioletteV1 { group_public_key: self.town.classes[&self.class].group_public_key.clone() };
+        let access = a.credential(&self.access);
+        let bsn = refill_basename(&self.town.sequence, terms.epoch);
+        let sig = a.sign(&self.access, &access, &refill_bytes(terms.epoch, &creds, &standing), Some(&bsn));
+        Ok(RefillRequest { epoch: terms.epoch, creds, standing, access, sig })
+    }
+
+    /// Operator: answer an anonymous ticket request. The access signature
+    /// shows the class; its pseudonym, fixed per epoch, counts requests;
+    /// standing keeps known cheats out; each batch gets a fresh random group.
+    pub fn answer_refill(&mut self, req: &RefillRequest) -> Result<Vec<SignedTicket>, String> {
+        let terms = self.refill_terms()?;
+        if req.epoch != terms.epoch {
+            return Err(format!("stale request: the clerk is at epoch {}", terms.epoch));
         }
-        let group = self.know.tickets.get(by).ok_or("unknown credential")?.ticket.group;
-        self.issue_tickets(creds, group)
+        if req.creds.is_empty() || req.creds.len() > MAX_BATCH || req.standing.len() != req.creds.len() {
+            return Err(format!("ask for 1 to {MAX_BATCH} tickets, each with standing"));
+        }
+        let msg = refill_bytes(req.epoch, &req.creds, &req.standing);
+        let bsn = refill_basename(&self.town.sequence, req.epoch);
+        let class = self
+            .town
+            .classes
+            .iter()
+            .find(|(_, c)| BrioletteV1 { group_public_key: c.group_public_key.clone() }.verify(&req.access, &msg, Some(&bsn), &req.sig))
+            .map(|(name, _)| name.clone())
+            .ok_or("not signed by a member of any class")?;
+        let nym = self.scheme().nym(&req.sig).ok_or("no request pseudonym")?;
+        let s = self.view.scheme().clone();
+        for (c, st) in req.creds.iter().zip(&req.standing) {
+            if st.credential != *c || !st.covers(&terms.cheats) || !st.verify(&s) {
+                return Err("a credential lacks standing".into());
+            }
+        }
+        let op = self.operator.as_mut().ok_or("only the town operator issues tickets")?;
+        if op.closed.contains(&class) {
+            return Err(format!("class {class} is closed: update the wallet and enroll again"));
+        }
+        if op.asked_epoch != req.epoch {
+            op.asked.clear();
+            op.asked_epoch = req.epoch;
+        }
+        let n = op.asked.entry(nym).or_default();
+        if *n >= BATCHES_PER_EPOCH {
+            return Err(format!("at most {BATCHES_PER_EPOCH} ticket requests per epoch"));
+        }
+        *n += 1;
+        Ok(self.issue_tickets(&req.creds, &class)?.1)
     }
 
     pub fn take_tickets(&mut self, tickets: Vec<SignedTicket>) -> usize {
@@ -560,9 +754,25 @@ impl Node {
         Ok(rec.output(0))
     }
 
-    /// Operator: roll the clerk's epoch, optionally revoking ticket groups.
-    pub fn roll_epoch(&mut self, revoked: BTreeSet<u32>) -> Result<u32, String> {
-        let op = self.operator.as_ref().ok_or("only the town operator rolls epochs")?;
+    /// Operator: roll the clerk's epoch, revoking ticket groups and whole
+    /// classes. Revocation is cumulative. A revoked class is closed: its
+    /// wallets get no tickets until they update and enroll again.
+    pub fn roll_epoch(&mut self, groups: BTreeSet<u32>, classes: BTreeSet<String>) -> Result<u32, String> {
+        let op = self.operator.as_mut().ok_or("only the town operator rolls epochs")?;
+        for c in &classes {
+            if !op.access.contains_key(c) {
+                return Err(format!("unknown class {c}"));
+            }
+        }
+        op.revoked.extend(groups);
+        for (g, c) in &op.groups {
+            if classes.contains(c) {
+                op.revoked.insert(*g);
+            }
+        }
+        op.closed.extend(classes);
+        let revoked = op.revoked.clone();
+        let op = self.operator.as_ref().unwrap();
         let h = head(&self.view, &self.town.sequence).ok_or("no epoch")?;
         let coin = self.view.coin(&h.state).ok_or("epoch state missing")?.clone();
         let data = EpochData { sequence: self.town.sequence, number: h.number + 1, revoked_groups: revoked };
