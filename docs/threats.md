@@ -79,7 +79,7 @@ We do not assume that any role behaves well (principle 10), that devices are tam
 | K8 | Hide an earlier spend by not sharing it | n/a | Detected when any holder of the other copy meets any holder of this one | Detected at the tokenmap | Built (`cheat` in the demo) |
 | K9 | Issuer equivocation: two different successors to one epoch | An epoch is a sequence capability, so two rolls from one epoch are a double use | Evidence, exactly as for a double spend | Signed epochs compared out of band; an optional secondary signature | Built **+** (CivicSequences) |
 | K10 | Malformed or huge input that panics or exhausts a node | Typed CBOR decoding; a 64 MiB frame cap | n/a | Audit M-7 (panic on currency mismatch) | Gap: no-panic audit and fuzzing of `apply`, `absorb` and the scheme adapter, plus per-object size caps |
-| K11 | History growth until coins are too big to move | `offline_transfers` caps hops per schema | Swap for a fresh coin | Maximum provenance length plus swap; ZK compression proposed | Built (cap); swap is a Gap; compression is a Gap |
+| K11 | History growth until coins are too big to move | `offline_transfers` caps hops per schema | Swap for a fresh coin | Maximum provenance length plus swap; ZK compression proposed | Built (cap and swap); Gap: compression |
 
 ---
 
@@ -109,16 +109,16 @@ We do not assume that any role behaves well (principle 10), that devices are tam
 
 | # | Attack | Prevent | React | Briolette | Status |
 |---|---|---|---|---|---|
-| W1 | Steal keys from the device (malware, theft, backups) | Keys in a secure element or keystore; split key between phone and card; PIN | Recovery; group revocation | Same; audit M-3 found plaintext JSON | Gap: the state file holds the secret key in plaintext CBOR |
-| W2 | Roll back or restore state, then sign a basename again | The device signs each basename once, with anti-rollback storage (monotonic counter or Merkle root) | Evidence, then revocation | Credstick bloom filter, and swap authorization for false positives | Gap: a persisted set of signed basenames guarded by a monotonic counter. Today evidence is the only backstop |
-| W3 | Clone the wallet and spend in parallel | As W2 | Evidence on first meeting; revocation | Tokenmap | Built (detection); Gap (prevention) |
+| W1 | Steal keys from the device (malware, theft, backups) | Keys in a secure element or keystore; split key between phone and card; PIN | Recovery; group revocation | Same; audit M-3 found plaintext JSON | Partial: the state file is sealed (XChaCha20-Poly1305) under a keystore key; the repo's keystore is a 0600 file beside it. Gap: platform keystores ([phone-keys.md](phone-keys.md)) |
+| W2 | Roll back or restore state, then sign a basename again | The device signs each basename once, with anti-rollback storage (monotonic counter or Merkle root) | Evidence, then revocation | Credstick bloom filter, and swap authorization for false positives | Built: the signing log, saved before a signature leaves, and the state sealed under a key that rotates every save, so a rollback-resistant keystore makes an old copy unopenable. Software keystores still allow a restore of both files; evidence is the backstop there. Gap: platform keystores and a split key with a card |
+| W3 | Clone the wallet and spend in parallel | As W2 | Evidence on first meeting; revocation | Tokenmap | Built (detection); prevention as W2 |
 | W4 | A relay, point of sale or app shows one amount and asks the key to sign another | The signing device shows the amount it is about to sign (a trusted display) | n/a | Credstick e-ink shows the amount from the APDU | Gap: there is no hardware signer yet. The node signs exactly what its command says |
 | W5 | Pocket attack: a reader signs without the person knowing | PIN or button between taps above a threshold | n/a | PIN between taps; amount threshold; attempt limits on a hardware counter | Gap |
 | W6 | An agent driving a node exceeds its authority | A spending cap the node enforces, below the agent | Spend history in receipts | n/a (no agents) | Gap: per-session caps, or a sub-wallet funded with only what the agent may spend |
 | W7 | Running out of tickets offline, so the holder can't receive | Prefetched pool | Refill when online | Same | Built |
 | W8 | Reusing a credential, which links holdings | A fresh credential per holding, change and role | n/a | Same | Built |
 | W9 | A lost or destroyed wallet | n/a | Recovery (section 11) | Opt-in recovery binding | Gap |
-| W10 | An interrupted payment: signed but never delivered | Keep the signed record as pending and resend it, never re-sign | Evidence if the holder later re-signs | Deferred payments mark tokens `PENDING_SEND` | Partial: `outbox`; Gap: resume protocol |
+| W10 | An interrupted payment: signed but never delivered | Keep the signed record as pending and resend it, never re-sign; the signing log returns the released record on a retry | Evidence if the holder later re-signs | Deferred payments mark tokens `PENDING_SEND` | Partial: `outbox` and the signing log; Gap: resume protocol |
 
 ---
 
@@ -241,7 +241,8 @@ Specified roles, not yet built
 |---|---|---|---|---|---|
 | V1 | Accept high-value coins with no online check | Any peer view can act as a validator; validate above a threshold | n/a | Validator plus tokenmap | Gap: the service |
 | V2 | A validator lies ("it's fine") | Every answer is a signed head or evidence (principle 10), so a false "fine" is provable once the fork surfaces | The validator's answer is evidence against it | Validator is trusted | Modeled **+** |
-| V3 | Launder a double spend through a swap | The swapper checks evidence and validates before paying | Its own swaps are transfers, so a bad swap leaves its own evidence | Swapper uses the tokenmap | Gap |
+| V3 | Launder a double spend through a swap | The swapper judges the coin before taking it: standing against every cheat it knows, the usual acceptance except expiry, and the transfer must be the only use it has seen. Coins tainted by a revoked group are held for two epochs and paid only if no evidence surfaces | Retire and mint are public, paired records | Swapper uses the tokenmap | Built **+** (`board/tests/swap.rs`) |
+| V3a | A swapper takes a coin and then refuses to pay | The holder transfers only after a signed quote; the transfer commits to the holder's fresh credential | The quote plus the transfer is evidence against the swapper | n/a | Built (quote); Gap: a claim format |
 | V4 | A central log of every history (privacy) | No mandatory tokenmap; holders sync if they want recovery | n/a | Tokenmap sees every uploaded history | Modeled **+** (the tradeoff: recovery needs the holder to sync) |
 | V5 | Bloom filter false positive blocks an honest spend | A swap authorized by the swapper bypasses the filter | n/a | `INS_SIGN_COMMIT_SWAP` | Gap (no guard to bypass yet) |
 
@@ -292,7 +293,7 @@ Specified as a holder-created capability (spec C9), not yet built
 
 | # | Attack | Prevent | React | Briolette | Status |
 |---|---|---|---|---|---|
-| O1 | Steal the town file | Encrypt at rest, file mode 0600, HSM or offline keys for the root and the clerk's epoch key | Rotate keys | Audit M-4 (0600 permissions); an air-gapped state key | Gap |
+| O1 | Steal the town file | Encrypt at rest, file mode 0600, HSM or offline keys for the root and the clerk's epoch key | Rotate keys | Audit M-4 (0600 permissions); an air-gapped state key | Partial: sealed like any wallet, key file 0600; the role keys sign through the signing log, so the clerk can't roll one epoch twice by accident. Gap: HSM or offline keys |
 | O2 | One operator holds every role | Each role has its own key, so roles can be handed over (principle 22) | n/a | Separate services | Built (separate keys); Gap: handover |
 | O3 | An insider pays itself | Every mint and budget is public; budgets cap issuance | n/a | n/a | Built **+** |
 | O4 | No key rotation | Overlap, migrate, retire, through epoch data | n/a | Repeated key fields | Gap |
@@ -343,11 +344,11 @@ Where pave can do better once this is built:
 
 These are ranked by how much they matter before anyone other than us uses this.
 
-1. **The wallet never signs a basename twice**, with anti-rollback (W2), and **keys encrypted at rest** (W1, O1).
-2. **Attestation and per-class policy** (R1, R2): assurance tiers, lifetimes per tier, ticket budgets.
+1. **Platform keystores and a split key with a card** (W1, W2, O1). The signing log and sealed state are built; on a phone alone the transfer key is still in app memory while it signs ([phone-keys.md](phone-keys.md)).
+2. **Attestation and per-class policy** (R1, R2): assurance tiers set at enrollment, lifetimes per tier, ticket budgets.
 3. **Encrypted peer channel** (P1) and **no-panic fuzzing** (K10).
 4. **Payment handshake**: propose and accept, recipient ticket check, resume after interruption (A6, A7, A9, W10).
-5. **Swapper and validator services** (V1, V3, K11).
+5. **Validator service** (V1).
 6. **Recovery** (section 11).
 7. **Key rotation** for every role (R5, C7, M2, O4).
 8. **Trusted display and PIN** once there is hardware (W4, W5), and caps for agents (W6).

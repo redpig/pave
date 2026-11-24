@@ -15,6 +15,7 @@ use pave_protocol::gossip::Hint;
 use pave_protocol::*;
 use pave_scheme_briolette::{join_nonce, randomize, BrioletteV1, HolderKey, Issuer, JoinReply, JoinRequest, PendingKey};
 use serde::{Deserialize, Serialize};
+use crate::vault::{Keystore, SoftwareKeystore};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -70,6 +71,8 @@ pub struct Operator {
     /// Ticket requests this epoch, by request pseudonym, for the rate limit.
     pub asked: BTreeMap<Vec<u8>, usize>,
     pub asked_epoch: u32,
+    /// Swaps waiting out their hold.
+    pub held: Vec<crate::swap::Held>,
     pub root: HolderKey,
     pub root_cred: Credential,
     pub clerk: HolderKey,
@@ -156,12 +159,14 @@ pub struct Saved {
     pub operator: Option<Operator>,
     pub outbox: Vec<Record>,
     pub cheat_states: Vec<Hash>,
+    pub swaps_held: Vec<Credential>,
+    pub signed_log: Vec<(Hash, Record)>,
 }
 
 /// What two nodes swap when they meet: records, and what travels with a
 /// coin's provenance (tickets for the credentials in those records, epoch
 /// data, evidence). Tickets for unused credentials are never shared.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Bundle {
     pub genesis: Hash,
     pub records: Vec<Record>,
@@ -190,6 +195,12 @@ pub struct Node {
     pub operator: Option<Operator>,
     pub outbox: Vec<Record>,
     pub cheat_states: BTreeSet<Hash>,
+    /// Credentials a swapper owes a fresh coin to, after its hold.
+    pub swaps_held: Vec<Credential>,
+    /// Every state this wallet has signed away, and the record it released.
+    pub signed_log: BTreeMap<Hash, Record>,
+    /// Seals the saved state; see [`crate::vault`].
+    pub vault: std::sync::Mutex<Box<dyn Keystore>>,
 }
 
 fn cash_schema() -> Schema {
@@ -204,7 +215,7 @@ fn cash_schema() -> Schema {
     }
 }
 
-fn apply_ok(view: &mut View<S>, rec: &Record) -> Result<(), String> {
+pub(crate) fn apply_ok(view: &mut View<S>, rec: &Record) -> Result<(), String> {
     match view.apply(rec) {
         Ok(Applied::Accepted) | Ok(Applied::Duplicate) => Ok(()),
         other => Err(format!("{other:?}")),
@@ -284,6 +295,7 @@ impl Node {
             revoked: BTreeMap::new(),
             asked: BTreeMap::new(),
             asked_epoch: 0,
+            held: vec![],
             root,
             root_cred: rc,
             clerk,
@@ -306,6 +318,9 @@ impl Node {
             operator: Some(operator),
             outbox: vec![],
             cheat_states: BTreeSet::new(),
+            swaps_held: vec![],
+            signed_log: BTreeMap::new(),
+            vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(path)?)),
         };
         node.save()?;
         Ok(node)
@@ -366,7 +381,8 @@ impl Node {
         for (i, amount) in credits.iter().enumerate() {
             let op = self.operator.as_mut().unwrap();
             let mint = sign(&s, &op.minter, &op.minter_cred, Op::Mint { budget: op.cash_budget, amount: *amount, to: creds[i].clone(), change_to: op.minter_cred.clone() });
-            op.cash_budget = mint.output(1);
+            let mint = self.guard(mint)?;
+            self.operator.as_mut().unwrap().cash_budget = mint.output(1);
             apply_ok(&mut self.view, &mint)?;
         }
         self.save()?;
@@ -397,6 +413,9 @@ impl Node {
             operator: None,
             outbox: vec![],
             cheat_states: BTreeSet::new(),
+            swaps_held: vec![],
+            signed_log: BTreeMap::new(),
+            vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(out)?)),
         };
         for c in &e.creds {
             let sig = s.sign(&person.key, c, b"pave/enroll-check", None);
@@ -409,8 +428,15 @@ impl Node {
         Ok(person)
     }
 
+    /// Load a wallet sealed by the software keystore beside it.
     pub fn load(path: &Path) -> Result<Node, String> {
-        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        Self::load_with(path, Box::new(SoftwareKeystore::for_state(path)?))
+    }
+
+    /// Load a wallet sealed by `vault`.
+    pub fn load_with(path: &Path, vault: Box<dyn Keystore>) -> Result<Node, String> {
+        let sealed = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let bytes = vault.open(&sealed)?;
         let saved: Saved = ciborium::from_reader(bytes.as_slice()).map_err(|e| e.to_string())?;
         let scheme = BrioletteV1 { group_public_key: saved.town.group_public_key.clone() };
         let mut node = Node {
@@ -428,6 +454,9 @@ impl Node {
             operator: saved.operator,
             outbox: saved.outbox,
             cheat_states: saved.cheat_states.into_iter().collect(),
+            swaps_held: saved.swaps_held,
+            signed_log: saved.signed_log.into_iter().collect(),
+            vault: std::sync::Mutex::new(vault),
         };
         node.absorb_bundle(&Bundle {
             genesis: saved.town.genesis.root_scope(),
@@ -462,11 +491,22 @@ impl Node {
             operator: self.operator.clone(),
             outbox: self.outbox.clone(),
             cheat_states: self.cheat_states.iter().copied().collect(),
+            swaps_held: self.swaps_held.clone(),
+            signed_log: self.signed_log.iter().map(|(h, r)| (*h, r.clone())).collect(),
         };
         let bytes = pave_kernel::hash::encode(&saved);
+        let mut vault = self.vault.lock().unwrap();
+        let sealed = vault.seal(&bytes)?;
         let tmp = self.path.with_extension("tmp");
-        std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
-        std::fs::rename(&tmp, &self.path).map_err(|e| e.to_string())
+        std::fs::write(&tmp, sealed).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, &self.path).map_err(|e| e.to_string())?;
+        vault.commit()
+    }
+
+    /// Move this wallet's state to another keystore, such as a device's.
+    pub fn use_keystore(&mut self, vault: Box<dyn Keystore>) -> Result<(), String> {
+        self.vault = std::sync::Mutex::new(vault);
+        self.save()
     }
 
     pub fn bundle(&self) -> Bundle {
@@ -653,12 +693,36 @@ impl Node {
         n
     }
 
-    fn signed(&self, signer: &Credential, op: Op) -> Record {
-        sign(self.scheme(), &self.key, signer, op)
+    fn signed(&mut self, signer: &Credential, op: Op) -> Result<Record, String> {
+        let rec = sign(self.scheme(), &self.key, signer, op);
+        self.guard(rec)
+    }
+
+    /// The signing log: refuse to release a signature that uses a state this
+    /// wallet already signed away, unless it is the very same operation, in
+    /// which case hand back the record released before (a retry after a
+    /// crash). The log is saved before the signature leaves, so a crash
+    /// can't forget it. Every role key the town holds goes through here too:
+    /// an issuer that signs one epoch twice is caught like any cheat.
+    pub(crate) fn guard(&mut self, rec: Record) -> Result<Record, String> {
+        for b in rec.op.consumes() {
+            if let Some(prior) = self.signed_log.get(&b) {
+                return if prior.op == rec.op && prior.signer == rec.signer {
+                    Ok(prior.clone())
+                } else {
+                    Err(format!("refusing to sign state {} a second time", hex::encode(&b.0[..6])))
+                };
+            }
+        }
+        for b in rec.op.consumes() {
+            self.signed_log.insert(b, rec.clone());
+        }
+        self.save()?;
+        Ok(rec)
     }
 
     fn send_as(&mut self, signer: &Credential, msg: BoardMsg, receipt: Hash) -> Result<Hash, String> {
-        let rec = self.signed(signer, Op::Send { scope: self.town.board, presenting: None, body: msg.encode(), receipt });
+        let rec = self.signed(signer, Op::Send { scope: self.town.board, presenting: None, body: msg.encode(), receipt })?;
         apply_ok(&mut self.view, &rec)?;
         Ok(rec.id())
     }
@@ -676,7 +740,7 @@ impl Node {
             ("public".into(), Receipt::leaf(format!("{title} | pay {pay}").into_bytes())),
             ("parties".into(), Receipt::leaf(b"terms: done when the poster signs off".to_vec())),
         ]);
-        let proof = self.signed(&coin.holder, Op::Split { state: coin.state, parts: vec![(coin.amount, poster.clone()), (0, poster.clone())], receipt: terms.root() });
+        let proof = self.signed(&coin.holder, Op::Split { state: coin.state, parts: vec![(coin.amount, poster.clone()), (0, poster.clone())], receipt: terms.root() })?;
         apply_ok(&mut self.view, &proof)?;
         self.send_as(&poster, BoardMsg::Post { title: title.into(), pay, means: proof.id() }, terms.root())
     }
@@ -717,10 +781,10 @@ impl Node {
         let coin = self.my_coins().into_iter().find(|c| c.amount >= job.pay).ok_or("no single coin covers the pay")?;
         let receipt = board::pay_receipt(&job_id);
         let rec = if coin.amount == job.pay {
-            self.signed(&coin.holder, Op::Transfer { state: coin.state, to: worker, receipt })
+            self.signed(&coin.holder, Op::Transfer { state: coin.state, to: worker, receipt })?
         } else {
             let change = self.fresh()?;
-            self.signed(&coin.holder, Op::Split { state: coin.state, parts: vec![(job.pay, worker), (coin.amount - job.pay, change)], receipt })
+            self.signed(&coin.holder, Op::Split { state: coin.state, parts: vec![(job.pay, worker), (coin.amount - job.pay, change)], receipt })?
         };
         apply_ok(&mut self.view, &rec)?;
         let payment = rec.output(0);
@@ -736,7 +800,7 @@ impl Node {
     /// Plain transfer of a whole coin.
     pub fn spend(&mut self, state: Hash, to: Credential) -> Result<Hash, String> {
         let holder = self.view.coin(&state).filter(|c| self.mine.contains(&c.holder)).ok_or("not a coin this wallet holds")?.holder.clone();
-        let rec = self.signed(&holder, Op::Transfer { state, to, receipt: Hash([0; 32]) });
+        let rec = self.signed(&holder, Op::Transfer { state, to, receipt: Hash([0; 32]) })?;
         apply_ok(&mut self.view, &rec)?;
         Ok(rec.output(0))
     }
@@ -749,7 +813,8 @@ impl Node {
             (_, Some(r)) if self.mine.contains(&r.signer) => r.signer.clone(),
             _ => return Err("not a state this wallet held".into()),
         };
-        let rec = self.signed(&holder, Op::Transfer { state, to, receipt: Hash([0; 32]) });
+        // A tampered wallet: it skips its own signing log.
+        let rec = sign(self.scheme(), &self.key, &holder, Op::Transfer { state, to, receipt: Hash([0; 32]) });
         self.outbox.push(rec.clone());
         self.cheat_states.insert(state);
         Ok(rec.output(0))
@@ -777,6 +842,7 @@ impl Node {
         let coin = self.view.coin(&h.state).ok_or("epoch state missing")?.clone();
         let data = EpochData { sequence: self.town.sequence, number: h.number + 1, revoked };
         let rec = roll(self.view.scheme(), &op.clerk, &self.town.clerk, &coin, &self.town.clerk, &data);
+        let rec = self.guard(rec)?;
         apply_ok(&mut self.view, &rec)?;
         self.know.add_epoch_data(&self.view, data);
         Ok(h.number + 1)
@@ -787,7 +853,9 @@ impl Node {
         let coin = self.view.coin(state).ok_or(Refusal::UnknownState)?;
         let n = coin.history.len();
         let sender = if n >= 2 { coin.history[n - 2].clone() } else { coin.holder.clone() };
-        check(&self.view, &self.know, state, &sender, &self.policy())
+        // This wallet can always prove its own standing.
+        let policy = Policy { require_standing: !self.mine.contains(&sender), ..self.policy() };
+        check(&self.view, &self.know, state, &sender, &policy)
     }
 
     /// The ticket group behind a credential, if this wallet has its ticket.

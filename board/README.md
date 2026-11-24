@@ -9,6 +9,8 @@ A neighborhood work board on pave, and `pave-node`, which runs one wallet as a p
 - **Random groups, on class terms.** Each batch gets a fresh random group out of 4096. The clerk privately maps groups to classes, never to people. Tickets carry the class's terms (software wallets: at most 50 per coin), never the class itself.
 - **One fresh credential per use.** Every holding, and every role in a job (posting, replying, change from a payment), uses a fresh credential, so a wallet's actions are unlinkable unless it uses one state twice.
 - **Ticket privacy.** Tickets travel only for credentials that appear in shared records, never for the unused pool.
+- **Swaps.** The town takes an old coin and pays a fresh one of the same value: a signed quote first, so the holder never signs its coin away before it knows the answer, then the transfer, a public retirement and a mint. Expired coins swap at once. Coins tainted by a revoked group are held for two epochs and paid only if no evidence against their sender surfaces. Known cheats are refused.
+- **Sealed state and the signing log.** A wallet's state file is encrypted and authenticated, and every save seals it under a fresh key and retires the old one. Every signature first goes into the wallet's signing log, saved before the signature leaves, so the wallet never signs one coin state twice, even after a crash. On a rollback-resistant keystore an old copy of the state won't open at all. The keystore here is a file beside the state, which only detects a restore through evidence; see [docs/phone-keys.md](../docs/phone-keys.md).
 - **Revocation.** Evidence names one credential, and standing stops the cheat under all the others. A town can also revoke ticket groups, or close a whole class after a class break: every group it ever gave that class is revoked, and its wallets get no tickets until they update and enroll again. Revocation is cumulative.
 
 - **A job** is a message to the board scope. Its post carries a proof of means: a zero-value split of the poster's coin that commits to the terms.
@@ -31,6 +33,7 @@ It enrolls four neighbors at the town office, each wallet fetches its tickets an
 4. The town also revokes Carol's ticket group. The new epoch spreads by two-tier gossip (53 bytes of hints in one packet, then a 1.7 KB proof fetched because the hint asked for it).
 5. Carol can't refill her tickets; Bob can.
 6. A flaw is found in the software wallet. The town closes the class: Dave, honest but on the same model, can't refill until he re-enrolls, and Alice's hardware wallet carries on.
+7. Weeks pass and Alice's coin reaches its hard expiry. Refused offline, she swaps it with the town for a fresh one.
 
 The whole run takes about 3 seconds. Measured on one core: randomizing a credential takes 1.8 ms, signing with a basename 1.9 ms, verifying 7.4 ms, and proving or checking standing about 3 ms per known cheat (`cargo run --release -p pave-scheme-briolette --example timing`).
 
@@ -40,7 +43,7 @@ The whole run takes about 3 seconds. Measured on one core: randomizing a credent
 
 | Command | Fields | Returns |
 |---|---|---|
-| `whoami` | | `group`, `balance`, `coins`, `epoch`, `tickets_left`, `flagged_groups` |
+| `whoami` | | `class`, `group`, `balance`, `coins`, `epoch`, `tickets_left`, `flagged_groups` |
 | `board` | | `jobs` with status, poster, worker and replies |
 | `post` | `title`, `pay` | `job` |
 | `reply` | `job`, `note` | `message` |
@@ -53,6 +56,8 @@ The whole run takes about 3 seconds. Measured on one core: randomizing a credent
 | `meet` | `peer` (`host:port`) | `new_evidence`, `bytes` |
 | `gossip` | `peer` | `compressed_bytes`, `wants`, `extended_bytes` |
 | `refill` | `peer`, `count` | `tickets` received from the town |
+| `swap` | `peer`, `state` | `paid` (the fresh coin's state), or `held_until` an epoch |
+| `collect` | `peer` | `paid` and `held_until` for swaps whose hold was pending |
 | `evidence` | | `evidence` (state, signer, ticket group, pseudonym size) |
 | `roll` | `revoke` (groups), `revoke_class` (classes) | `epoch`, `revoked_groups` (town operator only) |
 | `cheat` | `state`, `to` | signs a second spend and hides the first, to demonstrate detection |

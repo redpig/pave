@@ -53,7 +53,7 @@ const HELP: &[&str] = &[
     "whoami", "board", "post {title, pay}", "reply {job, note}", "accept {job, worker}", "done {job}",
     "pay {job}", "receive", "check {state}", "spend {state, to}", "cheat {state, to}", "meet {peer}",
     "gossip {peer}", "refill {peer, count}",
-    "evidence", "roll {revoke: [group, ...], revoke_class: [class, ...]} (operator)", "help",
+    "evidence", "swap {peer, state}", "collect {peer}", "roll {revoke: [group, ...], revoke_class: [class, ...]} (operator)", "help",
 ];
 
 fn command(node: &Arc<Mutex<Node>>, v: &Value) -> Result<Value, String> {
@@ -69,6 +69,21 @@ fn command(node: &Arc<Mutex<Node>>, v: &Value) -> Result<Value, String> {
             let peer = v["peer"].as_str().ok_or("missing peer")?;
             let count = v["count"].as_u64().unwrap_or(8) as usize;
             Ok(json!({ "tickets": net::refill(node, peer, count).map_err(|e| e.to_string())? }))
+        }
+        "swap" => {
+            let peer = v["peer"].as_str().ok_or("missing peer")?;
+            let state = parse_hash(v, "state")?;
+            match net::swap(node, peer, state).map_err(|e| e.to_string())? {
+                net::SwapResult::Paid(h) => Ok(json!({ "paid": hx(&h) })),
+                net::SwapResult::Held(until) => Ok(json!({ "held_until": until })),
+            }
+        }
+        "collect" => {
+            let peer = v["peer"].as_str().ok_or("missing peer")?;
+            let got = net::collect(node, peer).map_err(|e| e.to_string())?;
+            let paid: Vec<String> = got.iter().filter_map(|r| if let net::SwapResult::Paid(h) = r { Some(hx(h)) } else { None }).collect();
+            let held: Vec<u32> = got.iter().filter_map(|r| if let net::SwapResult::Held(u) = r { Some(*u) } else { None }).collect();
+            Ok(json!({ "paid": paid, "held_until": held }))
         }
         "gossip" => {
             let peer = v["peer"].as_str().ok_or("missing peer")?;

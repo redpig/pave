@@ -6,6 +6,8 @@
 //!   wants answered with proofs.
 
 use crate::node::{Bundle, Node, RefillRequest, RefillTerms};
+use crate::swap::{Quote, QuoteRequest, SwapOutcome, SwapRequest, Verdict};
+use pave_kernel::{Credential, Hash};
 use pave_protocol::{SignedTicket, Standing};
 use pave_protocol::gossip::{self, Hint, Proof, Want};
 use serde::{Deserialize, Serialize};
@@ -26,6 +28,12 @@ pub enum Wire {
     Refill(Box<RefillRequest>),
     Tickets(Vec<SignedTicket>),
     Refused(String),
+    /// Swaps: a quote on a coin, the transfer, and collecting after a hold.
+    QuoteAsk(Box<QuoteRequest>),
+    Quote(Box<Quote>),
+    Swap(Box<SwapRequest>),
+    Collect(Credential),
+    Swapped(Box<SwapOutcome>),
     /// Proofs that the credentials a wallet paid from aren't known cheats.
     Standing(Vec<Standing>),
 }
@@ -85,7 +93,19 @@ pub fn serve_peer(node: Arc<Mutex<Node>>, mut s: TcpStream) -> std::io::Result<(
                     Ok(t) => Wire::Tickets(t),
                     Err(e) => Wire::Refused(e),
                 },
-                Wire::RefillTerms(_) | Wire::Tickets(_) | Wire::Refused(_) => Wire::Refused("unexpected".into()),
+                Wire::QuoteAsk(q) => match n.quote(&q) {
+                    Ok(q) => Wire::Quote(Box::new(q)),
+                    Err(e) => Wire::Refused(e),
+                },
+                Wire::Swap(r) => match n.answer_swap(&r) {
+                    Ok(o) => Wire::Swapped(Box::new(o)),
+                    Err(e) => Wire::Refused(e),
+                },
+                Wire::Collect(to) => match n.collect_swap(&to) {
+                    Ok(o) => Wire::Swapped(Box::new(o)),
+                    Err(e) => Wire::Refused(e),
+                },
+                Wire::RefillTerms(_) | Wire::Tickets(_) | Wire::Refused(_) | Wire::Quote(_) | Wire::Swapped(_) => Wire::Refused("unexpected".into()),
                 Wire::Standing(v) => {
                     n.absorb_standings(v);
                     Wire::Standing(n.standings())
@@ -180,4 +200,67 @@ pub fn refill(node: &Arc<Mutex<Node>>, addr: &str, count: usize) -> std::io::Res
     };
     let _ = n.save();
     Ok(got)
+}
+
+/// What a swap came to, for the holder.
+pub enum SwapResult {
+    Paid(Hash),
+    Held(u32),
+}
+
+fn ask(s: &mut TcpStream, m: &Wire) -> std::io::Result<Wire> {
+    write_msg(s, m)?;
+    match read_msg(s)?.0 {
+        Wire::Refused(e) => Err(std::io::Error::other(e)),
+        w => Ok(w),
+    }
+}
+
+/// Swap the coin at `state` with the town: a quote first, then the transfer.
+pub fn swap(node: &Arc<Mutex<Node>>, addr: &str, state: Hash) -> std::io::Result<SwapResult> {
+    let mut s = TcpStream::connect(addr)?;
+    let mut cheats = pave_protocol::cheat_list(&node.lock().unwrap().view);
+    let quote = loop {
+        let req = node.lock().unwrap().quote_request(state, &cheats).map_err(std::io::Error::other)?;
+        let Wire::Quote(q) = ask(&mut s, &Wire::QuoteAsk(Box::new(req)))? else { return Err(std::io::Error::other("unexpected reply")) };
+        match &q.verdict {
+            Verdict::NeedStanding(list) if *list != cheats => cheats = list.clone(),
+            _ => break q,
+        }
+    };
+    let req = node.lock().unwrap().swap_request(&quote).map_err(std::io::Error::other)?;
+    let to = req.to.clone();
+    let Wire::Swapped(out) = ask(&mut s, &Wire::Swap(Box::new(req)))? else { return Err(std::io::Error::other("unexpected reply")) };
+    finish_swap(node, &to, &out)
+}
+
+/// Collect every swap this wallet is owed whose hold is over.
+pub fn collect(node: &Arc<Mutex<Node>>, addr: &str) -> std::io::Result<Vec<SwapResult>> {
+    let mut s = TcpStream::connect(addr)?;
+    let owed = node.lock().unwrap().swaps_held.clone();
+    let mut out = vec![];
+    for to in owed {
+        let Wire::Swapped(o) = ask(&mut s, &Wire::Collect(to.clone()))? else { return Err(std::io::Error::other("unexpected reply")) };
+        out.push(finish_swap(node, &to, &o)?);
+    }
+    Ok(out)
+}
+
+fn finish_swap(node: &Arc<Mutex<Node>>, to: &Credential, out: &SwapOutcome) -> std::io::Result<SwapResult> {
+    let mut n = node.lock().unwrap();
+    let r = match out {
+        SwapOutcome::Held { until } => {
+            if !n.swaps_held.contains(to) {
+                n.swaps_held.push(to.clone());
+            }
+            SwapResult::Held(*until)
+        }
+        SwapOutcome::Paid { .. } => {
+            let fresh = n.take_swap(out).map_err(std::io::Error::other)?.expect("paid");
+            n.swaps_held.retain(|c| c != to);
+            SwapResult::Paid(fresh)
+        }
+    };
+    let _ = n.save();
+    Ok(r)
 }

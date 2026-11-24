@@ -176,6 +176,18 @@ def main():
         print(f"  dave's software wallet, honest but the same model: {RED}{r.get('error', r)}{OFF}")
         got = alice("refill", quiet=True, peer=town.addr, count=8)["tickets"]
         print(f"  alice's hardware wallet carries on: {GREEN}{got} tickets{OFF}")
+
+        say("9. Weeks pass: Alice's coin reaches the end of its life, and she swaps it")
+        for _ in range(8):
+            town("roll", quiet=True)
+        alice("gossip", quiet=True, peer=town.addr)
+        coin = alice("whoami", quiet=True)["coins"][0]
+        r = alice("check", quiet=True, state=coin["state"])
+        print(f"  her {coin['amount']} is refused offline now: {RED}{r['refusal']}{OFF}")
+        alice("refill", quiet=True, peer=town.addr, count=8)
+        r = alice("swap", quiet=True, peer=town.addr, state=coin["state"])
+        r2 = alice("check", quiet=True, state=r["paid"])
+        print(f"  quote, transfer, retire, mint: a fresh {coin['amount']}, accepted again: {GREEN}{r2['accept']}{OFF}")
     finally:
         for n in nodes:
             n.stop()
