@@ -16,19 +16,31 @@ A pavé setting is many small stones set close together to make one surface. Her
 
 The values behind it are in [docs/principles.md](docs/principles.md), and the reasoning behind each decision is in [docs/design-log.md](docs/design-log.md).
 
+## Code
+
+- [kernel/](kernel/): `pave-kernel`, the kernel in Rust. Scopes, shared and exclusive capabilities, signed records, local views that merge after being apart (first seen wins, a second use becomes evidence), receipts with partial reveal, and runtime checks named after the TLA+ properties. Credentials and signatures are opaque behind a `Scheme` trait.
+- [schemes/briolette/](schemes/briolette/): Briolette v1 (ECDAA over BLS12-381) as a scheme. Holdings are unlinkable, and a second use links only through its 48-byte pseudonym.
+
+```bash
+cargo test
+```
+
 ## Checking it
 
-- [formal/](formal/): TLA+ models with fault injection. Each injected fault is caught by the property meant to catch it, and the safe configurations pass.
+- [formal/](formal/): TLA+ models with fault injection. Each injected fault is caught by the property meant to catch it, and the safe configurations pass. [TRACEABILITY.md](formal/TRACEABILITY.md) maps every kernel invariant to its TLA+ properties, Rust checks and tests.
+- [kernel/tests/](kernel/tests/): tests named after the TLA+ faults, plus a property test over random offline histories with a dishonest holder.
+- [verus/](verus/): a Verus spec of the spend step (a draft, not yet checked).
 - [sim/](sim/): simulations of gossip benefit and bytes on the wire.
 
 ## Status
 
-This is a draft design, not an implementation. Nothing here handles real money; demos use test credit only.
+A draft design with a first kernel implementation. Nothing here handles real money; demos use test credit only.
 
-Not yet in this repo:
+Next:
+- a protocol crate: epochs as sequences, tickets, expiry across history, two-tier gossip
+- the civic work board profile, running offline between two devices
+- checking the Verus spec, then extending it to conservation
 - the mechanisms and use-case write-ups
-- an updated encoding sketch (FIDL and CBOR/CDDL)
-- a reference implementation
 
 ## License
 

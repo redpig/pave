@@ -1,0 +1,12 @@
+[package]
+name = "pave-scheme-briolette"
+version = "0.1.0"
+description = "Briolette v1 (ECDAA over BLS12-381) as a pave credential scheme"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+pave-kernel = { path = "../../kernel" }
+briolette-crypto = { git = "https://github.com/redpig/briolette", package = "briolette-crypto" }
+rand = "0.8"

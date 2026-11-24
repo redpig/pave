@@ -1,0 +1,18 @@
+[package]
+name = "pave-kernel"
+version = "0.1.0"
+description = "The pave kernel: three objects, holding, schemas, receipts and six invariants"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+ciborium = "0.2"
+sha2 = "0.10"
+thiserror = "1"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+
+[dev-dependencies]
+proptest = "1"
