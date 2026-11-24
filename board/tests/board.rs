@@ -1,8 +1,11 @@
-//! The work-board story in process: two wallets meeting by swapping bundles.
+//! The work-board story in process, on Briolette v1 credentials: wallets
+//! meeting by swapping bundles, as phones would.
 
 use pave_board::board::{jobs, Status};
 use pave_board::node::Node;
+use pave_protocol::gossip;
 use pave_protocol::Refusal;
+use std::collections::BTreeSet;
 
 fn meet(a: &mut Node, b: &mut Node) {
     let (ba, bb) = (a.bundle(), b.bundle());
@@ -12,26 +15,36 @@ fn meet(a: &mut Node, b: &mut Node) {
     b.outbox.clear();
 }
 
+/// Two-tier gossip from `from` to `to`, in process.
+fn gossip_to(from: &Node, to: &mut Node) {
+    let hints = gossip::hints(&from.view, &from.know, &from.carries());
+    gossip::absorb_hints(&mut to.know, &hints);
+    let wants = gossip::wants(&to.view, &to.know, &to.carries(), &to.watch());
+    let proofs = gossip::serve(&from.view, &from.know, &from.carries(), &wants);
+    gossip::absorb(&mut to.view, &mut to.know, proofs);
+}
+
 #[test]
-fn post_accept_done_pay_then_catch_a_double_spend() {
+fn the_whole_story_on_ecdaa() {
     let dir = std::env::temp_dir().join(format!("pave-board-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut town = Node::init_town(&dir.join("town"), "test").unwrap();
-    let mut alice = town.enroll("alice", &dir.join("alice"), 100).unwrap();
-    let mut bob = town.enroll("bob", &dir.join("bob"), 20).unwrap();
-    let mut carol = town.enroll("carol", &dir.join("carol"), 20).unwrap();
+    let mut alice = town.enroll("alice", &dir.join("alice"), &[100]).unwrap();
+    let mut bob = town.enroll("bob", &dir.join("bob"), &[20]).unwrap();
+    let mut carol = town.enroll("carol", &dir.join("carol"), &[20, 20]).unwrap();
     meet(&mut alice, &mut bob);
     meet(&mut alice, &mut carol);
 
+    // The job.
     let job = alice.post("Fix the fence", 30).unwrap();
     meet(&mut alice, &mut bob);
     bob.reply(job, "Saturday").unwrap();
     meet(&mut alice, &mut bob);
-    alice.accept(job, bob.me.clone()).unwrap();
+    let worker = jobs(&alice.view, &alice.town.board)[&job].replies[0].0.clone();
+    alice.accept(job, worker).unwrap();
     assert!(alice.pay(job).is_err(), "can't pay before the work is done");
     meet(&mut alice, &mut bob);
-    alice.done(job).unwrap(); // anyone can say it; only the worker's counts
-    assert_eq!(jobs(&alice.view, &alice.town.board)[&job].status, Status::Accepted);
+    assert!(alice.done(job).is_err(), "only the accepted worker marks done");
     bob.done(job).unwrap();
     meet(&mut alice, &mut bob);
     let payment = alice.pay(job).unwrap();
@@ -39,17 +52,51 @@ fn post_accept_done_pay_then_catch_a_double_spend() {
     assert_eq!(jobs(&bob.view, &bob.town.board)[&job].status, Status::Paid);
     assert_eq!(bob.check(&payment), Ok(()));
     assert_eq!(bob.my_coins().iter().map(|c| c.amount).sum::<u64>(), 50);
+    assert_eq!(alice.my_coins().iter().map(|c| c.amount).sum::<u64>(), 70);
 
-    let coin = carol.my_coins()[0].state;
-    let to_bob = carol.cheat(coin, bob.me.clone()).unwrap();
+    // Unlinkable: every credential alice used is distinct.
+    let alice_signers: BTreeSet<_> = alice.view.records().iter().filter(|r| alice.mine.contains(&r.signer)).map(|r| &r.signer).collect();
+    assert!(alice_signers.len() >= 2);
+
+    // The double spend.
+    let coins = carol.my_coins();
+    let (coin, other) = (coins[0].state, coins[1].state);
+    let to_bob = carol.cheat(coin, bob.receive().unwrap()).unwrap();
     meet(&mut carol, &mut bob);
-    carol.cheat(coin, alice.me.clone()).unwrap();
+    carol.cheat(coin, alice.receive().unwrap()).unwrap();
     meet(&mut carol, &mut alice);
     assert!(alice.view.flagged().is_empty() && bob.view.flagged().is_empty(), "nobody can tell yet");
     meet(&mut alice, &mut bob);
     for n in [&alice, &bob] {
-        assert_eq!(n.view.flagged(), [carol.me.clone()].into_iter().collect());
+        let flagged = n.view.flagged();
+        assert_eq!(flagged.len(), 1);
+        assert_eq!(n.group_of(flagged.iter().next().unwrap()), Some(carol.group), "evidence leads to carol's group only");
     }
     assert_eq!(bob.check(&to_bob), Err(Refusal::KnownCheat));
+
+    // Carol's other coin is held under an unlinkable credential: still accepted...
+    let paid_alice = carol.spend(other, alice.receive().unwrap()).unwrap();
+    meet(&mut carol, &mut alice);
+    assert_eq!(alice.check(&paid_alice), Ok(()));
+
+    // ...until the town revokes her group and the epoch reaches alice by gossip.
+    meet(&mut bob, &mut town);
+    town.roll_epoch([carol.group].into_iter().collect()).unwrap();
+    gossip_to(&town, &mut alice);
+    assert!(matches!(alice.check(&paid_alice), Err(Refusal::Revoked { group, .. }) if group == carol.group));
+
+    // Tickets refill from the town, in the asker's group.
+    let before = bob.pool.len();
+    let (creds, by, sig) = bob.refill_request(4).unwrap();
+    let t = town.answer_refill(&creds, &by, &sig).unwrap();
+    assert!(t.iter().all(|t| t.ticket.group == bob.group));
+    assert_eq!(bob.take_tickets(t), 4);
+    assert_eq!(bob.pool.len(), before + 4);
+
+    // Saved state replays to the same wallet.
+    alice.save().unwrap();
+    let again = Node::load(&alice.path).unwrap();
+    assert_eq!(again.my_coins(), alice.my_coins());
+    assert_eq!(again.view.flagged(), alice.view.flagged());
     let _ = std::fs::remove_dir_all(&dir);
 }

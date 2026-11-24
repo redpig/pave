@@ -20,7 +20,7 @@ The values behind it are in [docs/principles.md](docs/principles.md), and the re
 
 - [kernel/](kernel/): `pave-kernel`, the kernel in Rust. Scopes, shared and exclusive capabilities, signed records, local views that merge after being apart (first seen wins, a second use becomes evidence), receipts with partial reveal, and runtime checks named after the TLA+ properties. Credentials and signatures are opaque behind a `Scheme` trait.
 - [protocol/](protocol/): `pave-protocol`. Epoch sequences, where rolling is spending, so two versions of an epoch are an ordinary conflict. Tickets checked across a coin's whole history, each against its own clerk's sequence. Recipient policy for expiry, transfer limits, revocation and evidence. Two-tier gossip: compressed hints that fit one packet, and per-hint proofs.
-- [board/](board/): a neighborhood work board on pave, and `pave-node`, a wallet process driven by JSON lines on stdin, by a person, a script or an agent alike. [demo/board_demo.py](demo/board_demo.py) runs the whole story across separate processes: a job posted, done and paid offline, a double-spend caught when two neighbors meet, and a revocation spread by two-tier gossip.
+- [board/](board/): a neighborhood work board on pave, and `pave-node`, a wallet process on Briolette v1 credentials, driven by JSON lines on stdin by a person, a script or an agent alike. Wallets prefetch tickets, use a fresh credential for every holding and role, and refill from the town. [demo/board_demo.py](demo/board_demo.py) runs the whole story across separate processes: a job posted, done and paid offline, a double-spend caught when two neighbors meet, and a revocation spread by two-tier gossip.
 - [schemes/briolette/](schemes/briolette/): Briolette v1 (ECDAA over BLS12-381) as a scheme. Holdings are unlinkable, and a second use links only through its 48-byte pseudonym.
 
 ```bash
@@ -40,7 +40,8 @@ A draft design with a first kernel implementation. Nothing here handles real mon
 
 Next:
 - swaps, and recovery as a self-minted capability
-- the work board on two phones, and with Briolette v1 credentials (prefetched tickets)
+- incremental sync between wallets
+- the work board on two phones
 - checking the Verus spec, then extending it to conservation
 - the mechanisms and use-case write-ups
 

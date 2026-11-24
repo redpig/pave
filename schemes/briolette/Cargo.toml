@@ -10,3 +10,4 @@ repository.workspace = true
 pave-kernel = { path = "../../kernel" }
 briolette-crypto = { git = "https://github.com/redpig/briolette", package = "briolette-crypto" }
 rand = "0.8"
+serde = { version = "1", features = ["derive"] }

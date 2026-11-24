@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! pave-node init   --town town.pave [--label NAME]
-//! pave-node enroll --town town.pave --name alice --out alice.pave [--credit 100]
+//! pave-node enroll --town town.pave --name alice --out alice.pave [--credit 100,20]
 //! pave-node run    --state alice.pave --listen 127.0.0.1:7001
 //! ```
 //!
@@ -49,7 +49,8 @@ fn parse_cred(v: &Value, k: &str) -> Result<Credential, String> {
 
 const HELP: &[&str] = &[
     "whoami", "board", "post {title, pay}", "reply {job, note}", "accept {job, worker}", "done {job}",
-    "pay {job}", "check {state}", "spend {state, to}", "cheat {state, to}", "meet {peer}", "gossip {peer}",
+    "pay {job}", "receive", "check {state}", "spend {state, to}", "cheat {state, to}", "meet {peer}",
+    "gossip {peer}", "refill {peer, count}",
     "evidence", "roll {revoke: [group, ...]} (operator)", "help",
 ];
 
@@ -61,6 +62,11 @@ fn command(node: &Arc<Mutex<Node>>, v: &Value) -> Result<Value, String> {
             let peer = v["peer"].as_str().ok_or("missing peer")?;
             let (new, bytes) = net::meet(node, peer).map_err(|e| e.to_string())?;
             Ok(json!({ "new_evidence": new.iter().map(hx).collect::<Vec<_>>(), "bytes": bytes }))
+        }
+        "refill" => {
+            let peer = v["peer"].as_str().ok_or("missing peer")?;
+            let count = v["count"].as_u64().unwrap_or(8) as usize;
+            Ok(json!({ "tickets": net::refill(node, peer, count).map_err(|e| e.to_string())? }))
         }
         "gossip" => {
             let peer = v["peer"].as_str().ok_or("missing peer")?;
@@ -82,9 +88,10 @@ fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
             let coins: Vec<Value> = n.my_coins().iter().map(|c| json!({ "state": hx(&c.state), "amount": c.amount, "hops": c.hops })).collect();
             let balance: u64 = n.my_coins().iter().map(|c| c.amount).sum();
             let epoch = pave_protocol::head(&n.view, &n.town.sequence).map(|h| h.number);
+            let flagged: Vec<Value> = n.view.flagged().iter().map(|c| json!(n.group_of(c))).collect();
             Ok(json!({
-                "name": n.name, "me": cx(&n.me), "group": n.group(), "balance": balance, "coins": coins, "epoch": epoch,
-                "flagged": n.view.flagged().iter().map(cx).collect::<Vec<_>>(),
+                "name": n.name, "group": n.group, "balance": balance, "coins": coins, "epoch": epoch,
+                "tickets_left": n.pool.len(), "flagged_groups": flagged,
             }))
         }
         "board" => {
@@ -114,10 +121,13 @@ fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
                 Err(r) => json!({ "accept": false, "refusal": format!("{r:?}") }),
             })
         }
+        "receive" => Ok(json!({ "credential": cx(&n.receive()?) })),
         "spend" => Ok(json!({ "state": hx(&n.spend(parse_hash(v, "state")?, parse_cred(v, "to")?)?) })),
         "cheat" => Ok(json!({ "state": hx(&n.cheat(parse_hash(v, "state")?, parse_cred(v, "to")?)?) })),
         "evidence" => Ok(json!({
-            "evidence": n.view.evidence().map(|e| json!({ "state": hx(&e.basename), "signer": cx(&e.signer) })).collect::<Vec<_>>()
+            "evidence": n.view.evidence().map(|e| json!({
+                "state": hx(&e.basename), "signer": cx(&e.signer), "group": n.group_of(&e.signer), "nym_bytes": e.nym.len(),
+            })).collect::<Vec<_>>()
         })),
         "roll" => {
             let revoked: BTreeSet<u32> = v["revoke"].as_array().map(|a| a.iter().filter_map(|x| x.as_u64()).map(|x| x as u32).collect()).unwrap_or_default();
@@ -143,12 +153,12 @@ fn run(state: PathBuf, listen: String) {
             std::thread::spawn(move || net::serve_peer(n, conn));
         }
     });
-    let (name, me) = {
+    let (name, group) = {
         let n = node.lock().unwrap();
-        (n.name.clone(), cx(&n.me))
+        (n.name.clone(), n.group)
     };
     let mut out = std::io::stdout();
-    writeln!(out, "{}", json!({ "event": "ready", "name": name, "me": me, "listen": listen })).ok();
+    writeln!(out, "{}", json!({ "event": "ready", "name": name, "group": group, "listen": listen })).ok();
     out.flush().ok();
     for line in std::io::stdin().lock().lines() {
         let Ok(line) = line else { break };
@@ -186,16 +196,16 @@ fn main() {
             let town = PathBuf::from(need(&args, "--town"));
             let name = need(&args, "--name");
             let out = PathBuf::from(need(&args, "--out"));
-            let credit: u64 = arg(&args, "--credit").and_then(|c| c.parse().ok()).unwrap_or(0);
+            let credits: Vec<u64> = arg(&args, "--credit").map(|c| c.split(',').filter_map(|x| x.parse().ok()).collect()).unwrap_or_default();
             let mut t = Node::load(&town).unwrap_or_else(|e| {
                 eprintln!("{e}");
                 std::process::exit(1)
             });
-            let p = t.enroll(&name, &out, credit).unwrap_or_else(|e| {
+            let p = t.enroll(&name, &out, &credits).unwrap_or_else(|e| {
                 eprintln!("{e}");
                 std::process::exit(1)
             });
-            println!("{}", json!({ "ok": true, "name": name, "me": cx(&p.me), "credit": credit }));
+            println!("{}", json!({ "ok": true, "name": name, "group": p.group, "credit": credits, "tickets": p.pool.len() }));
         }
         Some("run") => run(PathBuf::from(need(&args, "--state")), need(&args, "--listen")),
         _ => {

@@ -22,13 +22,16 @@ pub struct BrioletteV1 {
     pub group_public_key: Vec<u8>,
 }
 
-/// An issuer of holder credentials (in Briolette terms, the ticket clerk).
+/// The group issuer: enrolls members by issuing their credentials. In pave
+/// terms, the registrar.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Issuer {
     secret_key: Vec<u8>,
     pub group_public_key: Vec<u8>,
 }
 
-/// A holder's secret key and its issued (base) credential.
+/// A holder's secret key and its issued (base) credential. Keep it secret.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct HolderKey {
     secret_key: Vec<u8>,
     credential: Vec<u8>,

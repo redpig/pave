@@ -5,6 +5,8 @@
 //!   wants answered with proofs.
 
 use crate::node::{Bundle, Node};
+use pave_kernel::{Credential, Sig};
+use pave_protocol::SignedTicket;
 use pave_protocol::gossip::{self, Hint, Proof, Want};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -17,6 +19,9 @@ pub enum Wire {
     Hints(Vec<Hint>),
     Wants(Vec<Want>),
     Proofs(Vec<Proof>),
+    /// Ask the town for tickets for these fresh credentials.
+    Refill { creds: Vec<Credential>, by: Credential, sig: Sig },
+    Tickets(Vec<SignedTicket>),
 }
 
 pub fn write_msg(s: &mut TcpStream, m: &Wire) -> std::io::Result<usize> {
@@ -66,6 +71,8 @@ pub fn serve_peer(node: Arc<Mutex<Node>>, mut s: TcpStream) -> std::io::Result<(
                     gossip::absorb(&mut n.view, &mut n.know, p);
                     Wire::Proofs(vec![])
                 }
+                Wire::Refill { creds, by, sig } => Wire::Tickets(n.answer_refill(&creds, &by, &sig).unwrap_or_default()),
+                Wire::Tickets(_) => Wire::Tickets(vec![]),
             };
             let _ = n.save();
             r
@@ -126,4 +133,19 @@ pub fn gossip_with(node: &Arc<Mutex<Node>>, addr: &str) -> std::io::Result<(usiz
         let _ = n.save();
     }
     Ok((compressed.max(theirs_bytes), got, n_wants))
+}
+
+/// Refill this wallet's ticket pool from the town. Returns tickets received.
+pub fn refill(node: &Arc<Mutex<Node>>, addr: &str, count: usize) -> std::io::Result<usize> {
+    let (creds, by, sig) = node.lock().unwrap().refill_request(count).map_err(std::io::Error::other)?;
+    let mut s = TcpStream::connect(addr)?;
+    write_msg(&mut s, &Wire::Refill { creds, by, sig })?;
+    let (reply, _) = read_msg(&mut s)?;
+    let mut n = node.lock().unwrap();
+    let got = match reply {
+        Wire::Tickets(t) => n.take_tickets(t),
+        _ => 0,
+    };
+    let _ = n.save();
+    Ok(got)
 }

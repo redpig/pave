@@ -9,7 +9,9 @@ also how an agent would drive a wallet.
     cargo build --release -p pave-board
     python3 demo/board_demo.py [--bin target/release/pave-node]
 
-Test credit only; it has no cash value.
+Credentials are Briolette v1 (ECDAA over BLS12-381): each holding and each
+job role uses a fresh, unlinkable credential from the wallet's prefetched
+tickets. Test credit only; it has no cash value.
 """
 import argparse
 import json
@@ -29,7 +31,7 @@ class Node:
         self.p = subprocess.Popen([binary, "run", "--state", state, "--listen", self.addr],
                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
         ready = json.loads(self.p.stdout.readline())
-        self.me = ready["me"]
+        self.group = ready["group"]
 
     def __call__(self, cmd, quiet=False, **kw):
         req = {"cmd": cmd, **kw}
@@ -76,9 +78,9 @@ def main():
     say("At the town office (online, once): create the town and enroll three neighbors")
     cli("init", "--town", town_file, "--label", "Elm Street")
     people = {}
-    for name, credit in [("alice", 100), ("bob", 20), ("carol", 20)]:
-        r = cli("enroll", "--town", town_file, "--name", name, "--out", os.path.join(d, f"{name}.pave"), "--credit", str(credit))
-        print(f"  enrolled {name}: ticket + {credit} test credit")
+    for name, credit in [("alice", "100"), ("bob", "20"), ("carol", "20,20")]:
+        r = cli("enroll", "--town", town_file, "--name", name, "--out", os.path.join(d, f"{name}.pave"), "--credit", credit)
+        print(f"  enrolled {name}: group {r['group']}, {r['tickets']} prefetched tickets, test credit {credit}")
     nodes = [Node(args.bin, town_file, args.port, "town")]
     for i, name in enumerate(["alice", "bob", "carol"]):
         people[name] = Node(args.bin, os.path.join(d, f"{name}.pave"), args.port + 1 + i, name)
@@ -95,7 +97,8 @@ def main():
         say("2. Bob replies; Alice accepts him; Bob finishes; Alice pays")
         bob("reply", job=job, note="I can do it Saturday")
         bob.meet(alice)
-        alice("accept", job=job, worker=bob.me)
+        worker = alice("board", quiet=True)["jobs"][0]["replies"][0]["from"]
+        alice("accept", job=job, worker=worker)
         alice.meet(bob)
         bob("done", job=job)
         bob.meet(alice)
@@ -107,38 +110,48 @@ def main():
         print(f"  balances: alice {alice('whoami', quiet=True)['balance']}, bob {bob('whoami', quiet=True)['balance']}")
 
         say("3. Offline: Carol spends the same 20 twice, to Bob and to Alice")
-        coin = carol("whoami", quiet=True)["coins"][0]["state"]
-        to_bob = carol("cheat", state=coin, to=bob.me)["state"]
+        coins = carol("whoami", quiet=True)["coins"]
+        coin, other = coins[0]["state"], coins[1]["state"]
+        to_bob = carol("cheat", state=coin, to=bob("receive", quiet=True)["credential"])["state"]
         carol.meet(bob)
-        carol("cheat", state=coin, to=alice.me)
+        carol("cheat", state=coin, to=alice("receive", quiet=True)["credential"])
         carol.meet(alice)
         print(f"  bob and alice each hold a coin from carol; neither can tell yet")
         print(f"  evidence so far: bob {len(bob('evidence', quiet=True)['evidence'])}, alice {len(alice('evidence', quiet=True)['evidence'])}")
 
-        say("4. Bob and Alice meet: the conflict surfaces, naming only Carol")
-        r = alice.meet(bob)
-        ev = alice("evidence", quiet=True)["evidence"]
-        names = {alice.me: "alice", bob.me: "bob", carol.me: "carol"}
-        for e in ev:
-            print(f"  evidence: state {short(e['state'])} used twice by {RED}{names.get(e['signer'], '?')}{OFF}")
-        print(f"  flagged at alice: {[names[c] for c in alice('whoami', quiet=True)['flagged']]}, at bob: {[names[c] for c in bob('whoami', quiet=True)['flagged']]}")
+        say("4. Bob and Alice meet: the conflict surfaces, and leads only to Carol's group")
+        alice.meet(bob)
+        names = {alice.group: "alice", bob.group: "bob", carol.group: "carol"}
+        for e in alice("evidence", quiet=True)["evidence"]:
+            print(f"  evidence: state {short(e['state'])} used twice by one credential "
+                  f"(linked by a {e['nym_bytes']}-byte pseudonym), ticket group {e['group']} = {RED}{names.get(e['group'], '?')}{OFF}")
         r = bob("check", quiet=True, state=to_bob)
-        print(f"  bob's wallet now refuses carol's coin: {RED}{r['refusal']}{OFF}")
+        print(f"  bob's wallet now refuses that coin: {RED}{r['refusal']}{OFF}")
         print(f"  first seen wins: each keeps the copy they saw first; the loser holds proof for a claim")
 
-        say("5. The town learns, revokes Carol's ticket group, and the news spreads by two-tier gossip")
+        say("5. Carol's other coin is unlinkable, so it still passes")
+        paid = carol("spend", state=other, to=alice("receive", quiet=True)["credential"])["state"]
+        carol.meet(alice)
+        print(f"  alice would accept it: {GREEN}{alice('check', quiet=True, state=paid)['accept']}{OFF}")
+
+        say("6. The town revokes Carol's ticket group; the epoch spreads by two-tier gossip")
         bob.meet(town)  # Bob reports in when he's next online
-        group = carol("whoami", quiet=True)["group"]
-        epoch = town("roll", revoke=[group])["epoch"]
-        print(f"  town rolls to epoch {epoch}, revoking group {group}")
+        epoch = town("roll", revoke=[carol.group])["epoch"]
+        print(f"  town rolls to epoch {epoch}, revoking group {carol.group}")
         g = alice("gossip", quiet=True, peer=town.addr)
         print(f"  alice ⇄ town gossip: hints {g['compressed_bytes']} B (one packet), "
               f"{g['wants']} want(s), proofs {g['extended_bytes']} B")
+        r = alice("check", quiet=True, state=paid)
+        print(f"  alice now refuses carol's other coin: {RED}{r['refusal']}{OFF}")
         g = bob("gossip", quiet=True, peer=alice.addr)
         print(f"  bob ⇄ alice gossip: hints {g['compressed_bytes']} B, {g['wants']} want(s), proofs {g['extended_bytes']} B")
-        print(f"  epoch now: alice {alice('whoami', quiet=True)['epoch']}, bob {bob('whoami', quiet=True)['epoch']}")
         g = bob("gossip", quiet=True, peer=alice.addr)
         print(f"  again: {g['wants']} wants — quiet once everyone is current")
+
+        say("7. Bob tops up his tickets when he next sees the town")
+        left = bob("whoami", quiet=True)["tickets_left"]
+        got = bob("refill", quiet=True, peer=town.addr, count=8)["tickets"]
+        print(f"  bob had {left} unused tickets, received {got} more in group {bob.group}")
     finally:
         for n in nodes:
             n.stop()

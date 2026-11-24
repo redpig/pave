@@ -537,10 +537,10 @@ name = "pave-board"
 version = "0.1.0"
 dependencies = [
  "ciborium",
- "ed25519-dalek",
  "hex",
  "pave-kernel",
  "pave-protocol",
+ "pave-scheme-briolette",
  "serde",
  "serde_json",
 ]
@@ -574,6 +574,7 @@ dependencies = [
  "briolette-crypto",
  "pave-kernel",
  "rand 0.8.8",
+ "serde",
 ]
 
 [[package]]

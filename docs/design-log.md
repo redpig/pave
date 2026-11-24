@@ -27,6 +27,13 @@ Decisions behind the current [kernel](../spec/kernel.md) and [protocol](../spec/
 - **Expiry across the whole history.** Expiry runs from every ticket in a coin's history, each checked against its own issuer's sequence. A recipient needs each sequence's latest epoch to check it.
 - **Composable epochs.** Different capabilities can count different issuers' epochs. There is no shared clock.
 
+## Wallets
+
+- **Prefetched tickets.** A wallet enrolls once and gets a batch of tickets, each certifying a fresh randomized credential in its revocation group. Every holding and every role uses a fresh one, so actions are unlinkable unless a state is used twice.
+- **Tickets travel with provenance.** A wallet shares tickets only for credentials that appear in records it shares, never its unused pool.
+- **Refills are authenticated** by one of the wallet's own credentials, so the clerk issues in the right group without learning anything new.
+- **Revocation by group.** Evidence names one credential; its ticket's group leads to the wallet. Revoking the group in an epoch catches the cheater's other, unlinkable coins once the epoch reaches a recipient.
+
 ## Gossip
 
 - **Gossip is an optimization; nothing depends on it.** It never carries transfer records, so it carries no transaction graph.
