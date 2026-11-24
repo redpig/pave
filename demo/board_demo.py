@@ -118,6 +118,16 @@ def main():
         print(f"  job is {status}; bob's wallet would accept the payment: {GREEN}{check['accept']}{OFF}")
         print(f"  balances: alice {alice('whoami', quiet=True)['balance']}, bob {bob('whoami', quiet=True)['balance']}")
 
+        say("2b. Bob pays Alice 10 directly: only that coin's provenance travels")
+        r = bob("send", quiet=True, peer=alice.addr, amount=10, memo="fence paint")
+        total = sum(x["bytes"] for x in r["steps"])
+        detail = ", ".join(f"{x['step']} {x['bytes']} B" for x in r["steps"])
+        print(f"  {detail}")
+        print(f"  {total} B in all, about {-(-total // 244)} BLE packets; paid: {GREEN}{'paid' in r}{OFF}")
+        r = bob("send", quiet=True, peer=alice.addr, amount=5, memo="more paint")
+        total2 = sum(x["bytes"] for x in r["steps"])
+        print(f"  a second payment from the same coin's change: {total2} B, since alice already has its history")
+
         say("3. Offline: Carol spends the same 20 twice, to Bob and to Alice")
         coins = carol("whoami", quiet=True)["coins"]
         coin, other = coins[0]["state"], coins[1]["state"]

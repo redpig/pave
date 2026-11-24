@@ -9,7 +9,7 @@ use std::fmt;
 
 /// A 32-byte SHA-256 digest.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct Hash(pub [u8; 32]);
+pub struct Hash(#[serde(with = "serde_bytes")] pub [u8; 32]);
 
 impl Hash {
     pub fn as_bytes(&self) -> &[u8] {

@@ -17,11 +17,11 @@ use std::fmt;
 
 /// A public holding credential, opaque to the kernel.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct Credential(pub Vec<u8>);
+pub struct Credential(#[serde(with = "serde_bytes")] pub Vec<u8>);
 
 /// A signature, opaque to the kernel.
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Sig(pub Vec<u8>);
+pub struct Sig(#[serde(with = "serde_bytes")] pub Vec<u8>);
 
 impl fmt::Debug for Credential {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -9,6 +9,8 @@ A neighborhood work board on pave, and `pave-node`, which runs one wallet as a p
 - **Random groups, on class terms.** Each batch gets a fresh random group out of 4096. The clerk privately maps groups to classes, never to people. Tickets carry the class's terms (software wallets: at most 50 per coin), never the class itself.
 - **One fresh credential per use.** Every holding, and every role in a job (posting, replying, change from a payment), uses a fresh credential, so a wallet's actions are unlinkable unless it uses one state twice.
 - **Ticket privacy.** Tickets travel only for credentials that appear in shared records, never for the unused pool.
+- **Paying directly.** `send` runs a handshake with the payee: an invoice naming a fresh credential and its ticket, which the payer checks first (trusted clerk, in date, not revoked, allowed to receive the amount); an offer of one coin with its provenance as 8-byte id prefixes; the records the payee lacks, the tickets they name and the payer's standing; the payee's verdict; and only then the signed payment and the payee's signed acknowledgment. Only that coin's provenance travels, so the payee learns nothing about the payer's other coins. A payment whose acknowledgment is lost stays pending, and `resume` resends the very same record.
+- **Meeting incrementally.** A meet first swaps summaries (8-byte prefixes of record, evidence and epoch ids), then only what each side lacks. Enrollment sends a new member only its own coins' provenance, the epoch sequence and the board, never the rest of the town's view.
 - **Swaps.** The town takes an old coin and pays a fresh one of the same value: a signed quote first, so the holder never signs its coin away before it knows the answer, then the transfer, a public retirement and a mint. Expired coins swap at once. Coins tainted by a revoked group are held for two epochs and paid only if no evidence against their sender surfaces. Known cheats are refused.
 - **Sealed state and the signing log.** A wallet's state file is encrypted and authenticated, and every save seals it under a fresh key and retires the old one. Every signature first goes into the wallet's signing log, saved before the signature leaves, so the wallet never signs one coin state twice, even after a crash. On a rollback-resistant keystore an old copy of the state won't open at all. The keystore here is a file beside the state, which only detects a restore through evidence; see [docs/phone-keys.md](../docs/phone-keys.md).
 - **Revocation.** Evidence names one credential, and standing stops the cheat under all the others. A town can also revoke ticket groups, or close a whole class after a class break: every group it ever gave that class is revoked, and its wallets get no tickets until they update and enroll again. Revocation is cumulative.
@@ -27,7 +29,7 @@ python3 demo/board_demo.py
 ```
 
 It enrolls four neighbors at the town office, each wallet fetches its tickets anonymously, then runs each person as a separate process, meeting only over local TCP:
-1. Alice posts a job, Bob replies, she accepts, he finishes and she pays.
+1. Alice posts a job, Bob replies, she accepts, he finishes and she pays. Then Bob pays Alice directly with `send`: about 5.7 KB, roughly 24 BLE packets, and about 4 KB for a second payment whose history she already has.
 2. Carol spends the same coin to Bob and to Alice. Neither can tell, until Bob and Alice meet: the evidence, linked by a 48-byte pseudonym, leads only to Carol's ticket group, and that coin is refused.
 3. Carol's other coin is under an unlinkable credential, but Alice now knows of a cheat, so she asks the sender to prove it isn't one. Carol can't, under any credential, and is refused with no help from the town. Bob pays Alice and proves it with 144 bytes that link him to nothing.
 4. The town also revokes Carol's ticket group. The new epoch spreads by two-tier gossip (53 bytes of hints in one packet, then a 1.7 KB proof fetched because the hint asked for it).
@@ -56,6 +58,8 @@ The whole run takes about 3 seconds. Measured on one core: randomizing a credent
 | `meet` | `peer` (`host:port`) | `new_evidence`, `bytes` |
 | `gossip` | `peer` | `compressed_bytes`, `wants`, `extended_bytes` |
 | `refill` | `peer`, `count` | `tickets` received from the town |
+| `send` | `peer`, `amount`, `memo` | `paid` (the payee's new coin), or `refused`, with the `bytes` of each step |
+| `resume` | `peer` | `acknowledged`: payments resent after a dropped connection |
 | `swap` | `peer`, `state` | `paid` (the fresh coin's state), or `held_until` an epoch |
 | `collect` | `peer` | `paid` and `held_until` for swaps whose hold was pending |
 | `evidence` | | `evidence` (state, signer, ticket group, pseudonym size) |

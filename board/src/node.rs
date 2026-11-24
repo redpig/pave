@@ -161,6 +161,18 @@ pub struct Saved {
     pub cheat_states: Vec<Hash>,
     pub swaps_held: Vec<Credential>,
     pub signed_log: Vec<(Hash, Record)>,
+    pub invoices: Vec<(Credential, u64, Hash)>,
+    pub paid: Vec<(Hash, Credential)>,
+    pub pending: Vec<Record>,
+}
+
+/// A summary of what a wallet has: id prefixes of its records, evidence
+/// and epoch data.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Have {
+    pub records: BTreeSet<crate::pay::Prefix>,
+    pub evidence: BTreeSet<crate::pay::Prefix>,
+    pub epochs: BTreeSet<crate::pay::Prefix>,
 }
 
 /// What two nodes swap when they meet: records, and what travels with a
@@ -201,6 +213,12 @@ pub struct Node {
     pub signed_log: BTreeMap<Hash, Record>,
     /// Seals the saved state; see [`crate::vault`].
     pub vault: std::sync::Mutex<Box<dyn Keystore>>,
+    /// Payee: open invoices, by receiving credential: (amount, memo).
+    pub invoices: BTreeMap<Credential, (u64, Hash)>,
+    /// Payee: payments taken, by record id, so a resend is acknowledged again.
+    pub paid: BTreeMap<Hash, Credential>,
+    /// Payer: payments signed and sent but not yet acknowledged.
+    pub pending: Vec<Record>,
 }
 
 fn cash_schema() -> Schema {
@@ -223,7 +241,7 @@ pub(crate) fn apply_ok(view: &mut View<S>, rec: &Record) -> Result<(), String> {
 }
 
 /// Every credential an operation names as a recipient.
-fn op_recipients(op: &Op) -> Vec<&Credential> {
+pub(crate) fn op_recipients(op: &Op) -> Vec<&Credential> {
     match op {
         Op::Derive { to, .. } | Op::IssueBudget { to, .. } | Op::Transfer { to, .. } | Op::Merge { to, .. } => vec![to],
         Op::Mint { to, change_to, .. } => vec![to, change_to],
@@ -320,6 +338,9 @@ impl Node {
             cheat_states: BTreeSet::new(),
             swaps_held: vec![],
             signed_log: BTreeMap::new(),
+            invoices: BTreeMap::new(),
+            paid: BTreeMap::new(),
+            pending: vec![],
             vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(path)?)),
         };
         node.save()?;
@@ -386,7 +407,24 @@ impl Node {
             apply_ok(&mut self.view, &mint)?;
         }
         self.save()?;
+        // Only what the new member needs: its coins' provenance, the epoch
+        // sequence and the board scope. Never the rest of the town's view.
+        let mut keep: std::collections::BTreeMap<Hash, Record> = BTreeMap::new();
+        let mut roots: Vec<Hash> = (0..credits.len()).filter_map(|i| self.view.coins_held_by(&creds[i]).next().map(|c| c.state)).collect();
+        if let Some(h) = head(&self.view, &self.town.sequence) {
+            roots.push(h.state);
+        }
+        for st in roots {
+            for r in self.provenance(&st) {
+                keep.insert(r.id(), r);
+            }
+        }
+        for r in self.view.records().iter().filter(|r| matches!(r.op, Op::CreateScope { .. })) {
+            keep.insert(r.id(), r.clone());
+        }
         let mut bundle = self.bundle();
+        bundle.records = self.view.records().iter().filter(|r| keep.contains_key(&r.id())).cloned().collect();
+        bundle.conflicts.clear();
         bundle.tickets = self.know.tickets.values().filter(|t| creds.contains(&t.ticket.credential)).cloned().collect();
         Ok(Enrollment { town: self.town.clone(), transfer, access, class: class.into(), group, creds, bundle })
     }
@@ -415,6 +453,9 @@ impl Node {
             cheat_states: BTreeSet::new(),
             swaps_held: vec![],
             signed_log: BTreeMap::new(),
+            invoices: BTreeMap::new(),
+            paid: BTreeMap::new(),
+            pending: vec![],
             vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(out)?)),
         };
         for c in &e.creds {
@@ -456,6 +497,9 @@ impl Node {
             cheat_states: saved.cheat_states.into_iter().collect(),
             swaps_held: saved.swaps_held,
             signed_log: saved.signed_log.into_iter().collect(),
+            invoices: saved.invoices.into_iter().map(|(c, a, m)| (c, (a, m))).collect(),
+            paid: saved.paid.into_iter().collect(),
+            pending: saved.pending,
             vault: std::sync::Mutex::new(vault),
         };
         node.absorb_bundle(&Bundle {
@@ -493,6 +537,9 @@ impl Node {
             cheat_states: self.cheat_states.iter().copied().collect(),
             swaps_held: self.swaps_held.clone(),
             signed_log: self.signed_log.iter().map(|(h, r)| (*h, r.clone())).collect(),
+            invoices: self.invoices.iter().map(|(c, (a, m))| (c.clone(), *a, *m)).collect(),
+            paid: self.paid.iter().map(|(h, c)| (*h, c.clone())).collect(),
+            pending: self.pending.clone(),
         };
         let bytes = pave_kernel::hash::encode(&saved);
         let mut vault = self.vault.lock().unwrap();
@@ -530,6 +577,31 @@ impl Node {
             evidence: self.view.evidence().filter(|e| !self.cheat_states.contains(&e.basename)).cloned().collect(),
             epoch_data: self.know.epoch_data.values().cloned().collect(),
         }
+    }
+
+    /// What this wallet already has, as 8-byte id prefixes, so a peer can
+    /// send only the rest.
+    pub fn have(&self) -> Have {
+        use crate::pay::prefix;
+        Have {
+            records: self.view.records().iter().chain(self.view.conflicts().iter()).map(|r| prefix(&r.id())).collect(),
+            evidence: self.view.evidence().map(|e| prefix(&e.basename)).collect(),
+            epochs: self.know.epoch_data.keys().map(prefix).collect(),
+        }
+    }
+
+    /// The bundle, less what the peer already has. A prefix collision only
+    /// means a record isn't sent; the peer asks again next time.
+    pub fn bundle_for(&self, have: &Have) -> Bundle {
+        use crate::pay::prefix;
+        let mut b = self.bundle();
+        b.records.retain(|r| !have.records.contains(&prefix(&r.id())));
+        b.conflicts.retain(|r| !have.records.contains(&prefix(&r.id())));
+        b.evidence.retain(|e| !have.evidence.contains(&prefix(&e.basename)));
+        b.epoch_data.retain(|d| !have.epochs.contains(&prefix(&d.hash())));
+        let named: BTreeSet<&Credential> = b.records.iter().chain(b.conflicts.iter()).flat_map(|r| std::iter::once(&r.signer).chain(op_recipients(&r.op))).collect();
+        b.tickets.retain(|t| named.contains(&t.ticket.credential));
+        b
     }
 
     /// Merge what a peer sent. Returns the states with new evidence.

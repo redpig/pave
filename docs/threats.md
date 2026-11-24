@@ -79,6 +79,7 @@ We do not assume that any role behaves well (principle 10), that devices are tam
 | K8 | Hide an earlier spend by not sharing it | n/a | Detected when any holder of the other copy meets any holder of this one | Detected at the tokenmap | Built (`cheat` in the demo) |
 | K9 | Issuer equivocation: two different successors to one epoch | An epoch is a sequence capability, so two rolls from one epoch are a double use | Evidence, exactly as for a double spend | Signed epochs compared out of band; an optional secondary signature | Built **+** (CivicSequences) |
 | K10 | Malformed or huge input that panics or exhausts a node | Typed CBOR decoding; a 64 MiB frame cap | n/a | Audit M-7 (panic on currency mismatch) | Gap: no-panic audit and fuzzing of `apply`, `absorb` and the scheme adapter, plus per-object size caps |
+| K12 | Every minted coin's provenance includes its mint budget's chain, one record per earlier mint, so a first payment between strangers grows with the town's issuance | n/a | Payees usually hold most of the chain already, and only missing records travel | The mint key's signature anchors each token | Gap: budget checkpoints (an anchor the root signs, or a recipient trusting mints it has seen) |
 | K11 | History growth until coins are too big to move | `offline_transfers` caps hops per schema | Swap for a fresh coin | Maximum provenance length plus swap; ZK compression proposed | Built (cap and swap); Gap: compression |
 
 ---
@@ -118,7 +119,7 @@ We do not assume that any role behaves well (principle 10), that devices are tam
 | W7 | Running out of tickets offline, so the holder can't receive | Prefetched pool | Refill when online | Same | Built |
 | W8 | Reusing a credential, which links holdings | A fresh credential per holding, change and role | n/a | Same | Built |
 | W9 | A lost or destroyed wallet | n/a | Recovery (section 11) | Opt-in recovery binding | Gap |
-| W10 | An interrupted payment: signed but never delivered | Keep the signed record as pending and resend it, never re-sign; the signing log returns the released record on a retry | Evidence if the holder later re-signs | Deferred payments mark tokens `PENDING_SEND` | Partial: `outbox` and the signing log; Gap: resume protocol |
+| W10 | An interrupted payment: signed but never delivered | The payer keeps the signed record pending until the payee's signed acknowledgment; `resume` resends the same record and the payee acknowledges it again; the signing log refuses any other use of the coin | Evidence if the holder later re-signs | Deferred payments mark tokens `PENDING_SEND` | Built |
 
 ---
 
@@ -191,10 +192,10 @@ We do not assume that any role behaves well (principle 10), that devices are tam
 | A3 | Exceed the offline hop limit | `offline_transfers` | n/a | Maximum provenance | Built (mutation `nolimit`) |
 | A4 | Pay with a coin from a known cheat | `refuse_known_cheats` for the named credential; standing for every other credential (K3a) | n/a | Revoked groups only, after the next epoch | Built (mutations `ignoreevidence`, `nostanding`) **+** |
 | A5 | Pay before the recipient knows a revocation | The handshake exchanges hints first; `wait_on_hints` holds a coin when a fork hint is pending | n/a | Required state exchange before every transaction | Built (mutations `notrigger`, `hintepoch`) |
-| A6 | Pay to a ticket that is invalid or revoked (the payer gets stuck) | The payer checks the recipient's ticket | n/a | Payer validates payee | Gap |
+| A6 | Pay to a ticket that is invalid or revoked (the payer gets stuck) | The payer checks the invoice's ticket: signed by a trusted clerk, in date, not in a revoked group, allowed to receive the amount | n/a | Payer validates payee | Built (`board/tests/pay.rs`) |
 | A7 | Redirect a payment at a point of sale | Merchant identity tickets; receive-only tickets for points of sale | n/a | Same | Gap |
 | A8 | Large offline exposure | `max_per_holder`, `max_spend`, validation thresholds published in epoch data | Validate online above a threshold | Validation thresholds; incentives for high value | Partial: `max_per_holder` in schemas; Gap: thresholds |
-| A9 | A proposal reveals the payer's coins before the payer consents | Propose amounts first, reveal coins on accept | n/a | 3-tap private mode | Gap: there's no payment protocol yet, only transfer then check |
+| A9 | A payment reveals the payer's other coins, or coins before the payer has seen the invoice | The invoice comes first; the offer names one coin, and only that coin's provenance travels, as id prefixes the payee can decline | n/a | 3-tap private mode | Built **+** (payee learns no other coins; the change output of a split is visible to it, as in Briolette) |
 
 ---
 
@@ -228,6 +229,7 @@ We do not assume that any role behaves well (principle 10), that devices are tam
 | P2 | Someone in the middle alters messages | Everything that matters is signed | They can still drop or delay | Same | Built; Gap: channel integrity |
 | P3 | Malformed frames | 64 MiB cap; typed decode | n/a | Rate limits | Partial; Gap: smaller caps and a per-message-type limit |
 | P4 | Resource exhaustion of a node | Connection and rate limits | n/a | IP token bucket (audit M-6) | Gap |
+| P5 | A peer learns a wallet's whole history | Payments send only the paid coin's provenance; enrollment sends a new member only its own coins' provenance, the epoch sequence and the board | n/a | Tokens carry only their own history | Built for payments and enrollment. A `meet` is still a full sync, for peers a holder chooses (its own devices, the town); incremental, but not private |
 
 ---
 
@@ -347,12 +349,11 @@ These are ranked by how much they matter before anyone other than us uses this.
 1. **Platform keystores and a split key with a card** (W1, W2, O1). The signing log and sealed state are built; on a phone alone the transfer key is still in app memory while it signs ([phone-keys.md](phone-keys.md)).
 2. **Attestation and per-class policy** (R1, R2): assurance tiers set at enrollment, lifetimes per tier, ticket budgets.
 3. **Encrypted peer channel** (P1) and **no-panic fuzzing** (K10).
-4. **Payment handshake**: propose and accept, recipient ticket check, resume after interruption (A6, A7, A9, W10).
-5. **Validator service** (V1).
-6. **Recovery** (section 11).
-7. **Key rotation** for every role (R5, C7, M2, O4).
-8. **Trusted display and PIN** once there is hardware (W4, W5), and caps for agents (W6).
-9. **Post-quantum scheme** (S5) and an external review of the ECDAA implementation (S3).
+4. **Merchant identity** (A7) and a validator service (V1).
+5. **Recovery** (section 11).
+6. **Key rotation** for every role (R5, C7, M2, O4).
+7. **Trusted display and PIN** once there is hardware (W4, W5), and caps for agents (W6).
+8. **Post-quantum scheme** (S5) and an external review of the ECDAA implementation (S3).
 
 ## Decisions taken
 

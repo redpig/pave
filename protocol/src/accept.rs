@@ -33,6 +33,7 @@ pub fn cheat_list<S: Scheme>(view: &View<S>) -> Vec<(Vec<u8>, Vec<u8>)> {
 pub struct Standing {
     pub credential: Credential,
     pub cheats: Vec<(Vec<u8>, Vec<u8>)>,
+    #[serde(with = "serde_bytes")]
     pub proof: Vec<u8>,
 }
 

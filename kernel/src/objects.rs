@@ -203,6 +203,7 @@ pub struct Evidence {
     pub basename: Hash,
     /// The signer's credential and the nym both signatures carry.
     pub signer: Credential,
+    #[serde(with = "serde_bytes")]
     pub nym: Vec<u8>,
     pub first: Record,
     pub second: Record,

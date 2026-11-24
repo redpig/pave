@@ -5,7 +5,9 @@
 //! - Gossip: the two tiers. Hints first (fits one packet), then per-hint
 //!   wants answered with proofs.
 
-use crate::node::{Bundle, Node, RefillRequest, RefillTerms};
+use crate::node::{Bundle, Have, Node, RefillRequest, RefillTerms};
+use crate::pay::{Ack, Invoice, Offer, PayVerdict, Prefix, Proposal};
+use pave_kernel::Record;
 use crate::swap::{Quote, QuoteRequest, SwapOutcome, SwapRequest, Verdict};
 use pave_kernel::{Credential, Hash};
 use pave_protocol::{SignedTicket, Standing};
@@ -34,6 +36,17 @@ pub enum Wire {
     Swap(Box<SwapRequest>),
     Collect(Credential),
     Swapped(Box<SwapOutcome>),
+    /// Incremental meet: what each side has, before the bundles.
+    Have(Box<Have>),
+    /// Payments: the handshake in `pay`.
+    PayAsk { amount: u64, memo: String },
+    Invoice(Box<Invoice>),
+    Offer(Box<Offer>),
+    Lacks(Vec<Prefix>),
+    Proposal(Box<Proposal>),
+    Verdict(PayVerdict),
+    Payment(Box<Record>),
+    Ack(Box<Ack>),
     /// Proofs that the credentials a wallet paid from aren't known cheats.
     Standing(Vec<Standing>),
 }
@@ -60,6 +73,7 @@ pub fn read_msg(s: &mut TcpStream) -> std::io::Result<(Wire, usize)> {
 
 /// Serve one peer connection.
 pub fn serve_peer(node: Arc<Mutex<Node>>, mut s: TcpStream) -> std::io::Result<()> {
+    let mut peer_have: Option<Have> = None;
     loop {
         let (msg, _) = match read_msg(&mut s) {
             Ok(m) => m,
@@ -68,8 +82,26 @@ pub fn serve_peer(node: Arc<Mutex<Node>>, mut s: TcpStream) -> std::io::Result<(
         let reply = {
             let mut n = node.lock().unwrap();
             let r = match msg {
+                Wire::Have(h) => {
+                    let mine = n.have();
+                    peer_have = Some(*h);
+                    Wire::Have(Box::new(mine))
+                }
+                Wire::PayAsk { amount, memo } => match n.invoice(amount, &memo) {
+                    Ok(i) => Wire::Invoice(Box::new(i)),
+                    Err(e) => Wire::Refused(e),
+                },
+                Wire::Offer(o) => Wire::Lacks(n.lacks(&o)),
+                Wire::Proposal(p) => Wire::Verdict(n.judge(&p)),
+                Wire::Payment(r) => match n.re_ack(&r).map(Ok).unwrap_or_else(|| n.take_payment(&r)) {
+                    Ok(a) => Wire::Ack(Box::new(a)),
+                    Err(e) => Wire::Refused(e),
+                },
                 Wire::Meet(b) => {
-                    let mine = n.bundle();
+                    let mine = match &peer_have {
+                        Some(h) => n.bundle_for(h),
+                        None => n.bundle(),
+                    };
                     if b.genesis == n.town.genesis.root_scope() {
                         n.absorb_bundle(&b);
                     }
@@ -105,7 +137,9 @@ pub fn serve_peer(node: Arc<Mutex<Node>>, mut s: TcpStream) -> std::io::Result<(
                     Ok(o) => Wire::Swapped(Box::new(o)),
                     Err(e) => Wire::Refused(e),
                 },
-                Wire::RefillTerms(_) | Wire::Tickets(_) | Wire::Refused(_) | Wire::Quote(_) | Wire::Swapped(_) => Wire::Refused("unexpected".into()),
+                Wire::RefillTerms(_) | Wire::Tickets(_) | Wire::Refused(_) | Wire::Quote(_) | Wire::Swapped(_) | Wire::Invoice(_) | Wire::Lacks(_) | Wire::Verdict(_) | Wire::Ack(_) => {
+                    Wire::Refused("unexpected".into())
+                }
                 Wire::Standing(v) => {
                     n.absorb_standings(v);
                     Wire::Standing(n.standings())
@@ -121,8 +155,13 @@ pub fn serve_peer(node: Arc<Mutex<Node>>, mut s: TcpStream) -> std::io::Result<(
 /// Meet a peer: swap bundles. Returns states with new evidence here.
 pub fn meet(node: &Arc<Mutex<Node>>, addr: &str) -> std::io::Result<(Vec<pave_kernel::Hash>, usize)> {
     let mut s = TcpStream::connect(addr)?;
-    let mine = node.lock().unwrap().bundle();
-    let sent = write_msg(&mut s, &Wire::Meet(Box::new(mine)))?;
+    // Summaries first, then only what each side lacks.
+    let have = node.lock().unwrap().have();
+    let sent0 = write_msg(&mut s, &Wire::Have(Box::new(have)))?;
+    let (reply, got0) = read_msg(&mut s)?;
+    let Wire::Have(theirs) = reply else { return Err(std::io::Error::other("unexpected reply")) };
+    let mine = node.lock().unwrap().bundle_for(&theirs);
+    let sent = write_msg(&mut s, &Wire::Meet(Box::new(mine)))? + sent0 + got0;
     let (reply, got) = read_msg(&mut s)?;
     let mut n = node.lock().unwrap();
     let new = match reply {
@@ -263,4 +302,88 @@ fn finish_swap(node: &Arc<Mutex<Node>>, to: &Credential, out: &SwapOutcome) -> s
     };
     let _ = n.save();
     Ok(r)
+}
+
+/// What a payment cost on the wire, message by message.
+#[derive(Debug, Default)]
+pub struct PayReport {
+    pub paid: Option<Hash>,
+    pub steps: Vec<(&'static str, usize)>,
+    pub refused: Option<String>,
+}
+
+fn step(s: &mut TcpStream, r: &mut PayReport, name: &'static str, m: &Wire) -> std::io::Result<Wire> {
+    let out = write_msg(s, m)?;
+    let (reply, got) = read_msg(s)?;
+    r.steps.push((name, out + got));
+    Ok(reply)
+}
+
+/// Pay `amount` to the wallet at `addr`: the handshake in [`crate::pay`].
+pub fn pay(node: &Arc<Mutex<Node>>, addr: &str, amount: u64, memo: &str) -> std::io::Result<PayReport> {
+    let mut r = PayReport::default();
+    // Agree on epochs first: two-tier gossip, usually one packet each way.
+    let (c, e, _) = gossip_with(node, addr)?;
+    r.steps.push(("gossip", 2 * c + e));
+    let mut s = TcpStream::connect(addr)?;
+    let refuse = |r: &mut PayReport, why: String| {
+        r.refused = Some(why);
+    };
+    let inv = match step(&mut s, &mut r, "invoice", &Wire::PayAsk { amount, memo: memo.into() })? {
+        Wire::Invoice(i) => *i,
+        Wire::Refused(e) => {
+            refuse(&mut r, e);
+            return Ok(r);
+        }
+        _ => return Err(std::io::Error::other("unexpected reply")),
+    };
+    let offer = {
+        let mut n = node.lock().unwrap();
+        if let Err(e) = n.check_invoice(&inv) {
+            refuse(&mut r, format!("payer refused the invoice: {e}"));
+            return Ok(r);
+        }
+        n.offer(&inv).map_err(std::io::Error::other)?
+    };
+    let Wire::Lacks(lacks) = step(&mut s, &mut r, "offer", &Wire::Offer(Box::new(offer.clone())))? else { return Err(std::io::Error::other("unexpected reply")) };
+    let mut cheats = pave_protocol::cheat_list(&node.lock().unwrap().view);
+    let mut sent_records = false;
+    loop {
+        let p = node.lock().unwrap().propose(&offer, if sent_records { &[] } else { &lacks }, &cheats).map_err(std::io::Error::other)?;
+        sent_records = true;
+        match step(&mut s, &mut r, "proposal", &Wire::Proposal(Box::new(p)))? {
+            Wire::Verdict(PayVerdict::Accept) => break,
+            Wire::Verdict(PayVerdict::NeedStanding(list)) if list != cheats => cheats = list,
+            Wire::Verdict(v) => {
+                refuse(&mut r, format!("{v:?}"));
+                return Ok(r);
+            }
+            _ => return Err(std::io::Error::other("unexpected reply")),
+        }
+    }
+    let rec = node.lock().unwrap().pay_invoice(&inv, offer.state).map_err(std::io::Error::other)?;
+    match step(&mut s, &mut r, "payment", &Wire::Payment(Box::new(rec.clone())))? {
+        Wire::Ack(a) => {
+            node.lock().unwrap().confirm(&rec, &a).map_err(std::io::Error::other)?;
+            r.paid = Some(rec.output(0));
+        }
+        Wire::Refused(e) => refuse(&mut r, e),
+        _ => return Err(std::io::Error::other("unexpected reply")),
+    }
+    Ok(r)
+}
+
+/// Resend every payment still waiting for its acknowledgment.
+pub fn resume(node: &Arc<Mutex<Node>>, addr: &str) -> std::io::Result<usize> {
+    let pending = node.lock().unwrap().pending.clone();
+    let mut s = TcpStream::connect(addr)?;
+    let mut done = 0;
+    for rec in pending {
+        if let Wire::Ack(a) = ask(&mut s, &Wire::Payment(Box::new(rec.clone())))? {
+            if node.lock().unwrap().confirm(&rec, &a).is_ok() {
+                done += 1;
+            }
+        }
+    }
+    Ok(done)
 }

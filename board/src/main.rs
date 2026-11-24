@@ -53,7 +53,7 @@ const HELP: &[&str] = &[
     "whoami", "board", "post {title, pay}", "reply {job, note}", "accept {job, worker}", "done {job}",
     "pay {job}", "receive", "check {state}", "spend {state, to}", "cheat {state, to}", "meet {peer}",
     "gossip {peer}", "refill {peer, count}",
-    "evidence", "swap {peer, state}", "collect {peer}", "roll {revoke: [group, ...], revoke_class: [class, ...]} (operator)", "help",
+    "evidence", "send {peer, amount, memo}", "resume {peer}", "swap {peer, state}", "collect {peer}", "roll {revoke: [group, ...], revoke_class: [class, ...]} (operator)", "help",
 ];
 
 fn command(node: &Arc<Mutex<Node>>, v: &Value) -> Result<Value, String> {
@@ -69,6 +69,22 @@ fn command(node: &Arc<Mutex<Node>>, v: &Value) -> Result<Value, String> {
             let peer = v["peer"].as_str().ok_or("missing peer")?;
             let count = v["count"].as_u64().unwrap_or(8) as usize;
             Ok(json!({ "tickets": net::refill(node, peer, count).map_err(|e| e.to_string())? }))
+        }
+        "send" => {
+            let peer = v["peer"].as_str().ok_or("missing peer")?;
+            let amount = v["amount"].as_u64().ok_or("missing amount")?;
+            let memo = v["memo"].as_str().unwrap_or("");
+            let r = net::pay(node, peer, amount, memo).map_err(|e| e.to_string())?;
+            let steps: Vec<Value> = r.steps.iter().map(|(k, b)| json!({ "step": k, "bytes": b })).collect();
+            match (r.paid, r.refused) {
+                (Some(h), _) => Ok(json!({ "paid": hx(&h), "steps": steps })),
+                (None, Some(why)) => Ok(json!({ "refused": why, "steps": steps })),
+                _ => Ok(json!({ "steps": steps })),
+            }
+        }
+        "resume" => {
+            let peer = v["peer"].as_str().ok_or("missing peer")?;
+            Ok(json!({ "acknowledged": net::resume(node, peer).map_err(|e| e.to_string())? }))
         }
         "swap" => {
             let peer = v["peer"].as_str().ok_or("missing peer")?;
@@ -108,7 +124,7 @@ fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
             let flagged: Vec<Value> = n.view.flagged().iter().map(|c| json!(n.group_of(c))).collect();
             Ok(json!({
                 "name": n.name, "class": n.class, "group": n.group, "balance": balance, "coins": coins, "epoch": epoch,
-                "tickets_left": n.pool.len(), "flagged_groups": flagged,
+                "tickets_left": n.pool.len(), "flagged_groups": flagged, "pending_payments": n.pending.len(),
             }))
         }
         "board" => {
