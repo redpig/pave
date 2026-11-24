@@ -111,8 +111,8 @@ def main():
         jobs = bob("board", quiet=True)["jobs"]
         print(f"  bob sees: “{jobs[0]['title']}”, pay {jobs[0]['pay']}, {jobs[0]['status']}")
 
-        say("2. Bob replies; Alice accepts him; Bob finishes; Alice pays him wallet to wallet")
-        bob("reply", job=job, note="I can do it Saturday")
+        say("2. Bob replies as a contractor; Alice accepts him; Bob finishes; Alice pays and vouches")
+        bob("reply", job=job, note="I can do it Saturday", trade=True)
         bob.sync(town)
         alice.sync(town)
         worker = alice("board", quiet=True)["jobs"][0]["replies"][0]["from"]
@@ -122,10 +122,13 @@ def main():
         bob("done", job=job)
         bob.sync(town)
         alice.sync(town)
-        payment = alice("pay", job=job)["payment"]
+        payment = alice("pay", job=job, vouch="fencing", note="on time, tidy")["payment"]
         alice.meet(bob)
         alice.sync(town)
         bob.sync(town)
+        rep = bob("reputation", quiet=True)
+        print(f"  bob's reputation: {rep['people_by_type']} (distinct people per job type); "
+              f"he holds {len(rep['coins_held'])} vouch coin, which arrived with the pay")
         check = bob("check", state=payment)
         status = bob("board", quiet=True)["jobs"][0]["status"]
         print(f"  job is {status}; bob's wallet would accept the payment: {GREEN}{check['accept']}{OFF}")

@@ -51,6 +51,16 @@ Kinds: `job`, `reply`, `accept`, `done`, `paid`, with the job as thread.
 - Only the poster's key can accept a worker or mark the job paid, and only the accepted worker's key can mark it done.
 - **Payment is not a post.** It is an ordinary transfer whose receipt commits to the job, and it moves wallet to wallet like any coin, offline if need be. The board shows the poster's claim that it paid; the coin is the proof.
 
+### Vouches
+
+A vouch is a reputational commitment for a job type, and it is a coin. It rides on a real payment, so a reputation can't be had without paid work.
+
+- **Opting in.** A worker who wants vouches replies under a stable **trade key**, which signs over the job and the fresh credential the worker will be paid at. The contractor's id is the hash of that key, and its thread on the board is where its vouches go. A trade key links every job replied to under it, which is what a contractor wants; a worker who replies without one stays unlinkable.
+- **The vouch coin.** The poster pays with a split whose second output is zero-value, to the worker, and whose receipt commits to (job, contractor, job type). That output goes to the contractor with the pay, is held like money and checks like money, offline too. It isn't money: it carries no value.
+- **The vouch post.** The poster also posts the vouch in the contractor's thread, signed by the job's poster key, carrying the payment record and endorsed with the contractor as basename.
+- **Counting.** A vouch counts only if it comes from the job's poster, the job is paid with that payment, the worker named this contractor with its trade key, the payment is signed and pays the worker with a vouch output whose receipt names this job, contractor and type, and the endorsement checks out. Each job counts once, and each person once per job type however many jobs they vouch for. A worker can't vouch for itself, a poster can't relabel a payment's job type, and nobody can credit a job to a contractor who didn't do it.
+- **Who it goes to.** The coin goes to the contractor and the post to the board. A friend asking who did your fence gets the contractor's id and checks the board, or asks the contractor to show their vouch coins.
+
 ## Civic reports
 
 Public reports of problems in the street, such as a sidewalk blocked without a permit. The board is useful before any city adopts it: the city's own published permit data is mirrored in, so "no permit" is something anyone can check rather than an accusation.
@@ -82,6 +92,8 @@ Public reports of problems in the street, such as a sidewalk blocked without a p
 ## Not built yet
 
 - Several hosts for one board, and comparing them.
+- A vouch schema of its own: today a vouch coin is a zero-value coin of the payment's schema, so it expires and can be transferred like one. It should never expire and never move.
+- Showing vouch coins to a client directly, with a holding proof, and rulings against false vouches.
 - Kernel scope rules restricting who may post (`senders`), for boards limited to holders of a capability.
 - Pruning old posts, and limits per author.
 - Moderation by a panel, and appeals.

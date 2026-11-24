@@ -282,7 +282,7 @@ Specified as a holder-created capability (spec C9), not yet built
 | B2 | Accept or mark paid on someone else's job | Only the poster's key can accept or mark paid; only the accepted worker's key can mark done | Ignored | n/a | Built (mutation `anyaccept`) |
 | B3 | A false "done", or a poster who doesn't pay | n/a | Disputes and mediation posted as jobs (principle 20) | n/a | Gap |
 | B4 | Spam posts | Posting costs something or needs a capability (principle 17); the host can require endorsements and limit posts per pseudonym | n/a | n/a | Gap |
-| B5 | Sybil reputation | Reputation tied to paid work with receipts | n/a | n/a | Gap |
+| B5 | Sybil reputation | A vouch rides on a real payment from the job's poster, and counts each enrolled person once per job type; only the poster can vouch, and only for a worker who named the contractor with its trade key | Rulings against false vouches | n/a | Built (mutations `vouchanyone`, `vouchanytype`, `notradesig`, `vouchperjob`, `vouchunnamed`); Gap: rulings. Self-dealing still costs a second enrollment, not money: the pay goes back to oneself |
 | B6 | Link a worker across jobs | A fresh credential per role | n/a | n/a | Built |
 | B7 | Claim a payment that doesn't match the job | The payment receipt commits to the job | n/a | n/a | Built |
 

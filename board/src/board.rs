@@ -5,22 +5,55 @@
 //! that commits to the job's terms. Payment is not a post. It is an ordinary
 //! transfer whose receipt commits to the job, and it moves like any coin,
 //! offline if need be. The board only shows the poster's claim that it paid.
+//!
+//! **Vouches.** A worker who wants a reputation replies under a stable trade
+//! key, signing over the credential it will be paid at. The poster can then
+//! pay with a vouch: the payment record gets a second, zero-value output to
+//! the worker, and its receipt commits to the job, the contractor and the
+//! job type. That output is the vouch coin. It goes to the contractor with
+//! the pay, is held like money and checks like money, offline too. The
+//! poster also posts the vouch in the contractor's thread, endorsed with
+//! the contractor as basename, so readers count distinct people per job
+//! type without learning who they are, and one person counts once however
+//! many jobs they vouch for.
 
-use crate::bulletin::Copy;
+use crate::bulletin::{endorser, Copy};
+use crate::node::Class;
 use pave_kernel::hash::{hash_of, Hash};
-use pave_kernel::Credential;
+use pave_kernel::{Credential, Op, Record, Scheme, Sig};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// A worker's opt-in to a reputation: its trade key, and that key's
+/// signature over the job and the credential it will be paid at.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Trade {
+    pub key: Credential,
+    pub sig: Sig,
+}
+
+pub fn trade_bytes(job: &Hash, worker: &Credential) -> Vec<u8> {
+    pave_kernel::hash::encode(&("pave/board/trade/v0", job, worker))
+}
+
+/// The contractor a trade key names: the thread its vouches go in.
+pub fn contractor(key: &Credential) -> Hash {
+    hash_of("pave/board/contractor", key)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BoardMsg {
     /// `means` is the split record proving the poster holds the pay;
     /// `terms` is the receipt root that split commits to.
     Post { title: String, pay: u64, means: Hash, terms: Hash },
-    Reply { job: Hash, note: String },
+    /// `trade` is set when the replier wants vouches for this job.
+    Reply { job: Hash, note: String, trade: Option<Trade> },
     Accept { job: Hash, worker: Credential },
     Done { job: Hash },
     Paid { job: Hash, payment: Hash },
+    /// In the contractor's thread, from the job's poster: the payment
+    /// record, whose second output is the vouch coin.
+    Vouch { job: Hash, category: String, note: String, payment: Record },
 }
 
 impl BoardMsg {
@@ -38,13 +71,14 @@ impl BoardMsg {
             BoardMsg::Accept { .. } => "accept",
             BoardMsg::Done { .. } => "done",
             BoardMsg::Paid { .. } => "paid",
+            BoardMsg::Vouch { .. } => "vouch",
         }
     }
     /// The job a message is about; None for a new job.
     pub fn job(&self) -> Option<Hash> {
         match self {
             BoardMsg::Post { .. } => None,
-            BoardMsg::Reply { job, .. } | BoardMsg::Accept { job, .. } | BoardMsg::Done { job } | BoardMsg::Paid { job, .. } => Some(*job),
+            BoardMsg::Reply { job, .. } | BoardMsg::Accept { job, .. } | BoardMsg::Done { job } | BoardMsg::Paid { job, .. } | BoardMsg::Vouch { job, .. } => Some(*job),
         }
     }
 }
@@ -52,6 +86,11 @@ impl BoardMsg {
 /// The receipt a payment for `job` commits to.
 pub fn pay_receipt(job: &Hash) -> Hash {
     hash_of("pave/board/pay", job)
+}
+
+/// The receipt a payment with a vouch commits to.
+pub fn vouch_receipt(job: &Hash, contractor: &Hash, category: &str) -> Hash {
+    hash_of("pave/board/vouch/v0", &(job, contractor, category))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -70,6 +109,8 @@ pub struct Job {
     pub poster: Credential,
     pub means: Hash,
     pub replies: Vec<(Credential, String)>,
+    /// Repliers who opted into vouches, and the contractor each named.
+    pub contractors: BTreeMap<Credential, Hash>,
     pub worker: Option<Credential>,
     pub status: Status,
     pub payment: Option<Hash>,
@@ -82,7 +123,7 @@ pub fn jobs(copy: &Copy) -> BTreeMap<Hash, Job> {
     let mut jobs: BTreeMap<Hash, Job> = BTreeMap::new();
     for item in copy.items() {
         let Some(msg) = BoardMsg::decode(item.content) else { continue };
-        if item.post.kind != msg.kind() || item.post.thread != msg.job() {
+        if item.post.kind != msg.kind() || matches!(msg, BoardMsg::Vouch { .. }) || item.post.thread != msg.job() {
             continue;
         }
         let (id, signer) = (item.id, item.signer);
@@ -95,14 +136,20 @@ pub fn jobs(copy: &Copy) -> BTreeMap<Hash, Job> {
                     poster: signer.clone(),
                     means,
                     replies: vec![],
+                    contractors: BTreeMap::new(),
                     worker: None,
                     status: Status::Open,
                     payment: None,
                 });
             }
-            BoardMsg::Reply { job, note } => {
+            BoardMsg::Reply { job, note, trade } => {
                 if let Some(j) = jobs.get_mut(&job) {
                     j.replies.push((signer.clone(), note));
+                    if let Some(t) = trade {
+                        if copy.scheme().verify(&t.key, &trade_bytes(&job, signer), None, &t.sig) {
+                            j.contractors.insert(signer.clone(), contractor(&t.key));
+                        }
+                    }
                 }
             }
             BoardMsg::Accept { job, worker } => {
@@ -120,6 +167,7 @@ pub fn jobs(copy: &Copy) -> BTreeMap<Hash, Job> {
                     }
                 }
             }
+            BoardMsg::Vouch { .. } => {}
             BoardMsg::Paid { job, payment } => {
                 if let Some(j) = jobs.get_mut(&job) {
                     if &j.poster == signer && j.status == Status::Done {
@@ -131,4 +179,59 @@ pub fn jobs(copy: &Copy) -> BTreeMap<Hash, Job> {
         }
     }
     jobs
+}
+
+/// One vouch that counts.
+#[derive(Clone, Debug, Serialize)]
+pub struct Vouched {
+    pub job: Hash,
+    pub category: String,
+    pub note: String,
+    /// The vouch coin: the payment's second output, held by the worker.
+    pub coin: Hash,
+    pub class: String,
+}
+
+/// A contractor's reputation as a copy of the job board has it: by job
+/// type, the number of distinct people who paid for work and vouched, and
+/// the vouches themselves. A vouch counts only if it comes from the job's
+/// poster, the job is paid, the worker named this contractor with its trade
+/// key, the payment record is signed and pays the worker with a vouch
+/// output whose receipt names this job, contractor and type, and the
+/// endorsement checks out. Each job counts once, and each person once per
+/// type.
+pub fn reputation(copy: &Copy, classes: &BTreeMap<String, Class>, who: &Hash) -> (BTreeMap<String, usize>, Vec<Vouched>) {
+    let jobs = jobs(copy);
+    let scope = copy.info.scope;
+    let mut seen_jobs: BTreeSet<Hash> = BTreeSet::new();
+    let mut people: BTreeMap<String, BTreeSet<Vec<u8>>> = BTreeMap::new();
+    let mut out = vec![];
+    for item in copy.items() {
+        if item.post.kind != "vouch" || item.post.thread != Some(*who) {
+            continue;
+        }
+        let Some(BoardMsg::Vouch { job, category, note, payment }) = BoardMsg::decode(item.content) else { continue };
+        let Some(j) = jobs.get(&job) else { continue };
+        let Some(worker) = j.worker.as_ref() else { continue };
+        let paid = j.status == Status::Paid && j.payment == Some(payment.output(0));
+        let named = j.contractors.get(worker) == Some(who);
+        let pays = match &payment.op {
+            Op::Split { state, parts, receipt } => {
+                parts.len() >= 2
+                    && parts[0] == (j.pay, worker.clone())
+                    && parts[1] == (0, worker.clone())
+                    && *receipt == vouch_receipt(&job, who, &category)
+                    && payment.sigs.len() == 1
+                    && copy.scheme().verify(&payment.signer, &payment.op.signing_bytes(), Some(state.as_bytes()), &payment.sigs[0])
+            }
+            _ => false,
+        };
+        if item.signer != &j.poster || !paid || !named || !pays || !seen_jobs.insert(job) {
+            continue;
+        }
+        let Some((class, nym)) = endorser(classes, &scope, &item.post) else { continue };
+        people.entry(category.clone()).or_default().insert(nym);
+        out.push(Vouched { job, category, note, coin: payment.output(1), class });
+    }
+    (people.into_iter().map(|(c, n)| (c, n.len())).collect(), out)
 }

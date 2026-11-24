@@ -242,6 +242,10 @@ impl Copy {
             .collect()
     }
 
+    pub fn scheme(&self) -> &S {
+        self.view.scheme()
+    }
+
     pub fn have(&self) -> BTreeSet<Prefix> {
         self.view.messages().iter().map(|r| prefix(&r.id())).collect()
     }

@@ -173,6 +173,8 @@ pub struct Saved {
     pub boards: Vec<(Hash, Vec<Submission>, Vec<PostReceipt>)>,
     #[serde(default)]
     pub outgoing: Vec<Submission>,
+    #[serde(default)]
+    pub trade: Option<Credential>,
 }
 
 /// A summary of what a wallet has: id prefixes of its records, evidence
@@ -232,6 +234,8 @@ pub struct Node {
     pub boards: BTreeMap<Hash, Copy>,
     /// Posts signed and waiting for their host.
     pub outgoing: Vec<Submission>,
+    /// This wallet's trade key, once it replies as a contractor.
+    pub trade: Option<Credential>,
 }
 
 fn cash_schema() -> Schema {
@@ -363,6 +367,7 @@ impl Node {
             pending: vec![],
             boards: BTreeMap::new(),
             outgoing: vec![],
+            trade: None,
             vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(path)?)),
         };
         node.open_boards()?;
@@ -481,6 +486,7 @@ impl Node {
             pending: vec![],
             boards: BTreeMap::new(),
             outgoing: vec![],
+            trade: None,
             vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(out)?)),
         };
         for c in &e.creds {
@@ -528,6 +534,7 @@ impl Node {
             pending: saved.pending,
             boards: BTreeMap::new(),
             outgoing: saved.outgoing,
+            trade: saved.trade,
             vault: std::sync::Mutex::new(vault),
         };
         node.absorb_bundle(&Bundle {
@@ -577,6 +584,7 @@ impl Node {
             pending: self.pending.clone(),
             boards: self.boards.iter().map(|(s, c)| (*s, c.submissions(), c.receipts.values().cloned().collect())).collect(),
             outgoing: self.outgoing.clone(),
+            trade: self.trade.clone(),
         };
         let bytes = pave_kernel::hash::encode(&saved);
         let mut vault = self.vault.lock().unwrap();
@@ -847,6 +855,18 @@ impl Node {
         self.copy(&self.town.jobs.scope).map(board::jobs).unwrap_or_default()
     }
 
+    /// A contractor's reputation on the job board: distinct people per job
+    /// type, and the vouches that count.
+    pub fn reputation(&self, who: &Hash) -> (BTreeMap<String, usize>, Vec<board::Vouched>) {
+        self.copy(&self.town.jobs.scope).map(|c| board::reputation(c, &self.town.classes, who)).unwrap_or_default()
+    }
+
+    /// The vouch coins this wallet holds, by state.
+    pub fn vouch_coins(&self) -> Vec<Hash> {
+        let Some(who) = self.contractor() else { return vec![] };
+        self.reputation(&who).1.into_iter().map(|v| v.coin).filter(|c| self.view.coin(c).is_some_and(|c| self.mine.contains(&c.holder))).collect()
+    }
+
     fn job(&self, id: &Hash) -> Result<board::Job, String> {
         self.jobs().remove(id).ok_or_else(|| "unknown job".into())
     }
@@ -868,7 +888,31 @@ impl Node {
     /// Reply under a fresh credential; that credential is who gets accepted and paid.
     pub fn reply(&mut self, job: Hash, note: &str) -> Result<Hash, String> {
         let me = self.fresh()?;
-        self.send_as(&me, BoardMsg::Reply { job, note: note.into() })
+        self.send_as(&me, BoardMsg::Reply { job, note: note.into(), trade: None })
+    }
+
+    /// This wallet's trade key: the stable identity its vouches name. It is
+    /// made on first use, and links every job replied to under it.
+    pub fn trade_key(&mut self) -> Result<Credential, String> {
+        if self.trade.is_none() {
+            self.trade = Some(self.scheme().credential(&self.key));
+            self.save()?;
+        }
+        Ok(self.trade.clone().unwrap())
+    }
+
+    /// The contractor this wallet is known as, if it has a trade key.
+    pub fn contractor(&self) -> Option<Hash> {
+        self.trade.as_ref().map(board::contractor)
+    }
+
+    /// Reply as a contractor, opting into a vouch: the fresh credential
+    /// that will be paid, signed over by this wallet's trade key.
+    pub fn reply_as_contractor(&mut self, job: Hash, note: &str) -> Result<Hash, String> {
+        let me = self.fresh()?;
+        let key = self.trade_key()?;
+        let sig = self.scheme().sign(&self.key, &key, &board::trade_bytes(&job, &me), None);
+        self.send_as(&me, BoardMsg::Reply { job, note: note.into(), trade: Some(board::Trade { key, sig }) })
     }
 
     pub fn accept(&mut self, job: Hash, worker: Credential) -> Result<Hash, String> {
@@ -890,6 +934,18 @@ impl Node {
     /// Pay the accepted worker: a transfer, or a split with change to a fresh
     /// credential, whose receipt commits to the job.
     pub fn pay(&mut self, job_id: Hash) -> Result<Hash, String> {
+        self.pay_with(job_id, None)
+    }
+
+    /// Pay the accepted worker and vouch for them for `category`: the
+    /// payment's second output is a zero-value vouch coin to the worker,
+    /// and the vouch is posted, endorsed, in the contractor's thread. The
+    /// worker must have replied as a contractor.
+    pub fn pay_and_vouch(&mut self, job_id: Hash, category: &str, note: &str) -> Result<Hash, String> {
+        self.pay_with(job_id, Some((category, note)))
+    }
+
+    fn pay_with(&mut self, job_id: Hash, vouch: Option<(&str, &str)>) -> Result<Hash, String> {
         let job = self.job(&job_id)?;
         if !self.mine.contains(&job.poster) {
             return Err("only the poster pays".into());
@@ -899,16 +955,32 @@ impl Node {
             return Err(format!("job is {:?}, not Done", job.status));
         }
         let coin = self.my_coins().into_iter().find(|c| c.amount >= job.pay).ok_or("no single coin covers the pay")?;
-        let receipt = board::pay_receipt(&job_id);
-        let rec = if coin.amount == job.pay {
-            self.signed(&coin.holder, Op::Transfer { state: coin.state, to: worker, receipt })?
-        } else {
-            let change = self.fresh()?;
-            self.signed(&coin.holder, Op::Split { state: coin.state, parts: vec![(job.pay, worker), (coin.amount - job.pay, change)], receipt })?
+        let who = match vouch {
+            Some(_) => Some(*job.contractors.get(&worker).ok_or("the worker didn't reply as a contractor")?),
+            None => None,
+        };
+        let rec = match (vouch, who) {
+            (Some((category, _)), Some(who)) => {
+                let mut parts = vec![(job.pay, worker.clone()), (0, worker)];
+                if coin.amount > job.pay {
+                    parts.push((coin.amount - job.pay, self.fresh()?));
+                }
+                self.signed(&coin.holder, Op::Split { state: coin.state, parts, receipt: board::vouch_receipt(&job_id, &who, category) })?
+            }
+            _ if coin.amount == job.pay => self.signed(&coin.holder, Op::Transfer { state: coin.state, to: worker, receipt: board::pay_receipt(&job_id) })?,
+            _ => {
+                let change = self.fresh()?;
+                self.signed(&coin.holder, Op::Split { state: coin.state, parts: vec![(job.pay, worker), (coin.amount - job.pay, change)], receipt: board::pay_receipt(&job_id) })?
+            }
         };
         apply_ok(&mut self.view, &rec)?;
         let payment = rec.output(0);
         self.send_as(&job.poster, BoardMsg::Paid { job: job_id, payment })?;
+        if let (Some((category, note)), Some(who)) = (vouch, who) {
+            let msg = BoardMsg::Vouch { job: job_id, category: category.into(), note: note.into(), payment: rec };
+            let scope = self.town.jobs.scope;
+            self.compose(&scope, &job.poster, msg.kind(), Some(who), msg.encode(), Some(&[]))?;
+        }
         Ok(payment)
     }
 

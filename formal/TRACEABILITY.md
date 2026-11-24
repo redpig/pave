@@ -65,3 +65,8 @@ The tests were checked against injected faults matching the TLA+ fault names. Ea
 | `noreceiptsig` (boards) | An author accepts a receipt without the host's signature | 1 |
 | `receiptanypost` (boards) | A receipt for one post stands for another with the same content | 1 |
 | `anyaccept` (jobs) | Anyone, not only the poster, can accept a worker | 1 |
+| `vouchanyone` (vouches) | A vouch counts from anyone, not only the job's poster | 1 |
+| `vouchanytype` (vouches) | A vouch's job type needn't match its payment's receipt | 1 |
+| `notradesig` (vouches) | A reply can name a contractor without its trade key's signature | 1 |
+| `vouchperjob` (vouches) | Vouches count per job, not per person | 1 |
+| `vouchunnamed` (vouches) | A vouch counts for a contractor the worker didn't name | 1 |
