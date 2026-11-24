@@ -1,45 +1,37 @@
-//! The civic reports profile: public reports of problems in the street,
-//! such as a sidewalk blocked without a permit.
+//! Civic reports: a board (see [`crate::bulletin`]) for public reports of
+//! problems in the street, such as a sidewalk blocked without a permit.
 //!
-//! It is useful before any city adopts it. Reports are public posts in a
-//! town's reports scope, and the city's own published permit data is
+//! It is useful before any city adopts it. Reports are public posts on a
+//! town's reports board, and the city's own published permit data is
 //! mirrored in, signed by a mirror role, so "no permit" is something anyone
 //! can check rather than an accusation.
 //!
 //! - **Issues.** An issue is a category in a coarse location cell, opened on
-//!   a day. Everyone who reports the same thing reports the same issue.
-//! - **One person, one report per issue, unlinkably.** Each report carries
-//!   an endorsement: a signature by a fresh randomization of the reporter's
-//!   access credential, with the issue as basename. Its pseudonym is the
-//!   same for one person on one issue and unrelated across issues, so ten
-//!   neighbors count as ten and one person counts once, and nobody learns
-//!   who they are. The access credential's issuer shows which class of
-//!   wallet reported, nothing more.
+//!   a day. Everyone who reports the same thing reports the same issue, and
+//!   the issue is the thread.
+//! - **One person, one report per issue, unlinkably.** Reports and
+//!   clearings are endorsed posts, so ten neighbors count as ten and one
+//!   person counts once, and nobody learns who they are. The endorsement's
+//!   issuer shows which class of wallet reported, nothing more.
 //! - **Rulings without unmasking.** A report ruled malicious puts its
-//!   (basename, pseudonym) on a public list. Later reports carry standing
-//!   against every ruling made before their epoch: the ruled reporter can't
-//!   produce it, and nobody else is affected or identified.
+//!   (basename, pseudonym) on a public list. Later endorsements carry
+//!   standing against every ruling made before their epoch: the ruled
+//!   reporter can't produce it, and nobody else is affected or identified.
 //! - **Facts, not verdicts.** A report states what was seen, where (a cell
 //!   about 150 m across) and on what day, and commits to a photo by a salted
-//!   hash that its reporter can reveal to whoever checks it. Whether a permit
+//!   hash its reporter can reveal to whoever checks it. Whether a permit
 //!   covers it comes from the mirrored data, and the subject can reply or
 //!   point to a permit in the same thread.
-//! - **Delayed publication.** A wallet holds its own reports back until the
-//!   next epoch, so a post doesn't say "sent at 8:02 from that corner".
-//! - **Forwarding and clearing.** Anyone can record that an issue was sent
-//!   on through the city's existing channels (a 311 ticket number), and
-//!   people can confirm it was cleared, each counted once like reports.
+//! - **Sent to the board.** A report goes straight to the board's host, as
+//!   a post to any website would. The host sees the connection; the post
+//!   shows only what's in it.
 
-use crate::node::{apply_ok, Node};
+use crate::bulletin::{endorse_basename, endorser, Cheat, Copy};
+use crate::node::{Class, Node};
 use pave_kernel::hash::{hash_of, Hash};
-use pave_kernel::{Credential, Op, Scheme, Sig, View};
-use pave_protocol::{head, Standing};
-use pave_scheme_briolette::BrioletteV1;
+use pave_kernel::Scheme;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-
-/// A (basename, pseudonym) pair, as on a ruled list.
-type Cheat = (Vec<u8>, Vec<u8>);
 
 /// Public cells are geohashes of this length: about 150 m by 150 m.
 pub const CELL_PRECISION: usize = 7;
@@ -85,31 +77,22 @@ impl IssueKey {
     }
 }
 
-/// A reporter's anonymous endorsement of one message about one issue.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Endorsement {
-    /// A fresh randomization of the reporter's access credential.
-    pub access: Credential,
-    pub sig: Sig,
-    /// Standing against every ruled reporter the reporter knew of.
-    pub standing: Standing,
-}
-
+/// The content of a post on a reports board.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReportMsg {
-    /// A report of an issue. The first one opens it.
-    Report { key: IssueKey, observed: String, note: String, photo: Option<Hash>, epoch: u32, endorsement: Endorsement },
-    /// Someone confirms the issue is cleared.
-    Cleared { issue: Hash, epoch: u32, endorsement: Endorsement },
+    /// A report of an issue (endorsed). The first one opens it.
+    Report { key: IssueKey, observed: String, note: String, photo: Option<Hash> },
+    /// Someone confirms the issue is cleared (endorsed).
+    Cleared,
     /// A reply, such as from whoever the issue is about, optionally pointing
     /// to a mirrored permit.
-    Reply { issue: Hash, text: String, permit: Option<Hash> },
+    Reply { text: String, permit: Option<Hash> },
     /// The issue was sent on through another channel, with its receipt.
-    Forwarded { issue: Hash, channel: String, receipt: String },
+    Forwarded { channel: String, receipt: String },
     /// From the mirror role: a permit from the city's published data.
     Permit { source: String, source_id: String, kind: String, cell: String, start: String, end: String },
     /// From the moderator role: a ruling on one report.
-    Ruling { report: Hash, malicious: bool, epoch: u32 },
+    Ruling { report: Hash, malicious: bool },
 }
 
 impl ReportMsg {
@@ -119,22 +102,16 @@ impl ReportMsg {
     pub fn decode(b: &[u8]) -> Option<Self> {
         ciborium::from_reader(b).ok()
     }
-}
-
-fn report_basename(key: &IssueKey) -> Vec<u8> {
-    pave_kernel::hash::encode(&("pave/report/v0", key.id()))
-}
-
-fn clear_basename(issue: &Hash) -> Vec<u8> {
-    pave_kernel::hash::encode(&("pave/report-cleared/v0", issue))
-}
-
-fn report_bytes(key: &IssueKey, observed: &str, note: &str, photo: &Option<Hash>, epoch: u32, standing: &Standing) -> Vec<u8> {
-    pave_kernel::hash::encode(&("pave/report/v0", key, observed, note, photo, epoch, standing))
-}
-
-fn clear_bytes(issue: &Hash, epoch: u32, standing: &Standing) -> Vec<u8> {
-    pave_kernel::hash::encode(&("pave/report-cleared/v0", issue, epoch, standing))
+    pub fn kind(&self) -> &'static str {
+        match self {
+            ReportMsg::Report { .. } => "report",
+            ReportMsg::Cleared => "cleared",
+            ReportMsg::Reply { .. } => "reply",
+            ReportMsg::Forwarded { .. } => "forwarded",
+            ReportMsg::Permit { .. } => "permit",
+            ReportMsg::Ruling { .. } => "ruling",
+        }
+    }
 }
 
 /// A salted commitment to a photo, for revealing to whoever checks a report.
@@ -171,93 +148,83 @@ pub struct Issue {
     pub discounted: usize,
 }
 
-/// Whoever may speak for the town's roles in the reports scope.
-#[derive(Clone, Debug)]
-pub struct Roles<'a> {
-    pub mirror: &'a Credential,
-    pub moderator: &'a Credential,
-    pub classes: &'a BTreeMap<String, crate::node::Class>,
+/// One post, decoded, and only if its kind and thread match its content.
+struct Msg<'a> {
+    item: crate::bulletin::Item<'a>,
+    msg: ReportMsg,
 }
 
-fn class_of(roles: &Roles, e: &Endorsement, msg: &[u8], bsn: &[u8]) -> Option<(String, BrioletteV1, Vec<u8>)> {
-    roles.classes.iter().find_map(|(name, c)| {
-        let s = BrioletteV1 { group_public_key: c.group_public_key.clone() };
-        if s.verify(&e.access, msg, Some(bsn), &e.sig) && e.standing.credential == e.access && e.standing.verify(&s) {
-            s.nym(&e.sig).map(|n| (name.clone(), s, n))
-        } else {
-            None
-        }
-    })
+fn messages(copy: &Copy) -> Vec<Msg<'_>> {
+    copy.items()
+        .into_iter()
+        .filter_map(|item| {
+            let msg = ReportMsg::decode(item.content)?;
+            let thread_ok = match &msg {
+                ReportMsg::Report { key, .. } => item.post.thread == Some(key.id()),
+                ReportMsg::Cleared | ReportMsg::Reply { .. } | ReportMsg::Forwarded { .. } => item.post.thread.is_some(),
+                ReportMsg::Permit { .. } | ReportMsg::Ruling { .. } => true,
+            };
+            (item.post.kind == msg.kind() && thread_ok).then_some(Msg { item, msg })
+        })
+        .collect()
 }
 
-/// The reports scope as this view sees it.
-pub fn issues<V: Scheme>(view: &View<V>, scope: &Hash, roles: &Roles) -> BTreeMap<Hash, Issue> {
-    let mut msgs: Vec<(Hash, Credential, ReportMsg)> = vec![];
-    for rec in view.messages() {
-        let Op::Send { scope: sc, body, .. } = &rec.op else { continue };
-        if sc != scope {
-            continue;
-        }
-        if let Some(m) = ReportMsg::decode(body) {
-            msgs.push((rec.id(), rec.signer.clone(), m));
+/// Every report the moderator ruled malicious: its (basename, pseudonym)
+/// and the epoch of the ruling.
+fn ruled_at(copy: &Copy, classes: &BTreeMap<String, Class>) -> (BTreeSet<Hash>, Vec<(Cheat, u32)>) {
+    let msgs = messages(copy);
+    let moderator = copy.info.role("moderator");
+    let mut ruled: BTreeMap<Hash, u32> = BTreeMap::new();
+    for m in &msgs {
+        if let ReportMsg::Ruling { report, malicious: true } = &m.msg {
+            if Some(m.item.signer) == moderator {
+                ruled.entry(*report).or_insert(m.item.post.epoch);
+            }
         }
     }
-    // Rulings and permits first: only from their roles.
-    let mut ruled: BTreeSet<Hash> = BTreeSet::new();
-    let mut permits: BTreeMap<Hash, (String, String, String, String)> = BTreeMap::new();
-    let mut rulings_at: Vec<(Hash, u32)> = vec![];
-    for (id, signer, m) in &msgs {
-        match m {
-            ReportMsg::Ruling { report, malicious: true, epoch } if signer == roles.moderator => {
-                ruled.insert(*report);
-                rulings_at.push((*report, *epoch));
+    let mut list = vec![];
+    for m in &msgs {
+        if let (ReportMsg::Report { key, .. }, Some(at)) = (&m.msg, ruled.get(&m.item.id)) {
+            if let Some((_, nym)) = endorser(classes, &copy.info.scope, &m.item.post) {
+                list.push(((endorse_basename(&copy.info.scope, "report", &key.id()), nym), *at));
             }
-            ReportMsg::Permit { kind, cell, start, end, .. } if signer == roles.mirror => {
-                permits.insert(*id, (kind.clone(), cell.clone(), start.clone(), end.clone()));
-            }
-            _ => {}
         }
     }
-    // The (basename, pseudonym) of each ruled report, and when it was ruled.
-    let mut ruled_list: Vec<(Cheat, u32)> = vec![];
-    for (id, _, m) in &msgs {
-        if let ReportMsg::Report { key, observed, note, photo, epoch, endorsement } = m {
-            if ruled.contains(id) {
-                let bsn = report_basename(key);
-                if let Some((_, _, nym)) = class_of(roles, endorsement, &report_bytes(key, observed, note, photo, *epoch, &endorsement.standing), &bsn) {
-                    let at = rulings_at.iter().find(|(r, _)| r == id).map(|(_, e)| *e).unwrap_or(0);
-                    ruled_list.push(((bsn, nym), at));
-                }
+    (ruled.into_keys().collect(), list)
+}
+
+/// The ruled list a reporter must have standing against.
+pub fn ruled(copy: &Copy, classes: &BTreeMap<String, Class>) -> Vec<Cheat> {
+    ruled_at(copy, classes).1.into_iter().map(|(c, _)| c).collect()
+}
+
+/// The reports board as a copy has it.
+pub fn issues(copy: &Copy, classes: &BTreeMap<String, Class>) -> BTreeMap<Hash, Issue> {
+    let scope = copy.info.scope;
+    let mirror = copy.info.role("mirror");
+    let msgs = messages(copy);
+    let (ruled, ruled_list) = ruled_at(copy, classes);
+    let mut permits: BTreeMap<Hash, (String, String, String)> = BTreeMap::new();
+    for m in &msgs {
+        if let ReportMsg::Permit { cell, start, end, .. } = &m.msg {
+            if Some(m.item.signer) == mirror {
+                permits.insert(m.item.id, (cell.clone(), start.clone(), end.clone()));
             }
         }
     }
     let mut out: BTreeMap<Hash, Issue> = BTreeMap::new();
     let mut nyms: BTreeMap<Hash, BTreeSet<Vec<u8>>> = BTreeMap::new();
     let mut clearers: BTreeMap<Hash, BTreeSet<Vec<u8>>> = BTreeMap::new();
-    for (id, _, m) in &msgs {
-        match m {
-            ReportMsg::Report { key, observed, note, photo, epoch, endorsement } => {
+    for m in &msgs {
+        let post = &m.item.post;
+        match &m.msg {
+            ReportMsg::Report { key, observed, note, photo } => {
                 let issue = key.id();
-                let entry = out.entry(issue).or_insert_with(|| Issue {
-                    id: issue,
-                    key: key.clone(),
-                    reporters: 0,
-                    classes: BTreeMap::new(),
-                    notes: vec![],
-                    photos: 0,
-                    permit: permit_status(&permits, key, observed),
-                    replies: vec![],
-                    forwarded: vec![],
-                    cleared: 0,
-                    discounted: 0,
-                });
-                let bsn = report_basename(key);
-                let counted = class_of(roles, endorsement, &report_bytes(key, observed, note, photo, *epoch, &endorsement.standing), &bsn).filter(|_| !ruled.contains(id)).filter(|_| {
-                    // Standing must cover every ruling made before this report's epoch.
-                    ruled_list.iter().filter(|(_, at)| at < epoch).all(|(c, _)| endorsement.standing.cheats.contains(c))
-                });
+                let entry = out.entry(issue).or_insert_with(|| Issue { id: issue, key: key.clone(), reporters: 0, classes: BTreeMap::new(), notes: vec![], photos: 0, permit: permit_status(&permits, key, observed), replies: vec![], forwarded: vec![], cleared: 0, discounted: 0 });
+                let standing_ok = |s: &pave_protocol::Standing| ruled_list.iter().filter(|(_, at)| *at < post.epoch).all(|(c, _)| s.cheats.contains(c));
+                let counted = endorser(classes, &scope, post).filter(|_| !ruled.contains(&m.item.id)).filter(|_| post.endorsement.as_ref().is_some_and(|e| standing_ok(&e.standing)));
                 match counted {
-                    Some((class, _, nym)) => {
+                    Some((class, nym)) => {
                         if nyms.entry(issue).or_default().insert(nym) {
                             entry.reporters += 1;
                             *entry.classes.entry(class).or_default() += 1;
@@ -268,24 +235,20 @@ pub fn issues<V: Scheme>(view: &View<V>, scope: &Hash, roles: &Roles) -> BTreeMa
                     None => entry.discounted += 1,
                 }
             }
-            ReportMsg::Cleared { issue, epoch, endorsement } => {
-                if let Some((_, _, nym)) = class_of(roles, endorsement, &clear_bytes(issue, *epoch, &endorsement.standing), &clear_basename(issue)) {
-                    clearers.entry(*issue).or_default().insert(nym);
+            ReportMsg::Cleared => {
+                if let Some((_, nym)) = endorser(classes, &scope, post) {
+                    clearers.entry(m.item.thread()).or_default().insert(nym);
                 }
             }
             _ => {}
         }
     }
-    for (_, _, m) in &msgs {
-        match m {
-            ReportMsg::Reply { issue, text, permit } => {
-                if let Some(i) = out.get_mut(issue) {
+    for m in &msgs {
+        match &m.msg {
+            ReportMsg::Reply { text, permit } => {
+                if let Some(i) = out.get_mut(&m.item.thread()) {
                     // A permit counts only if it covers the issue's area on the day it opened.
-                    let covers = |p: &Hash| {
-                        permits.get(p).is_some_and(|(_, cell, start, end)| {
-                            cell.len() >= 6 && i.key.cell.len() >= 6 && cell[..6] == i.key.cell[..6] && start.as_str() <= i.key.opened.as_str() && i.key.opened.as_str() <= end.as_str()
-                        })
-                    };
+                    let covers = |p: &Hash| permits.get(p).is_some_and(|(cell, start, end)| cell.len() >= 6 && i.key.cell.len() >= 6 && cell[..6] == i.key.cell[..6] && start.as_str() <= i.key.opened.as_str() && i.key.opened.as_str() <= end.as_str());
                     let shown = permit.filter(covers);
                     if let Some(p) = shown {
                         if !matches!(i.permit, PermitStatus::Found(_)) {
@@ -295,8 +258,8 @@ pub fn issues<V: Scheme>(view: &View<V>, scope: &Hash, roles: &Roles) -> BTreeMa
                     i.replies.push((text.clone(), shown));
                 }
             }
-            ReportMsg::Forwarded { issue, channel, receipt } => {
-                if let Some(i) = out.get_mut(issue) {
+            ReportMsg::Forwarded { channel, receipt } => {
+                if let Some(i) = out.get_mut(&m.item.thread()) {
                     i.forwarded.push((channel.clone(), receipt.clone()));
                 }
             }
@@ -311,10 +274,10 @@ pub fn issues<V: Scheme>(view: &View<V>, scope: &Hash, roles: &Roles) -> BTreeMa
     out
 }
 
-fn permit_status(permits: &BTreeMap<Hash, (String, String, String, String)>, key: &IssueKey, observed: &str) -> PermitStatus {
+fn permit_status(permits: &BTreeMap<Hash, (String, String, String)>, key: &IssueKey, observed: &str) -> PermitStatus {
     let in_date = |start: &str, end: &str| start <= observed && observed <= end;
     let mut nearby = None;
-    for (id, (_kind, cell, start, end)) in permits {
+    for (id, (cell, start, end)) in permits {
         if !in_date(start, end) {
             continue;
         }
@@ -342,94 +305,28 @@ pub struct PublishedPermit {
 }
 
 impl Node {
-    fn roles(&self) -> Roles<'_> {
-        Roles { mirror: &self.town.mirror, moderator: &self.town.moderator, classes: &self.town.classes }
+    fn reports(&self) -> Result<&Copy, String> {
+        self.copy(&self.town.reports.scope)
     }
 
     pub fn issues(&self) -> BTreeMap<Hash, Issue> {
-        issues(&self.view, &self.town.reports, &self.roles())
+        self.reports().map(|c| issues(c, &self.town.classes)).unwrap_or_default()
     }
 
-    fn epoch(&self) -> u32 {
-        head(&self.view, &self.town.sequence).map_or(0, |h| h.number)
-    }
-
-    /// The ruled reporters this wallet knows of, with when each was ruled.
-    fn ruled(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
-        let roles = self.roles();
-        let mut ruled = BTreeSet::new();
-        for rec in self.view.messages() {
-            let Op::Send { scope, body, .. } = &rec.op else { continue };
-            if *scope == self.town.reports && rec.signer == self.town.moderator {
-                if let Some(ReportMsg::Ruling { report, malicious: true, .. }) = ReportMsg::decode(body) {
-                    ruled.insert(report);
-                }
-            }
-        }
-        let mut out = vec![];
-        for rec in self.view.messages() {
-            let Op::Send { body, .. } = &rec.op else { continue };
-            if !ruled.contains(&rec.id()) {
-                continue;
-            }
-            if let Some(ReportMsg::Report { key, observed, note, photo, epoch, endorsement }) = ReportMsg::decode(body) {
-                let bsn = report_basename(&key);
-                if let Some((_, _, nym)) = class_of(&roles, &endorsement, &report_bytes(&key, &observed, &note, &photo, epoch, &endorsement.standing), &bsn) {
-                    out.push((bsn, nym));
-                }
-            }
-        }
-        out
-    }
-
-    fn access_scheme(&self) -> BrioletteV1 {
-        BrioletteV1 { group_public_key: self.town.classes[&self.class].group_public_key.clone() }
-    }
-
-    fn endorse(&self, msg_bytes: impl Fn(&Standing) -> Vec<u8>, bsn: &[u8]) -> Result<Endorsement, String> {
-        let a = self.access_scheme();
-        let access = a.credential(&self.access);
-        let standing = Standing::prove(&a, &self.access, &access, &self.ruled()).ok_or("this wallet's reports were ruled malicious")?;
-        let sig = a.sign(&self.access, &access, &msg_bytes(&standing), Some(bsn));
-        Ok(Endorsement { access, sig, standing })
-    }
-
-    /// Post to the reports scope under a fresh, unticketed credential. The
-    /// wallet's own reports are held back until the next epoch.
-    fn post_report(&mut self, msg: ReportMsg, hold: bool) -> Result<Hash, String> {
+    /// Post to the reports board under a fresh, unticketed credential,
+    /// endorsed when it counts a person.
+    fn post_report(&mut self, thread: Option<Hash>, msg: ReportMsg, endorse: bool) -> Result<Hash, String> {
         let signer = self.view.scheme().credential(&self.key);
-        self.mine.insert(signer.clone());
-        let rec = pave_kernel::sign(self.view.scheme(), &self.key, &signer, Op::Send { scope: self.town.reports, presenting: None, body: msg.encode(), receipt: Hash([0; 32]) });
-        let id = rec.id();
-        if hold {
-            self.unpublished.push((self.epoch() + 1, rec));
-            self.save()?;
-        } else {
-            apply_ok(&mut self.view, &rec)?;
-        }
-        Ok(id)
-    }
-
-    /// Publish this wallet's held reports whose epoch has come.
-    pub fn release_reports(&mut self) -> usize {
-        let now = self.epoch();
-        let (due, wait): (Vec<_>, Vec<_>) = self.unpublished.drain(..).partition(|(at, _)| *at <= now);
-        self.unpublished = wait;
-        let n = due.iter().filter(|(_, r)| apply_ok(&mut self.view, r).is_ok()).count();
-        if n > 0 {
-            let _ = self.save();
-        }
-        n
+        let list = if endorse { Some(ruled(self.reports()?, &self.town.classes)) } else { None };
+        let scope = self.town.reports.scope;
+        self.compose(&scope, &signer, msg.kind(), thread, msg.encode(), list.as_deref())
     }
 
     /// Report an issue, or add this wallet's report to one already open.
-    /// Returns the issue id.
+    /// The report goes out at the next sync. Returns the issue id.
     pub fn report(&mut self, key: IssueKey, observed: &str, note: &str, photo: Option<Hash>) -> Result<Hash, String> {
-        let epoch = self.epoch();
-        let bsn = report_basename(&key);
-        let endorsement = self.endorse(|st| report_bytes(&key, observed, note, &photo, epoch, st), &bsn)?;
         let issue = key.id();
-        self.post_report(ReportMsg::Report { key, observed: observed.into(), note: note.into(), photo, epoch, endorsement }, true)?;
+        self.post_report(Some(issue), ReportMsg::Report { key, observed: observed.into(), note: note.into(), photo }, true)?;
         Ok(issue)
     }
 
@@ -440,40 +337,37 @@ impl Node {
     }
 
     pub fn clear_issue(&mut self, issue: &Hash) -> Result<Hash, String> {
-        let epoch = self.epoch();
-        let endorsement = self.endorse(|st| clear_bytes(issue, epoch, st), &clear_basename(issue))?;
-        self.post_report(ReportMsg::Cleared { issue: *issue, epoch, endorsement }, true)
+        self.post_report(Some(*issue), ReportMsg::Cleared, true)
     }
 
     pub fn reply_issue(&mut self, issue: &Hash, text: &str, permit: Option<Hash>) -> Result<Hash, String> {
-        self.post_report(ReportMsg::Reply { issue: *issue, text: text.into(), permit }, false)
+        self.post_report(Some(*issue), ReportMsg::Reply { text: text.into(), permit }, false)
     }
 
     pub fn forward_issue(&mut self, issue: &Hash, channel: &str, receipt: &str) -> Result<Hash, String> {
-        self.post_report(ReportMsg::Forwarded { issue: *issue, channel: channel.into(), receipt: receipt.into() }, false)
+        self.post_report(Some(*issue), ReportMsg::Forwarded { channel: channel.into(), receipt: receipt.into() }, false)
     }
 
-    fn post_as_role(&mut self, signer: Credential, msg: ReportMsg) -> Result<Hash, String> {
-        if self.operator.is_none() {
+    fn post_as_role(&mut self, role: &str, msg: ReportMsg) -> Result<Hash, String> {
+        let scope = self.town.reports.scope;
+        if !self.hosts(&scope) {
             return Err("only the town holds that role".into());
         }
-        let rec = pave_kernel::sign(self.view.scheme(), &self.key, &signer, Op::Send { scope: self.town.reports, presenting: None, body: msg.encode(), receipt: Hash([0; 32]) });
-        apply_ok(&mut self.view, &rec)?;
-        Ok(rec.id())
+        let signer = self.town.reports.role(role).ok_or("no such role")?.clone();
+        self.compose(&scope, &signer, msg.kind(), None, msg.encode(), None)
     }
 
-    /// Mirror role: sign permits from a city's published data into the
-    /// reports scope. Returns how many were new.
+    /// Mirror role: sign permits from a city's published data onto the
+    /// reports board. Returns how many were new.
     pub fn mirror_permits(&mut self, permits: &[PublishedPermit]) -> Result<usize, String> {
+        let mirror = self.town.reports.role("mirror").cloned();
         let have: BTreeSet<(String, String)> = self
-            .view
-            .messages()
+            .reports()?
+            .items()
             .iter()
-            .filter_map(|r| match &r.op {
-                Op::Send { body, .. } if r.signer == self.town.mirror => match ReportMsg::decode(body) {
-                    Some(ReportMsg::Permit { source, source_id, .. }) => Some((source, source_id)),
-                    _ => None,
-                },
+            .filter(|i| Some(i.signer) == mirror.as_ref())
+            .filter_map(|i| match ReportMsg::decode(i.content) {
+                Some(ReportMsg::Permit { source, source_id, .. }) => Some((source, source_id)),
                 _ => None,
             })
             .collect();
@@ -483,28 +377,22 @@ impl Node {
                 continue;
             }
             let msg = ReportMsg::Permit { source: p.source.clone(), source_id: p.id.clone(), kind: p.kind.clone(), cell: cell(p.lat, p.lon, CELL_PRECISION), start: p.start.clone(), end: p.end.clone() };
-            self.post_as_role(self.town.mirror.clone(), msg)?;
+            self.post_as_role("mirror", msg)?;
             n += 1;
         }
-        self.save()?;
         Ok(n)
     }
 
     /// Moderator role: rule on a report.
     pub fn rule(&mut self, report: Hash, malicious: bool) -> Result<Hash, String> {
-        let epoch = self.epoch();
-        let id = self.post_as_role(self.town.moderator.clone(), ReportMsg::Ruling { report, malicious, epoch })?;
-        self.save()?;
-        Ok(id)
+        self.post_as_role("moderator", ReportMsg::Ruling { report, malicious })
     }
 
-    /// The report records in this view about `issue`, by id.
+    /// The report posts in this copy about `issue`, by id.
     pub fn reports_on(&self, issue: &Hash) -> Vec<Hash> {
-        self.view
-            .messages()
-            .iter()
-            .filter(|r| matches!(&r.op, Op::Send { scope, body, .. } if *scope == self.town.reports && matches!(ReportMsg::decode(body), Some(ReportMsg::Report { ref key, .. }) if key.id() == *issue)))
-            .map(|r| r.id())
-            .collect()
+        let Ok(copy) = self.reports() else {
+            return vec![];
+        };
+        messages(copy).into_iter().filter(|m| matches!(&m.msg, ReportMsg::Report { key, .. } if key.id() == *issue)).map(|m| m.item.id).collect()
     }
 }

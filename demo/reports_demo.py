@@ -59,16 +59,10 @@ def main():
             nodes.append(people[name])
         alice, bob, carol, dave = (people[n] for n in ("alice", "bob", "carol", "dave"))
 
-        def tick():
-            """The next epoch: held reports go out."""
-            town("roll", quiet=True)
-            for p in people.values():
-                p("gossip", quiet=True, peer=town.addr)
-                p("issues", quiet=True)
-
         def sync(*ps):
+            """Send queued posts straight to the board, and fetch it."""
             for p in ps:
-                p.meet(town)
+                p.sync(town)
 
         def thread(issue):
             i = next(x for x in town("issues", quiet=True)["issues"] if x["issue"] == issue)
@@ -86,13 +80,10 @@ def main():
         r = town("mirror", quiet=True, file=os.path.join(HERE, "permits_sample.json"))
         print(f"  {r['mirrored']} permits signed into the reports scope by the mirror role")
 
-        say("2. Alice reports a sidewalk fenced off; her wallet holds it until the next epoch")
+        say("2. Alice reports a sidewalk fenced off; it goes straight to the board")
         r = alice("report", category="sidewalk blocked", lat=BLOCKED[0], lon=BLOCKED[1], observed="2026-11-24",
                   note="fencing across the whole sidewalk, no detour signs", photo="(photo bytes)")
         issue = r["issue"]
-        alice.meet(town)
-        print(f"  issues the town sees right away: {len(town('issues', quiet=True)['issues'])}  (so the post doesn't say when she was there)")
-        tick()
         sync(alice)
         thread(issue)
 
@@ -101,12 +92,10 @@ def main():
         bob("report", issue=issue, observed="2026-11-24", note="still there at noon")
         dave("report", issue=issue, observed="2026-11-24", note="people walking in the street")
         alice("report", issue=issue, observed="2026-11-24", note="and again")
-        tick()
         sync(alice, bob, dave)
         thread(issue)
         r = alice("report", category="sidewalk blocked", lat=PERMITTED[0], lon=PERMITTED[1], observed="2026-11-24",
                   note="closed, but there's a sign")
-        tick()
         sync(alice)
         print("  a report two blocks over, where a permit exists:")
         thread(r["issue"])
@@ -124,7 +113,6 @@ def main():
         say("5. A false report is ruled malicious: it stops counting, and its author can't report again")
         fake = carol("report", category="sidewalk blocked", lat=47.6000, lon=-122.3300, observed="2026-11-24",
                      note="made up")["issue"]
-        tick()
         sync(carol)
         thread(fake)
         report = town("reports_on", quiet=True, issue=fake)["reports"][0]
@@ -142,7 +130,6 @@ def main():
         alice("clear", issue=issue)
         dave("clear", issue=issue)
         dave("clear", issue=issue)
-        tick()
         sync(alice, bob, dave)
         thread(issue)
     finally:

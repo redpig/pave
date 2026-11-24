@@ -14,7 +14,7 @@
 
 use pave_board::node::{Enrollment, Join, Node, PendingJoin};
 use pave_board::report;
-use pave_board::{board, net};
+use pave_board::net;
 use pave_kernel::{Credential, Hash};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -53,7 +53,7 @@ fn parse_cred(v: &Value, k: &str) -> Result<Credential, String> {
 const HELP: &[&str] = &[
     "whoami", "board", "post {title, pay}", "reply {job, note}", "accept {job, worker}", "done {job}",
     "pay {job}", "receive", "check {state}", "spend {state, to}", "cheat {state, to}", "meet {peer}",
-    "gossip {peer}", "refill {peer, count}",
+    "gossip {peer}", "refill {peer, count}", "sync {peer} (send queued posts to the board host, fetch the boards)",
     "evidence", "issues", "report {category, lat, lon, observed, note, photo} or {issue, observed, note}", "respond {issue, text, permit}", "forward {issue, channel, receipt}", "clear {issue}", "reports_on {issue}", "mirror {file} (town)", "rule {report, malicious} (town)", "send {peer, amount, memo}", "resume {peer}", "swap {peer, state}", "collect {peer}", "roll {revoke: [group, ...], revoke_class: [class, ...]} (operator)", "help",
 ];
 
@@ -102,6 +102,11 @@ fn command(node: &Arc<Mutex<Node>>, v: &Value) -> Result<Value, String> {
             let held: Vec<u32> = got.iter().filter_map(|r| if let net::SwapResult::Held(u) = r { Some(*u) } else { None }).collect();
             Ok(json!({ "paid": paid, "held_until": held }))
         }
+        "sync" => {
+            let peer = v["peer"].as_str().ok_or("missing peer")?;
+            let r = net::sync_boards(node, peer).map_err(|e| e.to_string())?;
+            Ok(json!({ "sent": r.sent, "refused": r.refused, "received": r.received }))
+        }
         "gossip" => {
             let peer = v["peer"].as_str().ok_or("missing peer")?;
             let (compressed, extended, wants) = net::gossip_with(node, peer).map_err(|e| e.to_string())?;
@@ -117,8 +122,6 @@ fn command(node: &Arc<Mutex<Node>>, v: &Value) -> Result<Value, String> {
 }
 
 fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
-    // Reports held back for privacy go out once their epoch has come.
-    n.release_reports();
     match cmd {
         "issues" => {
             let issues: Vec<Value> = n
@@ -137,7 +140,7 @@ fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
                     "cleared": i.cleared, "discounted": i.discounted,
                 }))
                 .collect();
-            Ok(json!({ "issues": issues, "held_reports": n.unpublished.len() }))
+            Ok(json!({ "issues": issues, "queued": n.outgoing.len() }))
         }
         "report" => {
             let observed = v["observed"].as_str().ok_or("missing observed (YYYY-MM-DD)")?;
@@ -156,7 +159,7 @@ fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
                 let key = report::IssueKey { category: category.into(), cell: report::cell(lat, lon, report::CELL_PRECISION), opened: observed.into() };
                 n.report(key, observed, note, photo)?
             };
-            Ok(json!({ "issue": hx(&issue), "published_from_epoch": n.unpublished.last().map(|(e, _)| *e) }))
+            Ok(json!({ "issue": hx(&issue), "queued": n.outgoing.len() }))
         }
         "respond" => {
             let issue = parse_hash(v, "issue")?;
@@ -199,7 +202,8 @@ fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
             }))
         }
         "board" => {
-            let jobs: Vec<Value> = board::jobs(&n.view, &n.town.board)
+            let jobs: Vec<Value> = n
+                .jobs()
                 .values()
                 .map(|j| json!({
                     "job": hx(&j.id), "title": j.title, "pay": j.pay, "poster": cx(&j.poster),
@@ -207,7 +211,7 @@ fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
                     "replies": j.replies.iter().map(|(c, note)| json!({ "from": cx(c), "note": note })).collect::<Vec<_>>(),
                 }))
                 .collect();
-            Ok(json!({ "jobs": jobs }))
+            Ok(json!({ "jobs": jobs, "queued": n.outgoing.len() }))
         }
         "post" => {
             let title = v["title"].as_str().ok_or("missing title")?;
@@ -297,7 +301,7 @@ fn main() {
                 eprintln!("{e}");
                 std::process::exit(1)
             });
-            println!("{}", json!({ "ok": true, "town": town, "board": hx(&n.town.board), "sequence": hx(&n.town.sequence) }));
+            println!("{}", json!({ "ok": true, "town": town, "jobs": hx(&n.town.jobs.scope), "reports": hx(&n.town.reports.scope), "sequence": hx(&n.town.sequence) }));
         }
         Some("join") => {
             // Wallet side: generate a key here and write a join request.

@@ -53,11 +53,11 @@ We do not assume that any role behaves well (principle 10), that devices are tam
 9. Peer link
 10. Validator, swapper and holder sync
 11. Recovery
-12. Work board profile
+12. Boards and the job board
 13. Operator state and role keys
 14. Payment bridge and redemption
 15. Cross-cutting: the class break
-16. Civic reports profile
+16. Civic reports
 
 ---
 
@@ -270,7 +270,7 @@ Specified as a holder-created capability (spec C9), not yet built
 
 ---
 
-## 12. Work board profile
+## 12. Boards and the job board
 
 `board/src/board.rs`
 
@@ -279,9 +279,9 @@ Specified as a holder-created capability (spec C9), not yet built
 | # | Attack | Prevent | React | Briolette | Status |
 |---|---|---|---|---|---|
 | B1 | Post a job without the pay to back it | Proof of means: a zero-value split of the poster's coin that commits to the terms | The proof is evidence if the coin is spent elsewhere first | n/a | Built |
-| B2 | Accept or mark paid on someone else's job | Only the poster's credential can accept or mark paid; only the accepted worker can mark done | Ignored | n/a | Built |
+| B2 | Accept or mark paid on someone else's job | Only the poster's key can accept or mark paid; only the accepted worker's key can mark done | Ignored | n/a | Built (mutation `anyaccept`) |
 | B3 | A false "done", or a poster who doesn't pay | n/a | Disputes and mediation posted as jobs (principle 20) | n/a | Gap |
-| B4 | Spam posts | Posting costs something or needs a capability (principle 17) | n/a | n/a | Gap |
+| B4 | Spam posts | Posting costs something or needs a capability (principle 17); the host can require endorsements and limit posts per pseudonym | n/a | n/a | Gap |
 | B5 | Sybil reputation | Reputation tied to paid work with receipts | n/a | n/a | Gap |
 | B6 | Link a worker across jobs | A fresh credential per role | n/a | n/a | Built |
 | B7 | Claim a payment that doesn't match the job | The payment receipt commits to the job | n/a | n/a | Built |
@@ -331,17 +331,17 @@ Where pave can do better once this is built:
 
 ---
 
-## 16. Civic reports profile
+## 16. Civic reports
 
-`board/src/report.rs`; [spec/reports.md](../spec/reports.md)
+`board/src/report.rs`; [spec/boards.md](../spec/boards.md)
 
-**Attack surface:** reports, clearings, replies and forwards in a public scope; endorsements and their pseudonyms; the mirror's permits; the moderator's rulings; the reporter's device and the path a report takes off it. Briolette has no counterpart, so its column is omitted.
+**Attack surface:** reports, clearings, replies and forwards on a public board; endorsements and their pseudonyms; the mirror's permits; the moderator's rulings; the reporter's device. The board host is covered in section 12. Briolette has no counterpart, so its column is omitted.
 
 | # | Attack | Prevent | React | Status |
 |---|---|---|---|---|
 | RP1 | Retaliation: the subject of a report finds out who filed it | Reports are signed by a fresh credential and endorsed by a fresh randomization of the access credential; the pseudonym is per issue and unrelated across issues; only a 150 m cell and a day are public | n/a | Built |
-| RP2 | Timing gives the reporter away ("posted at 8:02 from that corner") | The wallet holds its own reports until the next epoch | n/a | Built |
-| RP3 | The first peer to receive a report learns which device it came from | Carry reports through several peers before they reach the town; an anonymous network channel | n/a | Gap: today the reporter's own meet delivers it (P1) |
+| RP2 | Timing gives the reporter away ("posted at 8:02 from that corner") | The post shows only the epoch, never a time; a report made offline goes out at the next sync | n/a | Built; the host sees when it arrives (H5) |
+| RP3 | The host learns which connection a report came from | As H5: the post carries nothing that names the reporter | Send through an anonymity network the reporter already uses | Accepted: like any website |
 | RP4 | A photo identifies the reporter, bystanders or number plates | Photos are committed by a salted hash and revealed only to a verifier; strip metadata, blur faces and plates on the device | n/a | Partial: commitment built; Gap: reveal, stripping, blurring |
 | RP5 | Brigading: one person files many reports, or many reports from many credentials | One pseudonym per person per issue, whatever credential they use; reporters must be enrolled members, so Sybils cost an enrollment each | Counts by wallet class show a skew toward low-assurance wallets | Built (mutation `nodedupe`) |
 | RP6 | A false or malicious report about a business or a rival crew | The report states only what was seen; the permit check comes from the city's data, and a valid permit settles it; the subject can reply in the thread | A ruling discounts the report and lists its pseudonym; the reporter's later reports need standing against it, which only they can't produce | Built (mutations `ignoreruling`, `nostanding`) |
@@ -354,7 +354,8 @@ Where pave can do better once this is built:
 | RP13 | The subject's allies mark an issue cleared while it isn't | Clearings count each person once, like reports; the thread shows both counts | n/a | Built |
 | RP14 | A reporter claims a place or day they weren't at | Not preventable; independent corroboration by distinct people is what carries weight | A verifier's visit, as a paid job | Accepted |
 | RP15 | Paying for reports creates false ones | Pay for checking and forwarding, never for reporting | n/a | Design rule |
-| RP16 | Spam in the scope | Senders are enrolled members; per-issue counting caps what one person adds; rate limits | n/a | Partial |
+| RP16 | Spam on the board | Endorsed posts come from enrolled members; per-issue counting caps what one person adds; rate limits | n/a | Partial |
+| RP17 | One person counts twice by filing a report under another thread | A report counts only under its own issue's thread | n/a | Built (mutation `anythread`) |
 
 ---
 

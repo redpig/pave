@@ -57,5 +57,11 @@ The tests were checked against injected faults matching the TLA+ fault names. Ea
 | `ignoreruling` (reports) | A report ruled malicious still counts | 1 |
 | `nostanding` (reports) | A report counts without standing against earlier rulings | 1 |
 | `anypermit` (reports) | Any mirrored permit in a reply covers the issue | 1 |
-| `nohold` (reports) | Reports go out the moment they're made | 1 |
 | `anymirror` (reports) | Permits and rulings from anyone count | 1 |
+| `anythread` (reports) | A report counts under its issue whatever thread it names | 1 |
+| `carryposts` (boards) | Wallets take board posts from each other's bundles | 1 |
+| `nocontenthash` (boards) | A post's content isn't checked against its binding | 1 |
+| `noendorsecheck` (boards) | The host takes posts with forged endorsements | 1 |
+| `noreceiptsig` (boards) | An author accepts a receipt without the host's signature | 1 |
+| `receiptanypost` (boards) | A receipt for one post stands for another with the same content | 1 |
+| `anyaccept` (jobs) | Anyone, not only the poster, can accept a worker | 1 |

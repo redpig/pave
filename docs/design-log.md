@@ -6,7 +6,7 @@ Decisions behind the current [kernel](../spec/kernel.md) and [protocol](../spec/
 
 1. **Kernel**: axioms only. Three objects (scope, capability, message), holding, schemas, receipts, five operations, one initial state, six invariants. No corollaries, no roles, no time, no domain words.
 2. **Protocol**: corollaries, standard schemas (epochs, expiry, tickets, access credentials, value, time, votes, certification, recovery), core mechanisms, what each role must guarantee, and profiles. Briolette's design generalized: every piece is a capability under a schema.
-3. **Profiles**: which schemas a context uses and how they're set (cash, civic work board, offline mesh).
+3. **Profiles**: which schemas a context uses and how they're set (cash, offline mesh, boards).
 
 ## Kernel
 
@@ -45,6 +45,13 @@ Decisions behind the current [kernel](../spec/kernel.md) and [protocol](../spec/
 - **Evidence.** The shared basename plus two signatures with the same nym. With Briolette v1 crypto it is about 770 bytes, so it travels only in the extended tier. It names the forked coin and its ticket. The cheat's other coins are under unlinkable credentials, so evidence alone can't name them. Standing closes that: once a recipient knows of a cheat, a sender proves its key isn't the cheat's (EPID's non-revoked proof), which the cheat can't do for any coin.
 - **Tokenmap stays, as an optional role.** Syncing to it records what you held, which helps recovery, and gives online double-spend detection. What it publishes is evidence, never a verdict.
 - **Issuer revocation bitfields still work per issuer,** for that issuer's own tickets, carried in its signed epochs. They are no longer the only revocation channel.
+
+## Boards, and what moves like a coin
+
+- **Content goes to its audience.** A board is an online service. Posts go straight to the host with a pave record binding their content by hash; the host answers with a receipt, and anyone with a copy can serve readers, who check everything. Reports first went wallet to wallet like coins, which raised what peers learn on the way and led toward relaying and cover traffic, an anonymity network pave shouldn't build. A post's audience is the board, so it goes to the board.
+- **What moves like a coin.** Peer-to-peer movement is for things the *recipient* wants and must check without reaching anyone: value, and what checking value needs (epochs, standing, evidence). A capability moves like a coin when it is exclusive (one holder at a time, and using it twice is the fraud), the recipient wants it, and the handoff happens where the network may not be: a transit pass or voucher, custody of a package passed courier to courier, a shift swapped between workers, the key to a shared tool or locker. These are coins with their own schemas, and need nothing new in the kernel.
+- **Carried, but not exclusive: recommendations.** "Who did your fence?" is answered hand to hand: you pass on a contact and your word for it. The recipient wants it and may be offline, so it travels peer to peer, but it is copyable and nothing is double-spent, so it needs no coin machinery: it is a signed object that verifies anywhere, like a business card. Its strength comes from binding it to paid work. A vouch is endorsed with the job as basename, by the key that posted the job and paid for it, so it proves someone really hired and paid this contractor, counts once per job, and doesn't say who. Bundles of these are what a contractor would hand out.
+- **What doesn't.** Content (posts, reports, listings) has an audience, not a recipient. Presented credentials (a license, a certification) are shown, not handed over. Counted acts (votes, endorsements) are one per person per thread, which basenames do. None of them has an exclusive state to double-spend.
 
 ## Design notes not yet in the spec
 

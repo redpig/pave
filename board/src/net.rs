@@ -5,6 +5,7 @@
 //! - Gossip: the two tiers. Hints first (fits one packet), then per-hint
 //!   wants answered with proofs.
 
+use crate::bulletin::{PostReceipt, Submission};
 use crate::node::{Bundle, Have, Node, RefillRequest, RefillTerms};
 use crate::pay::{Ack, Invoice, Offer, PayVerdict, Prefix, Proposal};
 use pave_kernel::Record;
@@ -49,6 +50,12 @@ pub enum Wire {
     Ack(Box<Ack>),
     /// Proofs that the credentials a wallet paid from aren't known cheats.
     Standing(Vec<Standing>),
+    /// Boards: a post to its host, the host's receipt, and fetching what a
+    /// reader lacks from any node holding a copy.
+    Post(Box<Submission>),
+    Posted(Box<PostReceipt>),
+    Fetch { scope: Hash, have: std::collections::BTreeSet<Prefix> },
+    Posts(Vec<Submission>),
 }
 
 pub fn write_msg(s: &mut TcpStream, m: &Wire) -> std::io::Result<usize> {
@@ -137,7 +144,12 @@ pub fn serve_peer(node: Arc<Mutex<Node>>, mut s: TcpStream) -> std::io::Result<(
                     Ok(o) => Wire::Swapped(Box::new(o)),
                     Err(e) => Wire::Refused(e),
                 },
-                Wire::RefillTerms(_) | Wire::Tickets(_) | Wire::Refused(_) | Wire::Quote(_) | Wire::Swapped(_) | Wire::Invoice(_) | Wire::Lacks(_) | Wire::Verdict(_) | Wire::Ack(_) => {
+                Wire::Post(sub) => match n.host_post(&sub) {
+                    Ok(r) => Wire::Posted(Box::new(r)),
+                    Err(e) => Wire::Refused(e),
+                },
+                Wire::Fetch { scope, have } => Wire::Posts(n.posts_since(&scope, &have)),
+                Wire::RefillTerms(_) | Wire::Tickets(_) | Wire::Refused(_) | Wire::Quote(_) | Wire::Swapped(_) | Wire::Invoice(_) | Wire::Lacks(_) | Wire::Verdict(_) | Wire::Ack(_) | Wire::Posted(_) | Wire::Posts(_) => {
                     Wire::Refused("unexpected".into())
                 }
                 Wire::Standing(v) => {
@@ -386,4 +398,46 @@ pub fn resume(node: &Arc<Mutex<Node>>, addr: &str) -> std::io::Result<usize> {
         }
     }
     Ok(done)
+}
+
+/// What a board sync did.
+#[derive(Debug, Default)]
+pub struct BoardSync {
+    pub sent: usize,
+    pub refused: Vec<String>,
+    pub received: usize,
+}
+
+/// Sync with a board host: send every queued post, then fetch what this
+/// node lacks of each of the town's boards. Posts go directly to the host,
+/// as to any website; nothing about them passes through other wallets.
+pub fn sync_boards(node: &Arc<Mutex<Node>>, addr: &str) -> std::io::Result<BoardSync> {
+    let mut s = TcpStream::connect(addr)?;
+    let mut out = BoardSync::default();
+    let queued = node.lock().unwrap().outgoing.clone();
+    for sub in queued {
+        write_msg(&mut s, &Wire::Post(Box::new(sub.clone())))?;
+        let (reply, _) = read_msg(&mut s)?;
+        let mut n = node.lock().unwrap();
+        match reply {
+            Wire::Posted(r) => {
+                n.posted(&sub, &r).map_err(std::io::Error::other)?;
+                out.sent += 1;
+            }
+            Wire::Refused(e) => {
+                n.refused(&sub).map_err(std::io::Error::other)?;
+                out.refused.push(e);
+            }
+            _ => return Err(std::io::Error::other("unexpected reply")),
+        }
+    }
+    let scopes: Vec<Hash> = node.lock().unwrap().board_infos().iter().map(|b| b.scope).collect();
+    for scope in scopes {
+        let have = node.lock().unwrap().board_have(&scope);
+        write_msg(&mut s, &Wire::Fetch { scope, have })?;
+        if let (Wire::Posts(p), _) = read_msg(&mut s)? {
+            out.received += node.lock().unwrap().absorb_posts(&scope, &p);
+        }
+    }
+    Ok(out)
 }

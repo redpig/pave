@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """A neighborhood work board on pave, run as separate wallet processes.
 
-Each person is a `pave-node` process with its own state file, talking to the
-others only over local TCP when they "meet". No server is involved after
-enrollment. Every step below is a JSON command on a node's stdin, which is
-also how an agent would drive a wallet.
+Each person is a `pave-node` process with its own state file. Money moves
+wallet to wallet when two people "meet" over local TCP, with no server.
+Job posts are content, so they go to the board the town hosts, as posts to
+any website would. Every step below is a JSON command on a node's stdin,
+which is also how an agent would drive a wallet.
 
     cargo build --release -p pave-board
     python3 demo/board_demo.py [--bin target/release/pave-node]
@@ -48,6 +49,11 @@ class Node:
     def meet(self, other):
         r = self(("meet"), quiet=True, peer=other.addr)
         print(f"  {DIM}{self.name:>5} ⇄ {other.name} meet ({r['bytes']} B){OFF}")
+        return r
+
+    def sync(self, host):
+        r = self(("sync"), quiet=True, peer=host.addr)
+        print(f"  {DIM}{self.name:>5} → {host.name} board: sent {r['sent']}, fetched {r['received']}{OFF}")
         return r
 
     def stop(self):
@@ -97,22 +103,29 @@ def main():
             got = p("refill", quiet=True, peer=town.addr, count=8)["tickets"]
             print(f"  {p.name}: {got} tickets, in a fresh random group, unlinkable to its enrollment")
 
-        say("1. Offline: Alice posts a job, with proof she holds the pay")
-        job = alice("post", title="Fix the back fence", pay=30)["job"]
+        say("1. Alice posts a job to the town's board, with proof she holds the pay")
         alice.meet(bob)
+        job = alice("post", title="Fix the back fence", pay=30)["job"]
+        alice.sync(town)
+        bob.sync(town)
         jobs = bob("board", quiet=True)["jobs"]
         print(f"  bob sees: “{jobs[0]['title']}”, pay {jobs[0]['pay']}, {jobs[0]['status']}")
 
-        say("2. Bob replies; Alice accepts him; Bob finishes; Alice pays")
+        say("2. Bob replies; Alice accepts him; Bob finishes; Alice pays him wallet to wallet")
         bob("reply", job=job, note="I can do it Saturday")
-        bob.meet(alice)
+        bob.sync(town)
+        alice.sync(town)
         worker = alice("board", quiet=True)["jobs"][0]["replies"][0]["from"]
         alice("accept", job=job, worker=worker)
-        alice.meet(bob)
+        alice.sync(town)
+        bob.sync(town)
         bob("done", job=job)
-        bob.meet(alice)
+        bob.sync(town)
+        alice.sync(town)
         payment = alice("pay", job=job)["payment"]
         alice.meet(bob)
+        alice.sync(town)
+        bob.sync(town)
         check = bob("check", state=payment)
         status = bob("board", quiet=True)["jobs"][0]["status"]
         print(f"  job is {status}; bob's wallet would accept the payment: {GREEN}{check['accept']}{OFF}")

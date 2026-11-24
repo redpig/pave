@@ -1,7 +1,8 @@
 //! The work-board story in process, on Briolette v1 credentials: wallets
-//! meeting by swapping bundles, as phones would.
+//! meeting by swapping bundles, as phones would, and posting to the job
+//! board through the town, its host.
 
-use pave_board::board::{jobs, Status};
+use pave_board::board::Status;
 use pave_board::node::{Node, PendingJoin};
 use pave_protocol::gossip;
 use pave_protocol::{check, Policy, Refusal};
@@ -49,21 +50,38 @@ fn the_whole_story_on_ecdaa() {
     meet(&mut alice, &mut bob);
     meet(&mut alice, &mut carol);
 
-    // The job.
+    // The job. Posts go to the town, which hosts the board; wallets meeting
+    // don't carry them.
     let job = alice.post("Fix the fence", 30).unwrap();
     meet(&mut alice, &mut bob);
+    assert!(bob.jobs().is_empty(), "posts don't travel between wallets");
+    alice.sync_with(&mut town);
+    bob.sync_with(&mut town);
+    assert_eq!(bob.jobs()[&job].title, "Fix the fence");
     bob.reply(job, "Saturday").unwrap();
-    meet(&mut alice, &mut bob);
-    let worker = jobs(&alice.view, &alice.town.board)[&job].replies[0].0.clone();
+    bob.sync_with(&mut town);
+    alice.sync_with(&mut town);
+    let worker = alice.jobs()[&job].replies[0].0.clone();
+    // Only the poster's key can accept: Bob accepting himself is ignored.
+    let msg = pave_board::board::BoardMsg::Accept { job, worker: worker.clone() };
+    let bobs = bob.receive().unwrap();
+    bob.compose(&bob.town.jobs.scope.clone(), &bobs, msg.kind(), msg.job(), msg.encode(), None).unwrap();
+    bob.sync_with(&mut town);
+    assert_eq!(bob.jobs()[&job].status, Status::Open);
     alice.accept(job, worker).unwrap();
     assert!(alice.pay(job).is_err(), "can't pay before the work is done");
-    meet(&mut alice, &mut bob);
+    alice.sync_with(&mut town);
+    bob.sync_with(&mut town);
     assert!(alice.done(job).is_err(), "only the accepted worker marks done");
     bob.done(job).unwrap();
-    meet(&mut alice, &mut bob);
+    bob.sync_with(&mut town);
+    alice.sync_with(&mut town);
+    // Payment is a coin: it moves wallet to wallet, offline if need be.
     let payment = alice.pay(job).unwrap();
     meet(&mut alice, &mut bob);
-    assert_eq!(jobs(&bob.view, &bob.town.board)[&job].status, Status::Paid);
+    alice.sync_with(&mut town);
+    bob.sync_with(&mut town);
+    assert_eq!(bob.jobs()[&job].status, Status::Paid);
     assert_eq!(bob.check(&payment), Ok(()));
     assert_eq!(bob.my_coins().iter().map(|c| c.amount).sum::<u64>(), 50);
     assert_eq!(alice.my_coins().iter().map(|c| c.amount).sum::<u64>(), 70);
@@ -156,6 +174,7 @@ fn the_whole_story_on_ecdaa() {
     let again = Node::load(&alice.path).unwrap();
     assert_eq!(again.my_coins(), alice.my_coins());
     assert_eq!(again.view.flagged(), alice.view.flagged());
+    assert_eq!(again.jobs()[&job].status, Status::Paid, "board copies are saved too");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

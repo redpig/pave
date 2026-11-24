@@ -9,6 +9,7 @@
 //! each under its own enrolled key.
 
 use crate::board::{self, BoardMsg};
+use crate::bulletin::{BoardInfo, Copy, PostReceipt, Submission};
 use pave_kernel::receipt::Receipt;
 use pave_kernel::*;
 use pave_protocol::gossip::Hint;
@@ -45,15 +46,14 @@ pub struct Class {
 pub struct Town {
     pub genesis: Genesis,
     pub group_public_key: Vec<u8>,
-    pub board: Hash,
     pub sequence: Hash,
     pub clerk: Credential,
     pub cash: Hash,
     pub classes: BTreeMap<String, Class>,
-    /// The reports scope, and the credentials of its mirror and moderator roles.
-    pub reports: Hash,
-    pub mirror: Credential,
-    pub moderator: Credential,
+    /// The town's job board. Its host is the town.
+    pub jobs: BoardInfo,
+    /// The town's reports board, with its mirror and moderator roles.
+    pub reports: BoardInfo,
 }
 
 /// The operator: registrar plus the root, clerk and minter roles, each its
@@ -168,7 +168,11 @@ pub struct Saved {
     pub invoices: Vec<(Credential, u64, Hash)>,
     pub paid: Vec<(Hash, Credential)>,
     pub pending: Vec<Record>,
-    pub unpublished: Vec<(u32, Record)>,
+    /// Each board copy: its posts, and receipts for this wallet's own.
+    #[serde(default)]
+    pub boards: Vec<(Hash, Vec<Submission>, Vec<PostReceipt>)>,
+    #[serde(default)]
+    pub outgoing: Vec<Submission>,
 }
 
 /// A summary of what a wallet has: id prefixes of its records, evidence
@@ -224,8 +228,10 @@ pub struct Node {
     pub paid: BTreeMap<Hash, Credential>,
     /// Payer: payments signed and sent but not yet acknowledged.
     pub pending: Vec<Record>,
-    /// This wallet's reports, held until the epoch they may be published in.
-    pub unpublished: Vec<(u32, Record)>,
+    /// Copies of the town's boards, by scope. See [`crate::bulletin`].
+    pub boards: BTreeMap<Hash, Copy>,
+    /// Posts signed and waiting for their host.
+    pub outgoing: Vec<Submission>,
 }
 
 fn cash_schema() -> Schema {
@@ -294,8 +300,8 @@ impl Node {
         apply_ok(&mut view, &seq)?;
         let cash = sign(&s, &root, &rc, Op::IssueBudget { authority: auth, schema: cash_schema(), amount: 1_000_000, to: mc.clone() });
         apply_ok(&mut view, &cash)?;
-        let board = sign(&s, &root, &rc, Op::CreateScope { parent: genesis.root_scope(), rules: ScopeRules::default(), authority: auth });
-        apply_ok(&mut view, &board)?;
+        let jobs = sign(&s, &root, &rc, Op::CreateScope { parent: genesis.root_scope(), rules: ScopeRules::default(), authority: auth });
+        apply_ok(&mut view, &jobs)?;
         let reports = sign(&s, &root, &rc, Op::CreateScope { parent: genesis.root_scope(), rules: ScopeRules::default(), authority: auth });
         apply_ok(&mut view, &reports)?;
 
@@ -307,14 +313,16 @@ impl Node {
         let town = Town {
             genesis,
             group_public_key: registrar.group_public_key.clone(),
-            board: board.output(0),
             sequence: seq.output(0),
             clerk: cc,
             cash: cash_schema().id(),
             classes,
-            reports: reports.output(0),
-            mirror: s.credential(&me),
-            moderator: s.credential(&me),
+            jobs: BoardInfo { scope: jobs.output(0), host: s.credential(&me), roles: BTreeMap::new() },
+            reports: BoardInfo {
+                scope: reports.output(0),
+                host: s.credential(&me),
+                roles: [("mirror".to_string(), s.credential(&me)), ("moderator".to_string(), s.credential(&me))].into_iter().collect(),
+            },
         };
         let my_access = access["hardware"].join_locally();
         let operator = Operator {
@@ -333,7 +341,7 @@ impl Node {
             minter_cred: mc,
             cash_budget: cash.output(0),
         };
-        let node = Node {
+        let mut node = Node {
             path: path.into(),
             name: "town".into(),
             key: me,
@@ -353,9 +361,11 @@ impl Node {
             invoices: BTreeMap::new(),
             paid: BTreeMap::new(),
             pending: vec![],
-            unpublished: vec![],
+            boards: BTreeMap::new(),
+            outgoing: vec![],
             vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(path)?)),
         };
+        node.open_boards()?;
         node.save()?;
         Ok(node)
     }
@@ -469,7 +479,8 @@ impl Node {
             invoices: BTreeMap::new(),
             paid: BTreeMap::new(),
             pending: vec![],
-            unpublished: vec![],
+            boards: BTreeMap::new(),
+            outgoing: vec![],
             vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(out)?)),
         };
         for c in &e.creds {
@@ -479,6 +490,7 @@ impl Node {
             }
         }
         person.absorb_bundle(&e.bundle);
+        person.open_boards()?;
         person.save()?;
         Ok(person)
     }
@@ -514,7 +526,8 @@ impl Node {
             invoices: saved.invoices.into_iter().map(|(c, a, m)| (c, (a, m))).collect(),
             paid: saved.paid.into_iter().collect(),
             pending: saved.pending,
-            unpublished: saved.unpublished,
+            boards: BTreeMap::new(),
+            outgoing: saved.outgoing,
             vault: std::sync::Mutex::new(vault),
         };
         node.absorb_bundle(&Bundle {
@@ -527,6 +540,13 @@ impl Node {
         });
         pave_protocol::gossip::absorb_hints(&mut node.know, &saved.hints);
         node.absorb_standings(saved.standing);
+        node.open_boards()?;
+        for (scope, posts, receipts) in saved.boards {
+            node.absorb_posts(&scope, &posts);
+            if let Some(c) = node.boards.get_mut(&scope) {
+                c.receipts.extend(receipts.into_iter().map(|r| (r.post, r)));
+            }
+        }
         Ok(node)
     }
 
@@ -555,7 +575,8 @@ impl Node {
             invoices: self.invoices.iter().map(|(c, (a, m))| (c.clone(), *a, *m)).collect(),
             paid: self.paid.iter().map(|(h, c)| (*h, c.clone())).collect(),
             pending: self.pending.clone(),
-            unpublished: self.unpublished.clone(),
+            boards: self.boards.iter().map(|(s, c)| (*s, c.submissions(), c.receipts.values().cloned().collect())).collect(),
+            outgoing: self.outgoing.clone(),
         };
         let bytes = pave_kernel::hash::encode(&saved);
         let mut vault = self.vault.lock().unwrap();
@@ -623,7 +644,12 @@ impl Node {
     /// Merge what a peer sent. Returns the states with new evidence.
     pub fn absorb_bundle(&mut self, b: &Bundle) -> Vec<Hash> {
         let before: BTreeSet<Hash> = self.view.evidence().map(|e| e.basename).collect();
+        // Board posts don't travel between wallets; they go to their host.
+        let boards: BTreeSet<Hash> = [self.town.jobs.scope, self.town.reports.scope].into_iter().collect();
         for r in b.records.iter().chain(b.conflicts.iter()) {
+            if matches!(&r.op, Op::Send { scope, .. } if boards.contains(scope)) {
+                continue;
+            }
             let _ = self.view.apply(r);
         }
         for e in &b.evidence {
@@ -809,14 +835,20 @@ impl Node {
         Ok(rec)
     }
 
-    fn send_as(&mut self, signer: &Credential, msg: BoardMsg, receipt: Hash) -> Result<Hash, String> {
-        let rec = self.signed(signer, Op::Send { scope: self.town.board, presenting: None, body: msg.encode(), receipt })?;
-        apply_ok(&mut self.view, &rec)?;
-        Ok(rec.id())
+    /// Post to the job board as `signer`, queued for the town.
+    fn send_as(&mut self, signer: &Credential, msg: BoardMsg) -> Result<Hash, String> {
+        let thread = msg.job();
+        let scope = self.town.jobs.scope;
+        self.compose(&scope, signer, msg.kind(), thread, msg.encode(), None)
+    }
+
+    /// The job board as this wallet's copy has it.
+    pub fn jobs(&self) -> BTreeMap<Hash, board::Job> {
+        self.copy(&self.town.jobs.scope).map(board::jobs).unwrap_or_default()
     }
 
     fn job(&self, id: &Hash) -> Result<board::Job, String> {
-        board::jobs(&self.view, &self.town.board).remove(id).ok_or_else(|| "unknown job".into())
+        self.jobs().remove(id).ok_or_else(|| "unknown job".into())
     }
 
     /// Post a job under a fresh credential, with a zero-value split of a coin
@@ -830,13 +862,13 @@ impl Node {
         ]);
         let proof = self.signed(&coin.holder, Op::Split { state: coin.state, parts: vec![(coin.amount, poster.clone()), (0, poster.clone())], receipt: terms.root() })?;
         apply_ok(&mut self.view, &proof)?;
-        self.send_as(&poster, BoardMsg::Post { title: title.into(), pay, means: proof.id() }, terms.root())
+        self.send_as(&poster, BoardMsg::Post { title: title.into(), pay, means: proof.id(), terms: terms.root() })
     }
 
     /// Reply under a fresh credential; that credential is who gets accepted and paid.
     pub fn reply(&mut self, job: Hash, note: &str) -> Result<Hash, String> {
         let me = self.fresh()?;
-        self.send_as(&me, BoardMsg::Reply { job, note: note.into() }, Hash([0; 32]))
+        self.send_as(&me, BoardMsg::Reply { job, note: note.into() })
     }
 
     pub fn accept(&mut self, job: Hash, worker: Credential) -> Result<Hash, String> {
@@ -844,7 +876,7 @@ impl Node {
         if !self.mine.contains(&poster) {
             return Err("only the poster accepts".into());
         }
-        self.send_as(&poster, BoardMsg::Accept { job, worker }, Hash([0; 32]))
+        self.send_as(&poster, BoardMsg::Accept { job, worker })
     }
 
     pub fn done(&mut self, job: Hash) -> Result<Hash, String> {
@@ -852,7 +884,7 @@ impl Node {
         if !self.mine.contains(&worker) {
             return Err("only the accepted worker marks done".into());
         }
-        self.send_as(&worker, BoardMsg::Done { job }, Hash([0; 32]))
+        self.send_as(&worker, BoardMsg::Done { job })
     }
 
     /// Pay the accepted worker: a transfer, or a split with change to a fresh
@@ -876,7 +908,7 @@ impl Node {
         };
         apply_ok(&mut self.view, &rec)?;
         let payment = rec.output(0);
-        self.send_as(&job.poster, BoardMsg::Paid { job: job_id, payment }, receipt)?;
+        self.send_as(&job.poster, BoardMsg::Paid { job: job_id, payment })?;
         Ok(payment)
     }
 
