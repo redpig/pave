@@ -5,8 +5,9 @@ Each model has a `*-RESULTS.md` with what it checks, every run and the findings.
 | Model | What it covers | Prefix |
 |---|---|---|
 | `CivicSequences.tla` | The six-invariant kernel with no clock. Epochs as an issuer sequence (each spends the one before). Expiry and transfer limits honored by honest recipients only. Online swaps. Partitions and merges, including issuer equivocation. | `Seq_` |
-| `CivicGossip.tla` | Tickets as sequences from two clerks, checked across a coin's history. Three sites with no hub. Provenance carried with the coin. One-tier gossip of signed epochs and evidence. | `Gos_` |
+| `CivicGossip.tla` | Tickets as sequences from two clerks: soft expiry on the sender's ticket, hard expiry from the mint-time ticket, each in its own sequence. Three sites with no hub. Provenance carried with the coin. One-tier gossip of signed epochs and evidence. | `Gos_` |
 | `CivicTiered.tla` | Two-tier gossip: unsigned, injectable hints in the compressed tier, and per-hint have/want proofs in the extended tier. Checks that hints never decide and that hints are a complete trigger. | `Tier_` |
+| `CivicStanding.tla` | A cheat with many unlinkable credentials, evidence and standing, ticket groups in classes, revocation within a window and class revocation. Checks that standing stops a caught cheat under every credential, that nobody honest is flagged, that recent hops through a revoked group are contained, and that older honest coins are never stranded. | `Std_` (with `CivicStandingMC.tla`) |
 | `CivicRecursion.tla` | Civic recursion: role and service gigs held by possibly adversarial members. | `Rec` |
 
 ## Running

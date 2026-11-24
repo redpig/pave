@@ -11,9 +11,10 @@
 (*  - Every transfer holds the coin under a fresh ticket from a clerk the  *)
 (*    recipient chooses, stamped with that clerk's epoch as the site knows *)
 (*    it. A coin's history is every ticket it has been held under.         *)
-(*  - Honest recipients check every ticket in the history against its own  *)
-(*    clerk's sequence (expired once that clerk is TLife epochs past it),  *)
-(*    the transfer limit, and refuse a sender they hold evidence against.  *)
+(*  - Honest recipients check the sender's ticket against its clerk's     *)
+(*    sequence (soft expiry: TLife epochs), the coin's mint-time ticket    *)
+(*    against its own clerk's sequence (hard expiry: THard epochs), the    *)
+(*    transfer limit, and refuse a sender they hold evidence against.      *)
 (*  - A transfer's provenance travels with the coin. When a coin meets its *)
 (*    own fork at a site, that site holds evidence: the same signer using  *)
 (*    the same coin state twice. Locally, first seen wins.                 *)
@@ -30,13 +31,13 @@
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets, TLC
 
-CONSTANTS Sites, People, Bad, Owner0, IssX, IssY, YUsers, Coins, MaxHops, TLife, MaxEpoch,
+CONSTANTS Sites, People, Bad, Owner0, IssX, IssY, YUsers, Coins, MaxHops, TLife, THard, MaxEpoch,
           Gossiping, Bug
 
 ASSUME Bad \subseteq People /\ Owner0 \in People
 ASSUME {IssX, IssY} \subseteq People
 ASSUME Gossiping \in BOOLEAN
-ASSUME Bug \in {"none", "steal", "nolimit", "ignoreexpiry", "latestonly",
+ASSUME Bug \in {"none", "steal", "nolimit", "ignoreexpiry", "latestonly", "softall",
                 "ignoreevidence", "forge", "fakeevidence", "gossiprecords",
                 "overwrite", "positiononly"}
 
@@ -53,7 +54,7 @@ VARIABLES
     eps,       \* eps[s]: signed epoch records [k, n, tag] site s holds
     everEp,    \* every epoch record an issuer ever signed
     issSpent,  \* <<k, n>> epochs an issuer has already spent
-    view,      \* view[s][c] = [owner, hop, hist, chain] as site s sees it
+    view,      \* view[s][c] = [owner, hop, hist, cur, mint, chain] as site s sees it
     recs,      \* recs[s]: transfer records site s has seen as provenance
     saw,       \* ghost: records site s legitimately saw (transfer or carry)
     ev,        \* ev[s]: signers site s holds gossiped evidence against
@@ -84,7 +85,9 @@ Init ==
     /\ issSpent = {}
     /\ view = [s \in Sites |-> [c \in Coins |->
                  [owner |-> Owner0, hop |-> 0,
-                  hist |-> {[k |-> "x", e |-> 0]}, chain |-> {}]]]
+                  hist |-> {[k |-> "x", e |-> 0]},
+                  cur |-> [k |-> "x", e |-> 0], mint |-> [k |-> "x", e |-> 0],
+                  chain |-> {}]]]
     /\ recs = [s \in Sites |-> {}]
     /\ saw = [s \in Sites |-> {}]
     /\ ev = [s \in Sites |-> {}]
@@ -105,17 +108,22 @@ Roll(s, k, t) ==
     /\ issSpent' = issSpent \cup {<<k, n>>}
     /\ UNCHANGED <<view, recs, saw, ev, everRecs, spent, broken>>
 
-(* The recipient's policy. Every ticket in the history is checked against  *)
-(* its own clerk's sequence; Bug "latestonly" checks only the newest one.  *)
+(* The recipient's policy (decision D1). Soft expiry on the sender's      *)
+(* ticket; hard expiry from the mint-time ticket, each against its own    *)
+(* clerk's sequence. Bug "latestonly" checks only the sender's ticket, so  *)
+(* a coin has no lifetime from mint. Bug "softall" is the earlier, stricter *)
+(* rule: soft expiry on every ticket in the history.                       *)
 Expired(s, t) == Known(s, t.k) >= t.e + TLife
-InDate(s, h) ==
-    IF Bug = "latestonly"
-    THEN \E t \in h : ~Expired(s, t) /\ \A u \in h : u.e <= t.e
-    ELSE \A t \in h : ~Expired(s, t)
+HardExpired(s, v) == Known(s, v.mint.k) >= v.mint.e + THard
+Stale(s, v) == Expired(s, v.cur) \/ HardExpired(s, v)
+InDate(s, v) ==
+    CASE Bug = "latestonly" -> ~Expired(s, v.cur)
+      [] Bug = "softall"    -> (\A t \in v.hist : ~Expired(s, t)) /\ ~HardExpired(s, v)
+      [] OTHER              -> ~Stale(s, v)
 
 Accepts(q, s, p, v) ==
     \/ q \in Bad
-    \/ /\ InDate(s, v.hist) \/ Bug = "ignoreexpiry"
+    \/ /\ InDate(s, v) \/ Bug = "ignoreexpiry"
        /\ v.hop < MaxHops \/ Bug = "nolimit"
        /\ p \notin Flagged(s) \/ Bug = "ignoreevidence"
 
@@ -125,7 +133,7 @@ Transfer(s, c, p, q) ==
         tk == [k |-> k, e |-> Known(s, k)]
         r == [c |-> c, hop |-> v.hop, from |-> p, to |-> q, tk |-> tk]
         nv == [owner |-> q, hop |-> v.hop + 1, hist |-> v.hist \cup {tk},
-               chain |-> v.chain \cup {r}]
+               cur |-> tk, mint |-> v.mint, chain |-> v.chain \cup {r}]
     IN
     /\ p # q
     /\ v.owner = p \/ Bug = "steal"
@@ -138,7 +146,8 @@ Transfer(s, c, p, q) ==
     /\ everRecs' = everRecs \cup {r}
     /\ spent' = [spent EXCEPT ![p] = @ \cup {Pos(r)}]
     /\ broken' = broken
-         \cup (IF q \in Honest /\ \E t \in v.hist : Expired(s, t) THEN {"expiry"} ELSE {})
+         \cup (IF q \in Honest /\ Stale(s, v) THEN {"expiry"} ELSE {})
+         \cup (IF q \in Honest /\ \E t \in v.hist : Expired(s, t) THEN {"stale"} ELSE {})
          \cup (IF q \in Honest /\ v.hop >= MaxHops THEN {"limit"} ELSE {})
          \cup (IF q \in Honest /\ p \in Flagged(s) THEN {"evidence"} ELSE {})
     /\ UNCHANGED <<eps, everEp, issSpent, ev>>
@@ -214,9 +223,15 @@ NoFalseFlag == \A s \in Sites : Flagged(s) \subseteq Bad
 (* transfers it took part in or was shown as a coin's provenance.          *)
 GossipDiscloses == \A s \in Sites : recs[s] \subseteq saw[s]
 
-(* Expiry schema, by honest recipients: every ticket in the history was in *)
-(* date in its own sequence, and the transfer limit held.                  *)
+(* Expiry schema, by honest recipients: the sender's ticket was in date,   *)
+(* the coin was within its lifetime from mint, each in its own sequence,   *)
+(* and the transfer limit held.                                            *)
 HonestAcceptsInDate == broken \cap {"expiry", "limit"} = {}
+
+(* Witness, expected to fail: an honest recipient can take a coin with a   *)
+(* soft-expired ticket earlier in its history, carried on by someone with  *)
+(* a fresh one, until the coin's hard expiry (threat C6a).                 *)
+NoStaleHistory == "stale" \notin broken
 
 (* Honest recipients never take a coin from someone they hold evidence on. *)
 HonestNoKnownCheat == "evidence" \notin broken
