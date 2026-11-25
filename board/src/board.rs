@@ -68,7 +68,13 @@ pub enum BoardMsg {
         appeal_of: Option<Hash>,
         /// For an appeal with pay: its escrow deposit.
         deposit: Option<Box<Record>>,
+        /// A deposit the counterparty's terms ask of this filer.
+        filer_deposit: Option<Box<Record>>,
     },
+    /// Funding for a first-round dispute, into escrow.
+    Fund { dispute: Hash, deposit: Box<Record> },
+    /// A counterparty's terms for filers against it, signed by its trade key.
+    Terms { min_losses: u32, deposit: u64, pay_to: Credential, trade: Trade },
     /// A panelist's answer to a dispute.
     Ruling { dispute: Hash, answer: crate::dispute::Answer },
     /// A courier's note on an unattended drop: see [`crate::parcel`].
@@ -105,6 +111,8 @@ impl BoardMsg {
             BoardMsg::Ruling { .. } => "ruling",
             BoardMsg::Dropped { .. } => "dropped",
             BoardMsg::Took { .. } => "took",
+            BoardMsg::Fund { .. } => "fund",
+            BoardMsg::Terms { .. } => "terms",
         }
     }
     /// The job a message is about; None for a new job.
@@ -114,6 +122,8 @@ impl BoardMsg {
             BoardMsg::Dispute { against, .. } => *against,
             BoardMsg::Ruling { dispute, .. } => Some(*dispute),
             BoardMsg::Dropped { parcel, .. } | BoardMsg::Took { parcel, .. } => Some(*parcel),
+            BoardMsg::Fund { dispute, .. } => Some(*dispute),
+            BoardMsg::Terms { trade, .. } => Some(contractor(&trade.key)),
             BoardMsg::Reply { job, .. } | BoardMsg::Accept { job, .. } | BoardMsg::Done { job } | BoardMsg::Paid { job, .. } | BoardMsg::Vouch { job, .. } => Some(*job),
         }
     }
@@ -203,7 +213,7 @@ pub fn jobs(copy: &Copy) -> BTreeMap<Hash, Job> {
                     }
                 }
             }
-            BoardMsg::Vouch { .. } | BoardMsg::Dispute { .. } | BoardMsg::Ruling { .. } | BoardMsg::Dropped { .. } | BoardMsg::Took { .. } => {}
+            BoardMsg::Vouch { .. } | BoardMsg::Dispute { .. } | BoardMsg::Ruling { .. } | BoardMsg::Dropped { .. } | BoardMsg::Took { .. } | BoardMsg::Fund { .. } | BoardMsg::Terms { .. } => {}
             BoardMsg::Paid { job, payment } => {
                 if let Some(j) = jobs.get_mut(&job) {
                     if &j.poster == signer && j.status == Status::Done {

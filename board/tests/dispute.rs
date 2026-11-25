@@ -161,18 +161,18 @@ fn disputes() {
     assert!(ana.open_dispute(Filing::new(m2.parcel, q, true, 3, 3).appeal_of(d0)).is_err());
     // Filed anyway, even with a deposit matching its terms, readers ignore it.
     let dep = ana.deposit_for(&m2.parcel, 1, 2, 4, &Some(d0)).unwrap();
-    let bad_panel = ana.file(Filing::new(m2.parcel, q, true, 2, 4).appeal_of(d0), 1, Some(Box::new(dep))).unwrap();
+    let bad_panel = ana.file(Filing::new(m2.parcel, q, true, 2, 4).appeal_of(d0), 1, Some(Box::new(dep)), None).unwrap();
     // So is one whose deposit was made for other terms, even if it covers these.
     let other_terms = ana.deposit_for(&m2.parcel, 1, 5, 4, &Some(d0)).unwrap();
-    let mismatched = ana.file(Filing::new(m2.parcel, q, true, 3, 4).appeal_of(d0), 1, Some(Box::new(other_terms))).unwrap();
+    let mismatched = ana.file(Filing::new(m2.parcel, q, true, 3, 4).appeal_of(d0), 1, Some(Box::new(other_terms)), None).unwrap();
     // An appeal with pay and no deposit is ignored too.
-    let bad_pay = ana.file(Filing::new(m2.parcel, q, true, 3, 4).appeal_of(d0), 1, None).unwrap();
+    let bad_pay = ana.file(Filing::new(m2.parcel, q, true, 3, 4).appeal_of(d0), 1, None, None).unwrap();
     // The real appeal: paid upfront into escrow.
     let d1 = ana.open_dispute(Filing::new(m2.parcel, q, true, 3, 4).appeal_of(d0)).unwrap();
     // A second appeal reusing that deposit is ignored: a deposit pays once.
     let sub = ana.outgoing.iter().find(|x| x.record.id() == d1).unwrap().clone();
     let Some(pave_board::board::BoardMsg::Dispute { deposit, .. }) = pave_board::board::BoardMsg::decode(&sub.content) else { panic!() };
-    let reused = ana.file(Filing::new(m2.parcel, q, true, 3, 4).appeal_of(d0), 1, deposit).unwrap();
+    let reused = ana.file(Filing::new(m2.parcel, q, true, 3, 4).appeal_of(d0), 1, deposit, None).unwrap();
     ana.sync_with(&mut town);
     for a in arbs.iter_mut().take(5) {
         a.sync_with(&mut town);
@@ -287,7 +287,7 @@ fn disputes() {
     assert!(shop.pay_couriers(&m3).is_err());
     assert!(zoe.open_dispute(Filing::new(m3.parcel, q, false, 5, 2).appeal_of(d3)).is_err());
     let dep = zoe.deposit_for(&m3.parcel, 2, 5, 2, &Some(d3)).unwrap();
-    let d4 = zoe.file(Filing::new(m3.parcel, q, false, 5, 2).appeal_of(d3), 2, Some(Box::new(dep))).unwrap();
+    let d4 = zoe.file(Filing::new(m3.parcel, q, false, 5, 2).appeal_of(d3), 2, Some(Box::new(dep)), None).unwrap();
     zoe.sync_with(&mut town);
     shop.sync_with(&mut town);
     assert!(!shop.disputes().0.contains_key(&d4), "a referral can't be appealed inside pave");

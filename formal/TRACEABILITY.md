@@ -99,6 +99,12 @@ The tests were checked against injected faults matching the TLA+ fault names. Ea
 | `nocap` (disputes) | A loser who never escalated owes every round | 1 |
 | `subjectnotchain` (disputes) | A dispute is judged by any ruling on its subject, not its own chain | 1 |
 | `countnotpeople` (disputes) | A counterparty's record counts disputes, not people | 1 |
+| `termsunsigned` (disputes) | Terms count without the counterparty's trade key | 1 |
+| `nofilerdeposit` (disputes) | A filing that owes a deposit under terms counts without it | 1 |
+| `termsforall` (disputes) | Terms ask every filer for a deposit, not those with losses | 1 |
+| `refundflipped` (disputes) | A filer's deposit goes to the wrong side | 1 |
+| `unsettledrelease` (disputes) | A filer's deposit is paid out before the chain settles | 1 |
+| `noappealwindow` (disputes) | Appeals are allowed any time | 1 |
 | `offpanelruling` (disputes) | Rulings from offerers off the panel count | 1 |
 | `byunchecked` (boards) | A post's identity counts without its signature | 2 |
 | `bynotbound` (boards) | An identity's signature isn't bound to its post | 2 |

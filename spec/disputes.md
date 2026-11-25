@@ -28,7 +28,15 @@ Anyone may dispute a decided dispute, and pays for it. An appeal counts only if 
 
 An appeal with pay is paid upfront. Its deposit is a split of one of the appellant's coins with at least `panel * pay_each` to the town's escrow credential, whose receipt commits to the appeal's terms (subject, tier, panel, pay, the dispute appealed). The appeal post carries the deposit record, and readers ignore an appeal whose deposit is missing, made for other terms, too small, or already used by another appeal. Once the appeal is decided or lapses, the town retires the deposit and mints each panelist who ruled its pay and the appellant the rest, as the swapper does.
 
-A first-round dispute isn't escrowed: it is funded by the side the filer disputes, such as the provider, which pays the panel after it rules.
+A first round is funded by the side the filer disputes, such as the provider. It may fund it upfront: a `fund` post carrying a deposit whose receipt commits to the first round's terms, into the same escrow; the town pays the panel from it and refunds the rest to the funder. Or it may pay the panel after it rules.
+
+## Appeal window and settlement
+
+An appeal must be filed within two epochs of the ruling that decided the dispute it appeals. A chain is *settled* once nothing in it is still being decided and its top dispute is past its appeal window, or is a referral. Money that depends on who won waits for settlement.
+
+## Terms for filers
+
+A counterparty may publish terms under its trade key: from filers who have lost to it at least so many times, a deposit of so much, paid to a credential it names. A first-round filing against it from a filer whose record (by its pseudonym with that counterparty) meets the terms must carry the deposit, into escrow, or readers ignore it. Once the chain is settled, the town returns the deposit to the filer if it won or nothing was decided, and pays it to the counterparty if it lost. A filer's wallet pays the deposit itself when the terms apply. Terms signed by anyone but the counterparty's trade key are ignored.
 
 ## Sides and records
 
@@ -57,7 +65,7 @@ One way a delivery co-op could use all this. Nothing here is required by the pro
 - **The first round is the provider's cost**, like customer service: the customer files for free. The provider pays the panel.
 - **Appeals are paid upfront** by whoever appeals, into escrow.
 - **Loser pays, capped.** At the final ruling the losing side owes what the winning side paid, but a side that never escalated owes at most the first round. A provider with deep pockets can't appeal twice and leave a customer owing for rounds the customer never chose.
-- **Reputation before debt.** A filer who keeps losing against a provider is visible to that provider by pseudonym, so the provider can ask that filer for a deposit before the next first round. That deters spurious disputes without anyone collecting debts. A provider or courier who keeps losing to different people is visible too.
+- **Reputation before debt.** A filer who keeps losing against a provider is visible to that provider by pseudonym, so the provider can ask that filer for a deposit before the next first round: its terms for filers. That deters spurious disputes without anyone collecting debts. A provider or courier who keeps losing to different people is visible too.
 - **Debts, if a co-op uses them at all, block little.** An unpaid amount could put the debtor's pseudonym on a list that standing proofs must cover for opening disputes, the way a ruling stops a reporter, and nothing else. It would expire after some number of epochs. Blocking payments would punish too much for a small debt.
 - **Linkage is a choice.** Per counterparty is the default here. A co-op could choose per dispute (no records at all) or per board (one record across every counterparty), the way identities come in tiers.
 - **Open questions.** Partial outcomes (a refund of part of the price) rather than yes or no; who pays when a dispute lapses; whether arbiters' pay should vary with the amount at stake; how records of new filers and providers should be read.

@@ -52,7 +52,7 @@ fn parse_cred(v: &Value, k: &str) -> Result<Credential, String> {
 
 const HELP: &[&str] = &[
     "whoami", "board", "post {title, pay}", "reply {job, note}", "accept {job, worker}", "done {job}",
-    "pay {job} or {job, vouch, note, as: identity}", "parcel_budget {to, count} (town)", "ship {what, from, to, addressee, pay, mode: signed|code|drop, window}", "deliver_code {manifest, code}", "drop {manifest, cell, photo}", "dispute {subject, question, claim, panel, pay, appeal_of?, against?, as?}", "release_escrow {dispute} (town)", "dispute_records {against}", "offer {dispute}", "arbitrate {dispute, answer: yes|no|refer, to}", "disputes", "pay_arbiters {dispute}", "handoff {parcel, to}", "take {manifest, as?: identity}", "name_provider {parcel, provider}", "pay_provider {parcel, price}", "who_took {parcel}", "deliver {manifest}", "custody {parcel}", "pay_couriers {parcel}", "identities", "identity {label} (a stable credential to share with the people who should recognize you)", "add_contact {name, credential}", "reply {job, note, trade: true}", "reputation {contractor}", "receive", "trade (this wallet's contractor id, made on first use)", "check {state}", "spend {state, to}", "cheat {state, to}", "meet {peer}",
+    "pay {job} or {job, vouch, note, as: identity}", "parcel_budget {to, count} (town)", "ship {what, from, to, addressee, pay, mode: signed|code|drop, window}", "deliver_code {manifest, code}", "drop {manifest, cell, photo}", "dispute {subject, question, claim, panel, pay, appeal_of?, against?, as?}", "release_escrow {dispute} (town)", "fund {dispute} (fund a first round into escrow)", "terms {min_losses, deposit} (your terms for filers against you)", "dispute_records {against}", "offer {dispute}", "arbitrate {dispute, answer: yes|no|refer, to}", "disputes", "pay_arbiters {dispute}", "handoff {parcel, to}", "take {manifest, as?: identity}", "name_provider {parcel, provider}", "pay_provider {parcel, price}", "who_took {parcel}", "deliver {manifest}", "custody {parcel}", "pay_couriers {parcel}", "identities", "identity {label} (a stable credential to share with the people who should recognize you)", "add_contact {name, credential}", "reply {job, note, trade: true}", "reputation {contractor}", "receive", "trade (this wallet's contractor id, made on first use)", "check {state}", "spend {state, to}", "cheat {state, to}", "meet {peer}",
     "gossip {peer}", "refill {peer, count}", "sync {peer} (send queued posts to the board host, fetch the boards)",
     "evidence", "issues", "report {category, lat, lon, observed, note, photo} or {issue, observed, note}", "respond {issue, text, permit}", "forward {issue, channel, receipt}", "clear {issue}", "reports_on {issue}", "mirror {file} (town)", "rule {report, malicious} (town)", "send {peer, amount, memo}", "resume {peer}", "swap {peer, state}", "collect {peer}", "roll {revoke: [group, ...], revoke_class: [class, ...]} (operator)", "help",
 ];
@@ -276,11 +276,15 @@ fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
                 "pay_each": d.pay_each, "appeal_of": d.appeal_of.as_ref().map(hx), "offers": d.offers.len(),
                 "panel": d.panel.as_ref().map(|p| p.iter().map(|(_, k)| hx(k)).collect::<Vec<_>>()),
                 "rulings": d.rulings.len(), "outcome": d.outcome.as_ref().map(|a| format!("{a:?}")), "lapsed": d.lapsed,
-                "claim": d.claim, "against": d.against.as_ref().map(hx), "escrowed": d.deposit.is_some(),
+                "claim": d.claim, "against": d.against.as_ref().map(hx), "escrowed": d.deposit.is_some(), "funded_by_other": d.funder.is_some(),
+                "filer_deposit": d.filer_deposit.is_some(), "decided_at": d.decided_at,
+                "settled": pave_board::dispute::settled(&ds, &pave_board::dispute::root_of(&ds, d), n.epoch()),
                 "liability": pave_board::dispute::liability(&ds, &pave_board::dispute::root_of(&ds, d)),
             })).collect();
             Ok(json!({ "disputes": list, "arbiter_scores": scores.iter().map(|(k, s)| (hx(k), *s)).collect::<std::collections::BTreeMap<_, _>>() }))
         }
+        "fund" => Ok(json!({ "message": hx(&n.fund_dispute(parse_hash(v, "dispute")?)?) })),
+        "terms" => Ok(json!({ "message": hx(&n.publish_terms(v["min_losses"].as_u64().unwrap_or(1) as u32, v["deposit"].as_u64().unwrap_or(0))?) })),
         "release_escrow" => Ok(json!({ "minted": n.release_escrow(parse_hash(v, "dispute")?)?.iter().map(hx).collect::<Vec<_>>() })),
         "dispute_records" => {
             let (filers, theirs) = n.dispute_records(&parse_hash(v, "against")?);

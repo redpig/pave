@@ -132,8 +132,11 @@ def main():
         sync(ana, shop)
         print(f"  the shop sees: {shop('custody', quiet=True, parcel=parcel)['delivery']}")
         d0 = zoe("dispute", subject=parcel, question="was it delivered?", claim=False, panel=1, pay=2, against=ana_id, **{"as": zoe_at})["dispute"]
-        sync(zoe, shop)
+        sync(zoe, shop, ana)
         print(f"  the shop sees: {RED}{shop('custody', quiet=True, parcel=parcel)['delivery']}{OFF}")
+        ana("fund", dispute=d0)
+        sync(ana)
+        print("  Ana, the side disputed, funds the first round upfront into escrow")
         for a in arbs[:2]:
             sync(a)
             a("offer", dispute=d0)
@@ -148,8 +151,9 @@ def main():
         arb("arbitrate", dispute=d0, answer="no")
         sync(arb, shop, ana, zoe)
         print(f"  ruled: {RED}{shop('custody', quiet=True, parcel=parcel)['delivery']}{OFF}")
-        ana("pay_arbiters", dispute=d0)
-        ana.meet(arb)
+        ana.meet(town)
+        town("release_escrow", dispute=d0)
+        print(f"  the town pays {arb.name} from Ana's deposit")
 
         say("5. Ana appeals: a bigger panel at double the pay, paid upfront into escrow")
         d1 = ana("dispute", subject=parcel, question="was it delivered?", claim=True, panel=3, pay=4, appeal_of=d0)["dispute"]

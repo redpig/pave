@@ -403,9 +403,11 @@ Where pave can do better once this is built:
 | DS10 | An appellant doesn't pay the panel | Appeals with pay carry an escrow deposit committing to their terms; the town pays the panel from it | n/a | Built (mutations `nodeposit`, `depositanyterms`) |
 | DS11 | One deposit funds two appeals | Readers count each deposit once | n/a | Built (mutation `depositreuse`) |
 | DS12 | A provider escalates to leave a customer owing for rounds it never chose | A loser who never escalated owes at most the first round | n/a | Built, computed not enforced (mutation `nocap`) |
-| DS13 | A spurious filer keeps disputing a provider | The filer's record with that provider, by pseudonym | The provider asks it for a deposit | Built: records (mutation `subjectnotchain`); Gap: deposits for first rounds |
+| DS13 | A spurious filer keeps disputing a provider | The filer's record with that provider, by pseudonym; the provider's terms ask such filers for a deposit, which it keeps if they lose | n/a | Built (mutations `subjectnotchain`, `nofilerdeposit`, `termsforall`, `refundflipped`) |
 | DS14 | One person disputes a provider many times to ruin its record | The provider's record counts distinct people | n/a | Built (mutation `countnotpeople`) |
-| DS15 | The first round's funder doesn't pay its panel | n/a | Visible: payments name the dispute and arbiter | Gap: escrow for first rounds |
+| DS15 | The first round's funder doesn't pay its panel | It may fund upfront into escrow | Visible: payments name the dispute and arbiter | Built: funding is optional |
+| DS16 | Someone publishes terms in a provider's name | Terms count only under the provider's trade key | n/a | Built (mutation `termsunsigned`) |
+| DS17 | A deposit is paid out before an appeal can change the result | A filer's deposit waits for the chain to settle; appeals have a window | n/a | Built (mutations `unsettledrelease`, `noappealwindow`) |
 
 ---
 

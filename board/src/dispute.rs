@@ -32,6 +32,13 @@
 //!   town's escrow credential, whose receipt commits to the appeal's terms.
 //!   Once the appeal is decided or lapses, the town pays each panelist who
 //!   ruled and refunds the rest, by retiring the deposit and minting.
+//! - **First rounds.** The side the filer disputes may fund a first round
+//!   upfront, into the same escrow; the rest comes back to the funder.
+//! - **Terms for filers.** A counterparty may publish terms, signed by its
+//!   trade key: from filers who have lost to it at least so many times, a
+//!   deposit. A first-round filing that meets the terms and lacks the
+//!   deposit is ignored. Once the chain is settled, the deposit goes back
+//!   to the filer if it won, and to the counterparty if it lost.
 //! - **Who owes whom.** [`liability`] works out loser-pays for a subject
 //!   once it is final: the losing side owes what the winning side paid,
 //!   capped at the first round's cost if the loser never escalated. It is
@@ -47,6 +54,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Epochs after a dispute opens during which arbiters may offer.
 pub const OFFER_EPOCHS: u32 = 1;
+
+/// Epochs after a dispute is decided during which it may be appealed. After
+/// that, with nothing open, its chain is settled.
+pub const APPEAL_EPOCHS: u32 = 2;
 
 /// Epochs after the offer window a panel has to decide. A dispute nobody
 /// staffs, or a panel that doesn't decide, lapses: it holds nothing.
@@ -83,6 +94,24 @@ pub fn pay_receipt(dispute: &Hash, arbiter: &Hash) -> Hash {
 /// The receipt an appeal's escrow deposit commits to: its terms.
 pub fn escrow_receipt(subject: &Hash, tier: u32, panel: u32, pay_each: u64, appeal_of: &Option<Hash>) -> Hash {
     hash_of("pave/dispute/escrow", &(subject, tier, panel, pay_each, appeal_of))
+}
+
+pub fn filer_deposit_receipt(subject: &Hash, against: &Hash, amount: u64) -> Hash {
+    hash_of("pave/dispute/filer-deposit", &(subject, against, amount))
+}
+
+pub fn terms_bytes(min_losses: u32, deposit: u64, pay_to: &Credential) -> Vec<u8> {
+    pave_kernel::hash::encode(&("pave/dispute/terms/v0", min_losses, deposit, pay_to))
+}
+
+/// A counterparty's terms for filers against it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Terms {
+    /// Filers with at least this many losses against it owe a deposit.
+    pub min_losses: u32,
+    pub deposit: u64,
+    /// Where a lost deposit goes.
+    pub pay_to: Credential,
 }
 
 /// Whether an appeal escalates enough over the dispute it appeals.
@@ -143,8 +172,15 @@ pub struct Dispute {
     pub against: Option<Hash>,
     /// The filer's pseudonym with the counterparty, if it endorsed.
     pub filer: Option<Vec<u8>>,
-    /// The escrow deposit's state, for an appeal with pay.
+    /// The escrow deposit's state: an appeal's, or a funded first round's.
     pub deposit: Option<Hash>,
+    /// Who funded a first round, if it was funded; its refund goes there.
+    pub funder: Option<Credential>,
+    /// A filer's deposit the counterparty's terms required, and where it
+    /// goes if the filer loses.
+    pub filer_deposit: Option<(Hash, Credential)>,
+    /// The epoch of the ruling that decided it.
+    pub decided_at: Option<u32>,
     /// Offers in the window: the offering credential and its contractor.
     pub offers: Vec<(Credential, Hash)>,
     /// Set once the window has closed and enough eligible arbiters offered.
@@ -171,6 +207,8 @@ struct Raw {
     against: Option<Hash>,
     filer: Option<Vec<u8>>,
     deposit: Option<Hash>,
+    filer_deposit: Option<Box<Record>>,
+    position: usize,
 }
 
 /// Whether `rec` is a deposit to `escrow` of at least `amount` with this
@@ -200,10 +238,20 @@ pub fn disputes(copy: &Copy, classes: &BTreeMap<String, Class>, now: u32) -> (BT
     let mut used_deposits: BTreeSet<Hash> = BTreeSet::new();
     let mut raws: Vec<Raw> = vec![];
     let mut offers: BTreeMap<Hash, Vec<(Credential, Hash, u32)>> = BTreeMap::new();
-    let mut rulings: BTreeMap<Hash, Vec<(Credential, Answer)>> = BTreeMap::new();
-    for item in copy.items() {
+    let mut rulings: BTreeMap<Hash, Vec<(Credential, Answer, u32)>> = BTreeMap::new();
+    let mut funds: BTreeMap<Hash, Vec<(Credential, Record)>> = BTreeMap::new();
+    let mut terms: BTreeMap<Hash, Vec<(usize, Terms)>> = BTreeMap::new();
+    for (position, item) in copy.items().into_iter().enumerate() {
         match BoardMsg::decode(item.content) {
-            Some(BoardMsg::Dispute { subject, question, claim, against, tier, panel, pay_each, appeal_of, deposit }) if item.post.kind == "dispute" && item.post.thread == against => {
+            Some(BoardMsg::Terms { min_losses, deposit, pay_to, trade }) if item.post.kind == "terms" && item.post.thread == Some(contractor(&trade.key)) => {
+                if s.verify(&trade.key, &terms_bytes(min_losses, deposit, &pay_to), None, &trade.sig) {
+                    terms.entry(contractor(&trade.key)).or_default().push((position, Terms { min_losses, deposit, pay_to }));
+                }
+            }
+            Some(BoardMsg::Fund { dispute, deposit }) if item.post.kind == "fund" && item.post.thread == Some(dispute) => {
+                funds.entry(dispute).or_default().push((item.signer.clone(), *deposit));
+            }
+            Some(BoardMsg::Dispute { subject, question, claim, against, tier, panel, pay_each, appeal_of, deposit, filer_deposit }) if item.post.kind == "dispute" && item.post.thread == against => {
                 // Naming a counterparty means endorsing: one pseudonym per
                 // person per counterparty.
                 let filer = match against {
@@ -225,7 +273,7 @@ pub fn disputes(copy: &Copy, classes: &BTreeMap<String, Class>, now: u32) -> (BT
                     }
                     _ => continue,
                 };
-                raws.push(Raw { id: item.id, epoch: item.post.epoch, opener: item.signer.clone(), subject, question, tier, panel, pay_each, appeal_of, claim, against, filer, deposit });
+                raws.push(Raw { id: item.id, epoch: item.post.epoch, opener: item.signer.clone(), subject, question, tier, panel, pay_each, appeal_of, claim, against, filer, deposit, filer_deposit, position });
             }
             Some(BoardMsg::Reply { job, trade: Some(t), .. }) if item.post.thread == Some(job) => {
                 if s.verify(&t.key, &trade_bytes(&job, item.signer), None, &t.sig) {
@@ -233,7 +281,7 @@ pub fn disputes(copy: &Copy, classes: &BTreeMap<String, Class>, now: u32) -> (BT
                 }
             }
             Some(BoardMsg::Ruling { dispute, answer }) if item.post.kind == "ruling" && item.post.thread == Some(dispute) => {
-                rulings.entry(dispute).or_default().push((item.signer.clone(), answer));
+                rulings.entry(dispute).or_default().push((item.signer.clone(), answer, item.post.epoch));
             }
             _ => {}
         }
@@ -246,12 +294,47 @@ pub fn disputes(copy: &Copy, classes: &BTreeMap<String, Class>, now: u32) -> (BT
         let scores = score(&out, &order);
         // An appeal must follow a decided dispute on the same subject, a
         // tier up, with a bigger panel and at least double the pay.
+        // ...within the appeal window after it was decided.
         let valid = match r.appeal_of.and_then(|a| out.get(&a)) {
             None => r.appeal_of.is_none() && r.tier == 0 && r.panel >= 1,
-            Some(p) => escalates(p, &r.subject, r.tier, r.panel, r.pay_each),
+            Some(p) => escalates(p, &r.subject, r.tier, r.panel, r.pay_each) && p.decided_at.is_some_and(|at| r.epoch <= at + APPEAL_EPOCHS),
         };
         if !valid {
             continue;
+        }
+        // A first round against a counterparty whose terms ask this filer
+        // for a deposit needs it.
+        let mut filer_deposit = None;
+        if let (0, Some(c), Some(nym)) = (r.tier, &r.against, &r.filer) {
+            let t = terms.get(c).and_then(|ts| ts.iter().rev().find(|(p, _)| *p < r.position)).map(|(_, t)| t.clone());
+            if let Some(t) = t {
+                let lost = records(&out, c).0.get(nym).map_or(0, |x| x.lost);
+                if lost >= t.min_losses as usize && t.deposit > 0 {
+                    let want = filer_deposit_receipt(&r.subject, c, t.deposit);
+                    let ok = match (&r.filer_deposit, &escrow) {
+                        (Some(rec), Some(esc)) => deposit_ok(s, rec, esc, t.deposit, &want).filter(|d| used_deposits.insert(*d)),
+                        _ => None,
+                    };
+                    match ok {
+                        Some(d) => filer_deposit = Some((d, t.pay_to.clone())),
+                        None => continue,
+                    }
+                }
+            }
+        }
+        // A first round may be funded upfront by anyone, normally the side disputed.
+        let (mut deposit, mut funder) = (r.deposit, None);
+        if r.tier == 0 && r.pay_each > 0 {
+            if let Some(esc) = &escrow {
+                let want = escrow_receipt(&r.subject, 0, r.panel, r.pay_each, &None);
+                for (who, rec) in funds.get(&r.id).into_iter().flatten() {
+                    if let Some(d) = deposit_ok(s, rec, esc, r.pay_each.saturating_mul(r.panel as u64), &want).filter(|d| used_deposits.insert(*d)) {
+                        deposit = Some(d);
+                        funder = Some(who.clone());
+                        break;
+                    }
+                }
+            }
         }
         let earlier: BTreeSet<Hash> = order.iter().filter_map(|d| out.get(d)).filter(|d| d.subject == r.subject).flat_map(|d| d.panel.iter().flatten().map(|(_, c)| *c)).collect();
         let window: Vec<(Credential, Hash)> = offers.get(&r.id).into_iter().flatten().filter(|(_, _, e)| *e <= r.epoch + OFFER_EPOCHS).map(|(c, k, _)| (c.clone(), *k)).collect();
@@ -265,10 +348,14 @@ pub fn disputes(copy: &Copy, classes: &BTreeMap<String, Class>, now: u32) -> (BT
         eligible.sort_by_key(|(_, k)| hash_of("pave/dispute/draw", &(r.id, k)));
         let panel = (now > r.epoch + OFFER_EPOCHS && eligible.len() >= r.panel as usize).then(|| eligible[..r.panel as usize].to_vec());
         let mut by: BTreeMap<Hash, Answer> = BTreeMap::new();
+        let mut decided_at = None;
         if let Some(p) = &panel {
-            for (cred, answer) in rulings.get(&r.id).into_iter().flatten() {
+            for (cred, answer, at) in rulings.get(&r.id).into_iter().flatten() {
                 if let Some((_, k)) = p.iter().find(|(c, _)| c == cred) {
                     by.entry(*k).or_insert_with(|| answer.clone());
+                    if decided_at.is_none() && majority(&by, r.panel).is_some() {
+                        decided_at = Some(*at);
+                    }
                 }
             }
         }
@@ -288,7 +375,10 @@ pub fn disputes(copy: &Copy, classes: &BTreeMap<String, Class>, now: u32) -> (BT
             claim: r.claim,
             against: r.against,
             filer: r.filer,
-            deposit: r.deposit,
+            deposit,
+            funder,
+            filer_deposit,
+            decided_at,
             offers: window,
             panel,
             rulings: by,
@@ -306,6 +396,19 @@ fn majority(by: &BTreeMap<Hash, Answer>, panel: u32) -> Option<Answer> {
         counts.entry(a.class()).or_insert((0, a.clone())).0 += 1;
     }
     counts.into_values().find(|(n, _)| *n * 2 > panel as usize).map(|(_, a)| a)
+}
+
+/// Whether a chain is settled at epoch `now`: nothing in it is still being
+/// decided, and its top dispute is past its appeal window (or a referral).
+pub fn settled(disputes: &BTreeMap<Hash, Dispute>, root: &Hash, now: u32) -> bool {
+    let chain: Vec<&Dispute> = disputes.values().filter(|d| root_of(disputes, d) == *root).collect();
+    if chain.iter().any(|d| d.outcome.is_none() && !d.lapsed) {
+        return false;
+    }
+    match chain.iter().filter(|d| d.outcome.is_some()).max_by_key(|d| d.tier) {
+        None => true,
+        Some(top) => matches!(top.outcome, Some(Answer::Refer(_))) || top.decided_at.is_some_and(|at| now > at + APPEAL_EPOCHS),
+    }
 }
 
 /// The final outcome on a subject: the decided dispute of the highest tier.
@@ -463,17 +566,69 @@ impl Node {
             }
         };
         let deposit = if f.appeal_of.is_some() && f.pay_each > 0 { Some(Box::new(self.deposit_for(&f.subject, tier, f.panel, f.pay_each, &f.appeal_of)?)) } else { None };
-        self.file(f, tier, deposit)
+        // If the counterparty's terms ask this wallet for a deposit, pay it.
+        // Its record is by its pseudonym, which only an endorsement shows,
+        // so pay whenever the terms could apply and losses are on record.
+        let filer_deposit = match (tier, f.against) {
+            (0, Some(c)) => match self.terms_for(&c) {
+                Some(t) if t.deposit > 0 && self.my_losses(&c) >= t.min_losses as usize => Some(Box::new(self.deposit_to_escrow(t.deposit, filer_deposit_receipt(&f.subject, &c, t.deposit))?)),
+                _ => None,
+            },
+            _ => None,
+        };
+        self.file(f, tier, deposit, filer_deposit)
+    }
+
+    /// The latest terms a counterparty has published.
+    pub fn terms_for(&self, against: &Hash) -> Option<Terms> {
+        let copy = self.copy(&self.town.jobs.scope).ok()?;
+        copy.items().into_iter().rev().find_map(|i| match BoardMsg::decode(i.content) {
+            Some(BoardMsg::Terms { min_losses, deposit, pay_to, trade }) if contractor(&trade.key) == *against && i.post.thread == Some(*against) && copy.scheme().verify(&trade.key, &terms_bytes(min_losses, deposit, &pay_to), None, &trade.sig) => Some(Terms { min_losses, deposit, pay_to }),
+            _ => None,
+        })
+    }
+
+    /// Counterparty: publish terms for filers against it, under its trade key.
+    pub fn publish_terms(&mut self, min_losses: u32, deposit: u64) -> Result<Hash, String> {
+        let key = self.trade_key()?;
+        let pay_to = self.receive()?;
+        let sig = self.view.scheme().sign(&self.key, &key, &terms_bytes(min_losses, deposit, &pay_to), None);
+        let me = contractor(&key);
+        let msg = BoardMsg::Terms { min_losses, deposit, pay_to, trade: crate::board::Trade { key, sig } };
+        let signer = self.fresh()?;
+        let scope = self.town.jobs.scope;
+        self.compose(&scope, &signer, msg.kind(), Some(me), msg.encode(), None)
+    }
+
+    /// How many disputes this wallet has lost against a counterparty, by
+    /// its own pseudonym with it.
+    pub fn my_losses(&self, against: &Hash) -> usize {
+        let ds = self.disputes().0;
+        ds.values().filter(|d| d.against.as_ref() == Some(against) && self.mine.contains(&d.opener)).filter(|d| matches!(result(&ds, d), Some(Some(false)))).count()
+    }
+
+    /// Fund a first-round dispute upfront, into escrow. Anyone may; normally
+    /// it's the side disputed, which funds the first round.
+    pub fn fund_dispute(&mut self, dispute: Hash) -> Result<Hash, String> {
+        let d = self.disputes().0.remove(&dispute).ok_or("unknown dispute")?;
+        if d.tier != 0 || d.pay_each == 0 {
+            return Err("only a paid first round is funded".into());
+        }
+        let rec = self.deposit_to_escrow(d.pay_each.saturating_mul(d.panel_size as u64), escrow_receipt(&d.subject, 0, d.panel_size, d.pay_each, &None))?;
+        let msg = BoardMsg::Fund { dispute, deposit: Box::new(rec) };
+        let signer = self.fresh()?;
+        let scope = self.town.jobs.scope;
+        self.compose(&scope, &signer, msg.kind(), Some(dispute), msg.encode(), None)
     }
 
     /// Post a filing as given, without checking it escalates.
-    pub fn file(&mut self, f: Filing, tier: u32, deposit: Option<Box<Record>>) -> Result<Hash, String> {
+    pub fn file(&mut self, f: Filing, tier: u32, deposit: Option<Box<Record>>, filer_deposit: Option<Box<Record>>) -> Result<Hash, String> {
         let me = match f.party {
             Some(c) if self.mine.contains(&c) => c,
             Some(_) => return Err("this wallet doesn't hold that credential".into()),
             None => self.fresh()?,
         };
-        let msg = BoardMsg::Dispute { subject: f.subject, question: f.question, claim: f.claim, against: f.against, tier, panel: f.panel, pay_each: f.pay_each, appeal_of: f.appeal_of, deposit };
+        let msg = BoardMsg::Dispute { subject: f.subject, question: f.question, claim: f.claim, against: f.against, tier, panel: f.panel, pay_each: f.pay_each, appeal_of: f.appeal_of, deposit, filer_deposit };
         let scope = self.town.jobs.scope;
         let endorse: Option<&[crate::bulletin::Cheat]> = if f.against.is_some() { Some(&[]) } else { None };
         self.compose(&scope, &me, msg.kind(), f.against, msg.encode(), endorse)
@@ -483,34 +638,61 @@ impl Node {
     /// `panel * pay_each` to the town's escrow credential, its receipt
     /// committing to the appeal's terms.
     pub fn deposit_for(&mut self, subject: &Hash, tier: u32, panel: u32, pay_each: u64, appeal_of: &Option<Hash>) -> Result<Record, String> {
+        self.deposit_to_escrow(pay_each.saturating_mul(panel as u64), escrow_receipt(subject, tier, panel, pay_each, appeal_of))
+    }
+
+    /// Split `amount` off one coin to the town's escrow credential.
+    pub fn deposit_to_escrow(&mut self, amount: u64, receipt: Hash) -> Result<Record, String> {
         let escrow = self.town.jobs.role("escrow").ok_or("this town has no escrow")?.clone();
-        let amount = pay_each.saturating_mul(panel as u64);
         let coin = self.my_coins().into_iter().find(|c| c.amount > amount).ok_or("no single coin covers the deposit with change")?;
         let change = self.fresh()?;
-        let rec = self.signed(&coin.holder, Op::Split { state: coin.state, parts: vec![(amount, escrow), (coin.amount - amount, change)], receipt: escrow_receipt(subject, tier, panel, pay_each, appeal_of) })?;
+        let rec = self.signed(&coin.holder, Op::Split { state: coin.state, parts: vec![(amount, escrow), (coin.amount - amount, change)], receipt })?;
         apply_ok(&mut self.view, &rec)?;
         self.save()?;
         Ok(rec)
     }
 
-    /// Town: release an appeal's escrow once it is decided or has lapsed:
-    /// each panelist who ruled gets its pay, and the appellant the rest.
-    /// The deposit must have reached the town's view.
+    /// Town: release what a dispute holds in escrow. A panel deposit, once
+    /// the dispute is decided or lapses: each panelist who ruled gets its
+    /// pay, and whoever paid in (the appellant or the funder) the rest. A
+    /// filer's deposit, once the chain is settled: back to the filer if it
+    /// won or nothing was decided, else to the counterparty. Deposits must
+    /// have reached the town's view. Returns the coins minted.
     pub fn release_escrow(&mut self, dispute: Hash) -> Result<Vec<Hash>, String> {
-        let d = self.disputes().0.remove(&dispute).ok_or("unknown dispute")?;
-        if d.outcome.is_none() && !d.lapsed {
-            return Err("still being decided".into());
+        let (ds, _) = self.disputes();
+        let d = ds.get(&dispute).ok_or("unknown dispute")?.clone();
+        let now = self.epoch();
+        let mut pays: Vec<(Credential, u64)> = vec![];
+        let mut retire: Vec<Hash> = vec![];
+        if let Some(state) = d.deposit.filter(|s| self.view.coin(s).is_some()) {
+            if d.outcome.is_some() || d.lapsed {
+                let amount = self.view.coin(&state).unwrap().amount;
+                let panel: Vec<(Credential, u64)> = d.panel.clone().unwrap_or_default().into_iter().filter(|(_, k)| d.rulings.contains_key(k)).map(|(c, _)| (c, d.pay_each)).collect();
+                let rest = amount - panel.iter().map(|(_, a)| a).sum::<u64>();
+                pays.extend(panel);
+                if rest > 0 {
+                    pays.push((d.funder.clone().unwrap_or(d.opener.clone()), rest));
+                }
+                retire.push(state);
+            }
         }
-        let state = d.deposit.ok_or("no escrow for this dispute")?;
-        let coin = self.view.coin(&state).ok_or("the deposit isn't held in escrow here (released already, or not yet seen)")?.clone();
+        if let Some((state, pay_to)) = d.filer_deposit.clone().filter(|(s, _)| self.view.coin(s).is_some()) {
+            if settled(&ds, &dispute, now) {
+                let amount = self.view.coin(&state).unwrap().amount;
+                let lost = matches!((chain_outcome(&ds, &dispute), d.claim), (Some(Answer::Yes), false) | (Some(Answer::No), true));
+                pays.push((if lost { pay_to } else { d.opener.clone() }, amount));
+                retire.push(state);
+            }
+        }
+        if retire.is_empty() {
+            return Err("nothing to release yet (still being decided, already released, or not yet seen here)".into());
+        }
         let s = self.view.scheme().clone();
-        let retire = pave_kernel::sign(&s, &self.key, &coin.holder, Op::Retire { state });
-        let retire = self.guard(retire)?;
-        apply_ok(&mut self.view, &retire)?;
-        let mut pays: Vec<(Credential, u64)> = d.panel.unwrap_or_default().into_iter().filter(|(_, k)| d.rulings.contains_key(k)).map(|(c, _)| (c, d.pay_each)).collect();
-        let rest = coin.amount - pays.iter().map(|(_, a)| a).sum::<u64>();
-        if rest > 0 {
-            pays.push((d.opener, rest));
+        for state in retire {
+            let holder = self.view.coin(&state).unwrap().holder.clone();
+            let r = pave_kernel::sign(&s, &self.key, &holder, Op::Retire { state });
+            let r = self.guard(r)?;
+            apply_ok(&mut self.view, &r)?;
         }
         let mut out = vec![];
         for (to, amount) in pays {
