@@ -374,7 +374,8 @@ Where pave can do better once this is built:
 | PC3 | The giver claims a handoff that didn't happen | The take is a record only the taker can sign | n/a | Built |
 | PC4 | A courier is shown a false manifest (higher pay, another address) | Every handoff's receipt commits to the manifest's hash and hop | n/a | Built (mutation `takeanymanifest`) |
 | PC5 | A courier is paid twice for one hop | Each payment's receipt names the parcel and courier | n/a | Built (mutation `paytwice`) |
-| PC6 | A courier keeps the parcel | The custody chain shows who holds it | Name the courier to the co-op | Gap: couriers taking under an identity |
+| PC6 | A courier keeps the parcel | The custody chain shows who holds it; a courier taking under its co-op identity is named to dispatch | The co-op acts on its member | Built (mutation `anytook`): opt-in per courier; a co-op can require it |
+| PC11 | A shipper or provider pays a courier twice, or both pay | With a provider, only the provider pays couriers; payments name the parcel and courier; the shipper's own handoff is never paid | n/a | Built (mutations `shipperpayscouriers`, `payshipper`, `providertwice`) |
 | PC7 | The addressee takes the parcel but won't retire it, or isn't there | Code and drop delivery modes; a party's dispute | A panel rules on it | Built (mutations `anycode`, `nowindow`) |
 | PC9 | A courier backdates a drop note to settle its window at once | The host takes a post only in its current epoch or the one before | n/a | Built (mutation `backdate`); Gap: a copy served by someone other than the host could carry a post the host never took |
 | PC10 | A stranger disputes deliveries to hold them | Only a party's disputes, and their appeals, count for a parcel | n/a | Built (mutation `anyonedisputes`) |

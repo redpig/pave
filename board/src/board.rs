@@ -73,6 +73,8 @@ pub enum BoardMsg {
     Ruling { dispute: Hash, answer: crate::dispute::Answer },
     /// A courier's note on an unattended drop: see [`crate::parcel`].
     Dropped { parcel: Hash, cell: String, photo: Hash },
+    /// A courier's note that it took a parcel, signed with an identity.
+    Took { parcel: Hash, hop: u32 },
     /// In the contractor's thread, from the job's poster: the payment
     /// record, whose second output is the vouch coin.
     Vouch {
@@ -102,6 +104,7 @@ impl BoardMsg {
             BoardMsg::Dispute { .. } => "dispute",
             BoardMsg::Ruling { .. } => "ruling",
             BoardMsg::Dropped { .. } => "dropped",
+            BoardMsg::Took { .. } => "took",
         }
     }
     /// The job a message is about; None for a new job.
@@ -110,7 +113,7 @@ impl BoardMsg {
             BoardMsg::Post { .. } => None,
             BoardMsg::Dispute { against, .. } => *against,
             BoardMsg::Ruling { dispute, .. } => Some(*dispute),
-            BoardMsg::Dropped { parcel, .. } => Some(*parcel),
+            BoardMsg::Dropped { parcel, .. } | BoardMsg::Took { parcel, .. } => Some(*parcel),
             BoardMsg::Reply { job, .. } | BoardMsg::Accept { job, .. } | BoardMsg::Done { job } | BoardMsg::Paid { job, .. } | BoardMsg::Vouch { job, .. } => Some(*job),
         }
     }
@@ -200,7 +203,7 @@ pub fn jobs(copy: &Copy) -> BTreeMap<Hash, Job> {
                     }
                 }
             }
-            BoardMsg::Vouch { .. } | BoardMsg::Dispute { .. } | BoardMsg::Ruling { .. } | BoardMsg::Dropped { .. } => {}
+            BoardMsg::Vouch { .. } | BoardMsg::Dispute { .. } | BoardMsg::Ruling { .. } | BoardMsg::Dropped { .. } | BoardMsg::Took { .. } => {}
             BoardMsg::Paid { job, payment } => {
                 if let Some(j) = jobs.get_mut(&job) {
                     if &j.poster == signer && j.status == Status::Done {

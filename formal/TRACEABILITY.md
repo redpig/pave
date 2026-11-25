@@ -78,6 +78,10 @@ The tests were checked against injected faults matching the TLA+ fault names. Ea
 | `anyretire` (parcels) | Any retirement counts as delivery | 1 |
 | `paycheat` (parcels) | A courier caught in a double handoff is paid | 1 |
 | `paytwice` (parcels) | A courier is paid again for the same hop | 1 |
+| `payshipper` (parcels) | The shipper's own first handoff is paid | 1 |
+| `shipperpayscouriers` (parcels) | The shipper pays couriers on a parcel with a provider | 1 |
+| `providertwice` (parcels) | The shipper pays the provider twice | 1 |
+| `anytook` (parcels) | A took note counts from someone who never took the parcel | 1 |
 | `anycode` (parcels) | Any code closing counts as delivered | 1 |
 | `nowindow` (parcels) | A drop counts as delivered before its window | 1 |
 | `anyonedisputes` (parcels) | Anyone's dispute holds a parcel | 1 |

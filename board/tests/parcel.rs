@@ -136,6 +136,56 @@ fn parcels() {
     assert!(c.holder.is_none() && !c.delivered);
     assert!(shop.pay_couriers(&m4).is_err());
 
+    // A provider: the shop pays the co-op, and the co-op pays its couriers.
+    // Couriers take under their public identities, so the co-op's dispatch,
+    // which was given them, sees which member holds the parcel.
+    let mut coop = join(&mut town, "coop", &dir, &[100]);
+    let (dan_id, ben_id) = (dan.identity("public").unwrap(), ben.identity("public").unwrap());
+    coop.add_contact("dan", dan_id.clone()).unwrap();
+    coop.add_contact("ben", ben_id.clone()).unwrap();
+    let zoe_at = zoe.receive().unwrap();
+    let m6 = shop.ship("books", "dn5bpsb", "dn5bpth", zoe_at.clone(), 3).unwrap();
+    let m6 = shop.name_provider(&m6.parcel, coop.receive().unwrap()).unwrap();
+    shop.hand_off(&m6.parcel, dan.receive().unwrap()).unwrap();
+    assert!(shop.name_provider(&m6.parcel, zoe_at.clone()).is_err(), "named before the first handoff");
+    meet(&mut shop, &mut dan);
+    dan.take_parcel_as(&m6, Some("public")).unwrap();
+    dan.hand_off(&m6.parcel, ben.receive().unwrap()).unwrap();
+    meet(&mut dan, &mut ben);
+    ben.take_parcel_as(&m6, Some("public")).unwrap();
+    assert!(shop.pay_provider(&m6, 10).is_err(), "not delivered yet");
+    ben.hand_off(&m6.parcel, zoe_at).unwrap();
+    meet(&mut ben, &mut zoe);
+    zoe.confirm_delivery(&m6).unwrap();
+    for _ in 0..2 {
+        meet(&mut zoe, &mut ben);
+        meet(&mut ben, &mut dan);
+        meet(&mut dan, &mut shop);
+        meet(&mut shop, &mut coop);
+    }
+    // Zoe posts a note claiming she took it: she never held it, so it's ignored.
+    let fake = pave_board::board::BoardMsg::Took { parcel: m6.parcel, hop: 2 };
+    let zc = zoe.receive().unwrap();
+    zoe.compose_as(&zoe.town.jobs.scope.clone(), &zc, fake.kind(), fake.job(), fake.encode(), None, Some("public")).unwrap();
+    zoe.sync_with(&mut town);
+    for p in [&mut dan, &mut ben, &mut coop, &mut shop] {
+        p.sync_with(&mut town);
+    }
+    coop.parcels.insert(m6.parcel, m6.clone());
+    let names: Vec<_> = coop.who_took(&m6).into_iter().map(|(h, c, n)| (h, c, n.unwrap())).collect();
+    assert_eq!(names, vec![(2, dan_id, "dan".to_string()), (4, ben_id, "ben".to_string())]);
+    assert_eq!(shop.who_took(&m6).len(), 2);
+    assert!(shop.who_took(&m6).iter().all(|(_, _, n)| n.is_none()), "without them, the shop sees identities, not names");
+    assert!(shop.pay_couriers(&m6).unwrap_err().contains("provider"));
+    shop.pay_provider(&m6, 10).unwrap();
+    assert!(shop.pay_provider(&m6, 10).is_err(), "once");
+    meet(&mut shop, &mut coop);
+    let (dan0, ben0) = (balance(&dan), balance(&ben));
+    assert_eq!(coop.pay_couriers(&m6).unwrap().len(), 2);
+    meet(&mut coop, &mut dan);
+    meet(&mut coop, &mut ben);
+    assert_eq!((balance(&dan) - dan0, balance(&ben) - ben0, balance(&coop)), (3, 3, 104));
+
     // Manifests survive a restart.
     shop.save().unwrap();
     let again = Node::load(&shop.path).unwrap();

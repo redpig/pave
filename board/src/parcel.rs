@@ -27,6 +27,12 @@
 //! - **Disputes.** A party (the addressee, the shipper, a courier) can
 //!   dispute delivery on the job board (see [`crate::dispute`]). The final
 //!   ruling decides, unless the addressee signed; a referral holds it.
+//! - **Provider.** A shipper may name a shipping provider, such as a co-op,
+//!   before the first handoff. Then the shipper pays the provider once it
+//!   is delivered, and the provider pays its couriers.
+//! - **Who holds it.** A courier may post a note on the job board when it
+//!   takes a parcel, signed with one of its identities: whoever was given
+//!   that identity (the co-op's dispatch) sees which member holds it.
 //! - **Pay.** Once it is delivered, the shipper pays the signer of every
 //!   handoff after its own, each payment's receipt naming the parcel, and
 //!   never a courier caught handing one parcel to two people.
@@ -68,6 +74,10 @@ pub struct Manifest {
     pub pay_per_hop: u64,
     #[serde(default)]
     pub mode: Mode,
+    /// The shipping provider (a co-op), if the shipper pays one rather than
+    /// the couriers: the credential it is paid at.
+    #[serde(default)]
+    pub provider: Option<Credential>,
 }
 
 impl Manifest {
@@ -92,6 +102,10 @@ pub fn code_receipt(manifest: &Hash, hop: u32, code: &str) -> Hash {
 
 pub fn drop_receipt(manifest: &Hash, hop: u32, cell: &str, photo: &Hash) -> Hash {
     hash_of("pave/parcel/drop", &(manifest, hop, cell, photo))
+}
+
+pub fn shipping_receipt(parcel: &Hash) -> Hash {
+    hash_of("pave/parcel/shipping", parcel)
 }
 
 pub fn pay_receipt(parcel: &Hash, courier: &Credential) -> Hash {
@@ -166,7 +180,7 @@ impl Node {
         let (me, change) = (self.fresh()?, self.fresh()?);
         let rec = self.signed(&budget.holder, Op::Mint { budget: budget.state, amount: 1, to: me, change_to: change })?;
         apply_ok(&mut self.view, &rec)?;
-        let m = Manifest { parcel: rec.output(0), what: what.into(), from_cell: from_cell.into(), to_cell: to_cell.into(), addressee, pay_per_hop, mode };
+        let m = Manifest { parcel: rec.output(0), what: what.into(), from_cell: from_cell.into(), to_cell: to_cell.into(), addressee, pay_per_hop, mode, provider: None };
         let code = (m.mode == Mode::Code).then(|| {
             let mut b = [0u8; 4];
             rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut b);
@@ -311,6 +325,12 @@ impl Node {
     /// passes this wallet's usual checks; then acknowledges by moving it to
     /// a fresh credential of its own.
     pub fn take_parcel(&mut self, m: &Manifest) -> Result<Hash, String> {
+        self.take_parcel_as(m, None)
+    }
+
+    /// Take a parcel, and with `identity`, post a note signed with that
+    /// identity so whoever holds it (the co-op's dispatch) knows who has it.
+    pub fn take_parcel_as(&mut self, m: &Manifest, identity: Option<&str>) -> Result<Hash, String> {
         let coin = self.held(&m.parcel)?;
         let creator = self.view.creator(&coin.state).ok_or("unknown parcel state")?.clone();
         match &creator.op {
@@ -322,8 +342,58 @@ impl Node {
         let rec = self.signed(&coin.holder, Op::Transfer { state: coin.state, to: me, receipt: take_receipt(&m.hash(), coin.hops + 1) })?;
         apply_ok(&mut self.view, &rec)?;
         self.parcels.insert(m.parcel, m.clone());
+        if identity.is_some() {
+            let msg = crate::board::BoardMsg::Took { parcel: m.parcel, hop: coin.hops + 1 };
+            let scope = self.town.jobs.scope;
+            self.compose_as(&scope, &coin.holder, msg.kind(), msg.job(), msg.encode(), None, identity)?;
+        }
         self.save()?;
         Ok(rec.output(0))
+    }
+
+    /// Shipper: name the provider, before the first handoff.
+    pub fn name_provider(&mut self, parcel: &Hash, provider: Credential) -> Result<Manifest, String> {
+        let coin = self.held(parcel)?;
+        if coin.hops > 0 {
+            return Err("the provider is named before the first handoff".into());
+        }
+        let m = self.parcels.get_mut(parcel).ok_or("no manifest for that parcel")?;
+        m.provider = Some(provider);
+        let m = m.clone();
+        self.save()?;
+        Ok(m)
+    }
+
+    /// Shipper: pay the provider `price` once the parcel is delivered, once.
+    pub fn pay_provider(&mut self, m: &Manifest, price: u64) -> Result<Hash, String> {
+        let provider = m.provider.clone().ok_or("this parcel has no provider")?;
+        if !matches!(self.delivery(m), Delivery::Delivered(_)) {
+            return Err("not delivered yet".into());
+        }
+        let receipt = shipping_receipt(&m.parcel);
+        if self.view.records().iter().any(|r| matches!(&r.op, Op::Transfer { receipt: x, .. } | Op::Split { receipt: x, .. } if *x == receipt)) {
+            return Err("already paid".into());
+        }
+        self.pay_to(provider, price, receipt)
+    }
+
+    /// Who has taken a parcel, as this wallet can tell: for each take
+    /// whose courier posted a note, the identity it signed with and this
+    /// wallet's name for it, if it was given that identity.
+    pub fn who_took(&self, m: &Manifest) -> Vec<(u32, Credential, Option<String>)> {
+        let takes: Vec<Credential> = self.custody(m).steps.into_iter().filter_map(|s| if let Step::Take { by } = s { Some(by) } else { None }).collect();
+        let Ok(copy) = self.copy(&self.town.jobs.scope) else { return vec![] };
+        copy.items()
+            .into_iter()
+            .filter_map(|i| match crate::board::BoardMsg::decode(i.content) {
+                Some(crate::board::BoardMsg::Took { parcel, hop }) if parcel == m.parcel && i.post.thread == Some(parcel) && takes.contains(i.signer) => {
+                    let id = i.by.clone()?;
+                    let name = self.contacts.iter().find(|(_, c)| **c == id).map(|(n, _)| n.clone());
+                    Some((hop, id, name))
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     /// Addressee: confirm delivery by retiring the parcel.
@@ -369,6 +439,9 @@ impl Node {
     /// Shipper: pay the signer of every handoff after this wallet's own,
     /// once the addressee has confirmed delivery. Returns the payments.
     pub fn pay_couriers(&mut self, m: &Manifest) -> Result<Vec<Hash>, String> {
+        if m.provider.as_ref().is_some_and(|p| !self.mine.contains(p)) {
+            return Err("this parcel's provider pays its couriers".into());
+        }
         let c = self.custody(m);
         if !matches!(self.delivery(m), Delivery::Delivered(_)) {
             return Err("not delivered yet".into());
@@ -382,6 +455,8 @@ impl Node {
             .steps
             .iter()
             .filter_map(|s| if let Step::Handoff { from, .. } = s { Some(from.clone()) } else { None })
+            // The first handoff is the shipper's own.
+            .skip(1)
             .chain(closer)
             .filter(|from| !self.mine.contains(from) && !self.view.flagged().contains(from))
             .collect();

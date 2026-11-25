@@ -52,7 +52,7 @@ fn parse_cred(v: &Value, k: &str) -> Result<Credential, String> {
 
 const HELP: &[&str] = &[
     "whoami", "board", "post {title, pay}", "reply {job, note}", "accept {job, worker}", "done {job}",
-    "pay {job} or {job, vouch, note, as: identity}", "parcel_budget {to, count} (town)", "ship {what, from, to, addressee, pay, mode: signed|code|drop, window}", "deliver_code {manifest, code}", "drop {manifest, cell, photo}", "dispute {subject, question, claim, panel, pay, appeal_of?, against?, as?}", "release_escrow {dispute} (town)", "dispute_records {against}", "offer {dispute}", "arbitrate {dispute, answer: yes|no|refer, to}", "disputes", "pay_arbiters {dispute}", "handoff {parcel, to}", "take {manifest}", "deliver {manifest}", "custody {parcel}", "pay_couriers {parcel}", "identities", "identity {label} (a stable credential to share with the people who should recognize you)", "add_contact {name, credential}", "reply {job, note, trade: true}", "reputation {contractor}", "receive", "trade (this wallet's contractor id, made on first use)", "check {state}", "spend {state, to}", "cheat {state, to}", "meet {peer}",
+    "pay {job} or {job, vouch, note, as: identity}", "parcel_budget {to, count} (town)", "ship {what, from, to, addressee, pay, mode: signed|code|drop, window}", "deliver_code {manifest, code}", "drop {manifest, cell, photo}", "dispute {subject, question, claim, panel, pay, appeal_of?, against?, as?}", "release_escrow {dispute} (town)", "dispute_records {against}", "offer {dispute}", "arbitrate {dispute, answer: yes|no|refer, to}", "disputes", "pay_arbiters {dispute}", "handoff {parcel, to}", "take {manifest, as?: identity}", "name_provider {parcel, provider}", "pay_provider {parcel, price}", "who_took {parcel}", "deliver {manifest}", "custody {parcel}", "pay_couriers {parcel}", "identities", "identity {label} (a stable credential to share with the people who should recognize you)", "add_contact {name, credential}", "reply {job, note, trade: true}", "reputation {contractor}", "receive", "trade (this wallet's contractor id, made on first use)", "check {state}", "spend {state, to}", "cheat {state, to}", "meet {peer}",
     "gossip {peer}", "refill {peer, count}", "sync {peer} (send queued posts to the board host, fetch the boards)",
     "evidence", "issues", "report {category, lat, lon, observed, note, photo} or {issue, observed, note}", "respond {issue, text, permit}", "forward {issue, channel, receipt}", "clear {issue}", "reports_on {issue}", "mirror {file} (town)", "rule {report, malicious} (town)", "send {peer, amount, memo}", "resume {peer}", "swap {peer, state}", "collect {peer}", "roll {revoke: [group, ...], revoke_class: [class, ...]} (operator)", "help",
 ];
@@ -295,7 +295,7 @@ fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
         "take" | "deliver" => {
             let bytes = hex::decode(v["manifest"].as_str().ok_or("missing manifest")?).map_err(|e| e.to_string())?;
             let m: pave_board::parcel::Manifest = ciborium::from_reader(bytes.as_slice()).map_err(|e| e.to_string())?;
-            let id = if cmd == "take" { n.take_parcel(&m)? } else { n.confirm_delivery(&m)? };
+            let id = if cmd == "take" { n.take_parcel_as(&m, v["as"].as_str())? } else { n.confirm_delivery(&m)? };
             Ok(json!({ "parcel": hx(&m.parcel), "record": hx(&id) }))
         }
         "custody" => {
@@ -309,6 +309,20 @@ fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
                 pave_board::parcel::Step::Closed { by, .. } => json!({ "closed": cx(by) }),
             }).collect();
             Ok(json!({ "what": m.what, "steps": steps, "holder": c.holder.as_ref().map(cx), "delivery": format!("{:?}", n.delivery(m)) }))
+        }
+        "name_provider" => {
+            let m = n.name_provider(&parse_hash(v, "parcel")?, parse_cred(v, "provider")?)?;
+            Ok(json!({ "manifest": hex::encode(pave_kernel::hash::encode(&m)) }))
+        }
+        "pay_provider" => {
+            let parcel = parse_hash(v, "parcel")?;
+            let m = n.parcels.get(&parcel).ok_or("no manifest for that parcel")?.clone();
+            Ok(json!({ "payment": hx(&n.pay_provider(&m, v["price"].as_u64().unwrap_or(0))?) }))
+        }
+        "who_took" => {
+            let parcel = parse_hash(v, "parcel")?;
+            let m = n.parcels.get(&parcel).ok_or("no manifest for that parcel")?.clone();
+            Ok(json!({ "takes": n.who_took(&m).iter().map(|(hop, c, name)| json!({ "hop": hop, "identity": cx(c), "name": name })).collect::<Vec<_>>() }))
         }
         "pay_couriers" => {
             let parcel = parse_hash(v, "parcel")?;
