@@ -81,6 +81,9 @@ pub enum BoardMsg {
     Dropped { parcel: Hash, cell: String, photo: Hash },
     /// A courier's note that it took a parcel, signed with an identity.
     Took { parcel: Hash, hop: u32 },
+    /// Evidence was submitted about a subject: its kind and hash. The
+    /// evidence itself goes only to the host, for the panel.
+    EvidenceNote { subject: Hash, kind: String, hash: Hash },
     /// In the contractor's thread, from the job's poster: the payment
     /// record, whose second output is the vouch coin.
     Vouch {
@@ -112,6 +115,7 @@ impl BoardMsg {
             BoardMsg::Dropped { .. } => "dropped",
             BoardMsg::Took { .. } => "took",
             BoardMsg::Fund { .. } => "fund",
+            BoardMsg::EvidenceNote { .. } => "evidence",
             BoardMsg::Terms { .. } => "terms",
         }
     }
@@ -123,6 +127,7 @@ impl BoardMsg {
             BoardMsg::Ruling { dispute, .. } => Some(*dispute),
             BoardMsg::Dropped { parcel, .. } | BoardMsg::Took { parcel, .. } => Some(*parcel),
             BoardMsg::Fund { dispute, .. } => Some(*dispute),
+            BoardMsg::EvidenceNote { subject, .. } => Some(*subject),
             BoardMsg::Terms { trade, .. } => Some(contractor(&trade.key)),
             BoardMsg::Reply { job, .. } | BoardMsg::Accept { job, .. } | BoardMsg::Done { job } | BoardMsg::Paid { job, .. } | BoardMsg::Vouch { job, .. } => Some(*job),
         }
@@ -213,7 +218,7 @@ pub fn jobs(copy: &Copy) -> BTreeMap<Hash, Job> {
                     }
                 }
             }
-            BoardMsg::Vouch { .. } | BoardMsg::Dispute { .. } | BoardMsg::Ruling { .. } | BoardMsg::Dropped { .. } | BoardMsg::Took { .. } | BoardMsg::Fund { .. } | BoardMsg::Terms { .. } => {}
+            BoardMsg::Vouch { .. } | BoardMsg::Dispute { .. } | BoardMsg::Ruling { .. } | BoardMsg::Dropped { .. } | BoardMsg::Took { .. } | BoardMsg::Fund { .. } | BoardMsg::Terms { .. } | BoardMsg::EvidenceNote { .. } => {}
             BoardMsg::Paid { job, payment } => {
                 if let Some(j) = jobs.get_mut(&job) {
                     if &j.poster == signer && j.status == Status::Done {

@@ -499,6 +499,12 @@ impl Node {
                 }
             }
         }
+        for e in std::mem::take(&mut self.evidence_out) {
+            match host.host_evidence(&e) {
+                Ok(()) => out.sent += 1,
+                Err(err) => out.refused.push(err),
+            }
+        }
         for info in self.board_infos() {
             let posts = host.posts_since(&info.scope, &self.board_have(&info.scope));
             out.received += self.absorb_posts(&info.scope, &posts);

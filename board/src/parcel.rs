@@ -368,7 +368,7 @@ impl Node {
     pub fn pay_provider(&mut self, m: &Manifest, price: u64) -> Result<Hash, String> {
         let provider = m.provider.clone().ok_or("this parcel has no provider")?;
         if !matches!(self.delivery(m), Delivery::Delivered(_)) {
-            return Err("not delivered yet".into());
+            return Err("not delivered".into());
         }
         let receipt = shipping_receipt(&m.parcel);
         if self.view.records().iter().any(|r| matches!(&r.op, Op::Transfer { receipt: x, .. } | Op::Split { receipt: x, .. } if *x == receipt)) {
@@ -444,7 +444,7 @@ impl Node {
         }
         let c = self.custody(m);
         if !matches!(self.delivery(m), Delivery::Delivered(_)) {
-            return Err("not delivered yet".into());
+            return Err("not delivered".into());
         }
         // Each handoff's signer, and whoever closed it validly (by code or
         // drop; for a ruled delivery, the last closing). Never a courier

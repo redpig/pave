@@ -23,7 +23,7 @@ The shipper picks one in the manifest:
 |---|---|---|
 | Signed | The addressee has a wallet and is there | The addressee retires the parcel |
 | Code | The recipient has no wallet, like the PIN some apps use for alcohol | The shipper gives the recipient a code; the recipient tells the courier at the door; the courier's closing record (a transfer to itself) commits to it. Only the shipper, who knows the code, can check it |
-| Drop | Nobody's there | The courier's closing record commits to the cell and a salted photo hash, and the courier posts a matching note on the job board. It counts as delivered once a window of epochs passes without a party's dispute |
+| Drop | Nobody's there | The courier's closing record commits to the cell and a salted photo hash, and the courier posts a matching note on the job board. It counts as delivered once a window of epochs passes without a party's dispute. The courier's wallet keeps the photo and salt, to show a panel ([disputes.md](disputes.md#evidence)) |
 
 A courier can't downgrade a delivery: only the mode the shipper chose counts. A wrong code is checked and fails; only the closing that delivered is paid.
 

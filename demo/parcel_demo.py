@@ -5,10 +5,11 @@ A shop ships packages through two co-op couriers to Zoe. Custody is a
 coin: each courier takes the parcel with a record only it can sign, a
 double handoff would be a double spend, and the shop pays per hop once
 the parcel is delivered. Delivery is shown three ways: Zoe signs, Zoe
-gives the courier a code, or the courier leaves it at the door. When Zoe
-says a drop never arrived, the dispute is a job: arbiters offer, a panel
-is drawn, the courier appeals and pays upfront into escrow, and reputation
-follows the final ruling.
+gives the courier a code, or the courier leaves it at the door. When the
+courier leaves one at the wrong door, Zoe disputes with her own photos and
+public records of her address; the drawn panelist's wallet checks custody
+and the courier's committed photo and lays the pictures side by side; the
+courier appeals, paying upfront into escrow, and loses again.
 
     cargo build --release -p pave-board
     python3 demo/parcel_demo.py [--bin target/release/pave-node]
@@ -118,25 +119,35 @@ def main():
         ana.meet(shop)
         print(f"  with Zoe's code: {GREEN}{shop('custody', quiet=True, parcel=parcel)['delivery']}{OFF}")
 
-        say("4. A drop at the door, and Zoe says it never came")
+        say("4. A drop at the wrong door: the courier photographs a porch two doors down")
+        # Stand-in images (invented): a real wallet would attach real photos.
+        def img(name, text):
+            path = os.path.join(d, name)
+            with open(path, "wb") as f:
+                f.write(text.encode())
+            return path
         ana_id = ana("trade", quiet=True)["contractor"]
         zoe_at = zoe("receive", quiet=True)["credential"]
-        r = shop("ship", what="groceries", **{"from": "dn5bpsb", "to": "dn5bpth"}, addressee=zoe_at, pay=3, mode="drop", window=2)
+        r = shop("ship", what="books", **{"from": "dn5bpsb", "to": "dn5bpth"}, addressee=zoe_at, pay=3, mode="drop", window=2)
         parcel, manifest = r["parcel"], r["manifest"]
         shop("handoff", parcel=parcel, to=ana("receive", quiet=True)["credential"])
         shop.meet(ana)
         ana("take", manifest=manifest)
-        ana("drop", manifest=manifest, cell="dn5bpth", photo="(porch photo, salted)")
+        ana("drop", manifest=manifest, cell="dn5bpth", photo_file=img("porch.img", "PHOTO: blue door, white railing, number 125"))
         ana.meet(shop)
         ana.meet(zoe)
         sync(ana, shop)
-        print(f"  the shop sees: {shop('custody', quiet=True, parcel=parcel)['delivery']}")
         d0 = zoe("dispute", subject=parcel, question="was it delivered?", claim=False, panel=1, pay=2, against=ana_id, **{"as": zoe_at})["dispute"]
-        sync(zoe, shop, ana)
-        print(f"  the shop sees: {RED}{shop('custody', quiet=True, parcel=parcel)['delivery']}{OFF}")
+        print("  Zoe disputes, and shows her own door and two public records of her address:")
+        zoe("submit_evidence", subject=parcel, kind="image", caption="my front door", image_file=img("door.img", "PHOTO: red door, brick steps, number 123"), **{"as": zoe_at})
+        zoe("submit_evidence", subject=parcel, kind="reference", source="street view", url="https://maps.example/123-pine", caption="123 Pine St", image_file=img("sv.img", "STREET VIEW: red door, 123"), **{"as": zoe_at})
+        zoe("submit_evidence", subject=parcel, kind="reference", source="city tax assessor", url="https://assessor.example/123-pine", caption="123 Pine St", image_file=img("tax.img", "ASSESSOR: brick house, red door"), **{"as": zoe_at})
+        zoe("submit_evidence", subject=parcel, kind="statement", text="That photo is 125, two doors down. Mine is 123, the red door.", **{"as": zoe_at})
+        print("  Ana shows custody and the photo she committed to at the drop:")
+        ana("parcel_evidence", parcel=parcel, statement="left at the door of the address")
+        sync(zoe, ana, shop)
         ana("fund", dispute=d0)
         sync(ana)
-        print("  Ana, the side disputed, funds the first round upfront into escrow")
         for a in arbs[:2]:
             sync(a)
             a("offer", dispute=d0)
@@ -147,15 +158,22 @@ def main():
         ds = {x["id"]: x for x in shop("disputes", quiet=True)["disputes"]}
         drawn = ds[d0]["panel"][0]
         arb = next(a for a in arbs if a("trade", quiet=True)["contractor"] == drawn)
-        print(f"  the panel of one is drawn, not chosen: {arb.name}")
+        r = arb("examine", quiet=True, subject=parcel, peer=town.addr)
+        print(f"  {arb.name} is drawn and examines it. Its wallet checked:")
+        print(f"    custody: {'; '.join(r['custody'])}")
+        print(f"    the photo is the one committed at the drop: {r['photo_matches']}; left in the destination cell: {r['cell_matches']}")
+        print("    so the question is the door. Side by side:")
+        for p in r["pictures"]:
+            print(f"      {p['label']:<30} from {p['from']:<10} {open(p['file']).read()}")
         arb("arbitrate", dispute=d0, answer="no")
         sync(arb, shop, ana, zoe)
         print(f"  ruled: {RED}{shop('custody', quiet=True, parcel=parcel)['delivery']}{OFF}")
+        r = shop("pay_couriers", parcel=parcel, may_fail=True)
+        print(f"  the shop won't pay for the wrong door: {r.get('error')}")
         ana.meet(town)
         town("release_escrow", dispute=d0)
-        print(f"  the town pays {arb.name} from Ana's deposit")
 
-        say("5. Ana appeals: a bigger panel at double the pay, paid upfront into escrow")
+        say("5. Ana appeals anyway, paying upfront for a panel of three")
         d1 = ana("dispute", subject=parcel, question="was it delivered?", claim=True, panel=3, pay=4, appeal_of=d0)["dispute"]
         ana.meet(town)
         sync(ana)
@@ -169,20 +187,21 @@ def main():
         ds = {x["id"]: x for x in shop("disputes", quiet=True)["disputes"]}
         panel = ds[d1]["panel"]
         on = [a for a in arbs if a("trade", quiet=True)["contractor"] in panel]
-        print(f"  drawn: {', '.join(a.name for a in on)} ({arb.name} ruled below, so can't sit)")
-        for a, ans in zip(on, ["yes", "yes", "no"]):
+        print(f"  drawn: {', '.join(a.name for a in on)} ({arb.name} ruled below, so can't sit); each examines the same evidence")
+        for a, ans in zip(on, ["no", "no", "yes"]):
+            a("examine", quiet=True, subject=parcel, peer=town.addr)
             a("arbitrate", dispute=d1, answer=ans)
             sync(a)
         sync(shop, ana, zoe)
-        print(f"  ruled on appeal: {GREEN}{shop('custody', quiet=True, parcel=parcel)['delivery']}{OFF}")
+        print(f"  upheld on appeal, 2 to 1: {RED}{shop('custody', quiet=True, parcel=parcel)['delivery']}{OFF}")
         r = town("release_escrow", dispute=d1)
-        print(f"  the town releases escrow: {len(r['minted'])} panelists paid 4 each")
+        print(f"  the town pays the appeal panel from Ana's deposit: {len(r['minted'])} panelists")
         ds = shop("disputes", quiet=True)
         top = next(x for x in ds["disputes"] if x["id"] == d0)
-        print(f"  loser pays, computed: {top['liability']}")
+        print(f"  loser pays, computed: {top['liability']} (Ana's escalation was hers to pay)")
         print(f"  arbiter scores: {sorted(ds['arbiter_scores'].values())} (+1 upheld, -1 overturned)")
         recs = shop("dispute_records", quiet=True, against=ana_id)
-        print(f"  Ana's record: {recs['counterparty']}; her filers, by pseudonym: {recs['filers']}")
+        print(f"  Ana's record: {recs['counterparty']}")
     finally:
         for x in nodes:
             x.stop()

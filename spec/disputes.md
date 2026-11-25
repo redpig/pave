@@ -12,6 +12,25 @@ The prototype is [`board/src/dispute.rs`](../board/src/dispute.rs), with a test 
 | `reply` | An offer to arbitrate, under the arbiter's trade key | The arbiter's fresh credential, which the trade key signs over |
 | `ruling` | Yes, no, or refer to a named outside authority | The panelist's offering credential |
 
+## Evidence
+
+A panel rules on evidence, not on claims. The prototype is [`board/src/evidence.rs`](../board/src/evidence.rs), tested in [`board/tests/evidence.rs`](../board/tests/evidence.rs).
+
+- **Submitted to the host, noted in public.** A party signs its evidence with a credential it holds (for a parcel, one from its custody chain or the addressee's) and sends it to the board's host, which keeps it. A public post records the evidence's kind and hash under the subject. Everyone can see what the panel was given and by whom; nobody can swap it later.
+- **Seen by the panel and the parties.** The host gives a subject's evidence only to a request signed in the current epoch by a credential drawn onto a panel of a dispute about that subject, or by one that opened such a dispute, so each side can answer the other's. Not to the public, and not to arbiters who offered and weren't drawn.
+- **Kinds.**
+
+  | Kind | From | What the panelist's wallet checks |
+  |---|---|---|
+  | Custody | Anyone holding the chain | Applies the signed records, from the town's issuance on, to its own view and works out custody and each party's role itself |
+  | Code | The shipper of a code delivery | Whether the courier's closing record commits to that code |
+  | Photo | The courier of a drop, with its salt | Whether it is the photo committed to in the drop note when the parcel was dropped, before any dispute |
+  | Image | Any party | Nothing: a picture for the panel, labeled with who sent it |
+  | Reference | Any party | Nothing: a public record (a street-view image, a tax-assessor photo) with its source and URL, for the panel to look at and check |
+  | Statement | Any party | Nothing: words, labeled with who sent them |
+
+- **The examination.** The panelist's wallet reports custody, whether the code and photo check out, whether the drop note's cell is the destination's, and every picture side by side with who sent it and whether it was fixed at the drop. A drop photo that checks out proves it wasn't swapped, not that it shows the right door: the panel compares it with the addressee's pictures and the public records. The report is structured, so a person or an AI agent can rule on it.
+
 ## Panels
 
 - **Offers.** Arbiters offer during the window: the dispute's epoch and the next. Any wallet can arbitrate, including one an AI agent drives; a panel of agents is just a panel. Pay can be zero, for volunteers, as forum moderators volunteer.
@@ -73,6 +92,5 @@ One way a delivery co-op could use all this. Nothing here is required by the pro
 ## Not built yet
 
 - Enforcing liabilities, and the debtors list sketched above.
-- Evidence: photos revealed to the panel, codes shown by the shipper.
 - Arbiters declaring themselves agents or people, and parties requiring one or the other.
 - Scores by kind of dispute, and decay over time.

@@ -105,6 +105,13 @@ The tests were checked against injected faults matching the TLA+ fault names. Ea
 | `refundflipped` (disputes) | A filer's deposit goes to the wrong side | 1 |
 | `unsettledrelease` (disputes) | A filer's deposit is paid out before the chain settles | 1 |
 | `noappealwindow` (disputes) | Appeals are allowed any time | 1 |
+| `evidenceforall` (evidence) | The host gives evidence to anyone | 1 |
+| `askunsigned` (evidence) | A request naming a panelist's credential needn't be signed by it | 1 |
+| `staleask` (evidence) | Old requests are honored | 1 |
+| `evidenceunsigned` (evidence) | The host keeps evidence without its submitter's signature | 1 |
+| `anyphoto` (evidence) | Any photo is labeled as taken at the drop | 1 |
+| `nocell` (evidence) | The drop cell check always fails | 1 |
+| `anycodeevidence` (evidence) | Any closing counts as matching the revealed code | 1 |
 | `offpanelruling` (disputes) | Rulings from offerers off the panel count | 1 |
 | `copynoreceipt` (boards) | A reader takes a post from a copy without the host's receipt | 1 |
 | `copyanyreceipt` (boards) | A reader takes a post with a receipt for another post | 1 |

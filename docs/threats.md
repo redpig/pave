@@ -408,6 +408,11 @@ Where pave can do better once this is built:
 | DS6 | A dispute is left open forever to hold its subject | Unstaffed or undecided disputes lapse | n/a | Built (mutation `nolapse`) |
 | DS7 | A plurality decides | A majority of the panel decides | n/a | Built (mutation `nomajority`) |
 | DS8 | A referral is appealed inside pave | A referral is final inside pave | n/a | Built (mutation `appealreferral`) |
+| DS18 | A party swaps its evidence after seeing the other side's | Every submission's hash is noted in public when it is submitted | n/a | Built |
+| DS19 | A courier shows a photo of the right door taken after the dispute | Only a photo matching the drop note's commitment counts as taken at the drop; others are labeled as not | n/a | Built (mutation `anyphoto`) |
+| DS20 | A courier's committed photo shows the wrong door | The addressee's pictures and public records go to the panel beside it | The panel rules | Built |
+| DS21 | Someone other than the panel or the parties reads the evidence (a porch, a face) | The host answers only current requests signed by a panelist's or an opener's credential | n/a | Built (mutations `evidenceforall`, `askunsigned`, `staleask`); the host sees it, like any website |
+| DS22 | Evidence submitted in someone else's name | Submissions are signed by the submitter's credential; the panel sees each party's role from custody | n/a | Built (mutation `evidenceunsigned`) |
 | DS9 | An arbiter games the draw by offering from many trade keys | Each trade key is a contractor; scores start at zero and tiers need them | Rulings are public | Partial: sybil arbiters can fill tier 0 |
 | DS10 | An appellant doesn't pay the panel | Appeals with pay carry an escrow deposit committing to their terms; the town pays the panel from it | n/a | Built (mutations `nodeposit`, `depositanyterms`) |
 | DS11 | One deposit funds two appeals | Readers count each deposit once | n/a | Built (mutation `depositreuse`) |

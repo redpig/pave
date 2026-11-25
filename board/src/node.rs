@@ -190,6 +190,12 @@ pub struct Saved {
     pub parcels: Vec<crate::parcel::Manifest>,
     #[serde(default)]
     pub codes: Vec<(Hash, String)>,
+    #[serde(default)]
+    pub photos: Vec<(Hash, serde_bytes::ByteBuf, serde_bytes::ByteBuf)>,
+    #[serde(default)]
+    pub evidence_out: Vec<crate::evidence::Sealed>,
+    #[serde(default)]
+    pub held_evidence: Vec<crate::evidence::Sealed>,
 }
 
 /// A summary of what a wallet has: id prefixes of its records, evidence
@@ -259,6 +265,12 @@ pub struct Node {
     pub parcels: BTreeMap<Hash, crate::parcel::Manifest>,
     /// Delivery codes for parcels this wallet shipped by code.
     pub codes: BTreeMap<Hash, String>,
+    /// Drop photos this wallet committed to, with their salts, by parcel.
+    pub photos: BTreeMap<Hash, (Vec<u8>, Vec<u8>)>,
+    /// Evidence signed and waiting for the host.
+    pub evidence_out: Vec<crate::evidence::Sealed>,
+    /// Host: evidence held for panels, by subject.
+    pub held_evidence: BTreeMap<Hash, Vec<crate::evidence::Sealed>>,
 }
 
 fn cash_schema() -> Schema {
@@ -396,6 +408,9 @@ impl Node {
             contacts: BTreeMap::new(),
             parcels: BTreeMap::new(),
             codes: BTreeMap::new(),
+            photos: BTreeMap::new(),
+            evidence_out: vec![],
+            held_evidence: BTreeMap::new(),
             vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(path)?)),
         };
         node.open_boards()?;
@@ -519,6 +534,9 @@ impl Node {
             contacts: BTreeMap::new(),
             parcels: BTreeMap::new(),
             codes: BTreeMap::new(),
+            photos: BTreeMap::new(),
+            evidence_out: vec![],
+            held_evidence: BTreeMap::new(),
             vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(out)?)),
         };
         for c in &e.creds {
@@ -576,6 +594,12 @@ impl Node {
             contacts: saved.contacts.into_iter().collect(),
             parcels: saved.parcels.into_iter().map(|m| (m.parcel, m)).collect(),
             codes: saved.codes.into_iter().collect(),
+            photos: saved.photos.into_iter().map(|(p, s, b)| (p, (s.into_vec(), b.into_vec()))).collect(),
+            evidence_out: saved.evidence_out,
+            held_evidence: saved.held_evidence.into_iter().fold(BTreeMap::new(), |mut m, e| {
+                m.entry(e.subject).or_insert_with(Vec::new).push(e);
+                m
+            }),
             vault: std::sync::Mutex::new(vault),
         };
         node.absorb_bundle(&Bundle {
@@ -630,6 +654,9 @@ impl Node {
             contacts: self.contacts.iter().map(|(n, c)| (n.clone(), c.clone())).collect(),
             parcels: self.parcels.values().cloned().collect(),
             codes: self.codes.iter().map(|(p, c)| (*p, c.clone())).collect(),
+            photos: self.photos.iter().map(|(p, (s, b))| (*p, serde_bytes::ByteBuf::from(s.clone()), serde_bytes::ByteBuf::from(b.clone()))).collect(),
+            evidence_out: self.evidence_out.clone(),
+            held_evidence: self.held_evidence.values().flatten().cloned().collect(),
         };
         let bytes = pave_kernel::hash::encode(&saved);
         let mut vault = self.vault.lock().unwrap();

@@ -52,7 +52,7 @@ fn parse_cred(v: &Value, k: &str) -> Result<Credential, String> {
 
 const HELP: &[&str] = &[
     "whoami", "board", "post {title, pay}", "reply {job, note}", "accept {job, worker}", "done {job}",
-    "pay {job} or {job, vouch, note, as: identity}", "parcel_budget {to, count} (town)", "ship {what, from, to, addressee, pay, mode: signed|code|drop, window}", "deliver_code {manifest, code}", "drop {manifest, cell, photo}", "dispute {subject, question, claim, panel, pay, appeal_of?, against?, as?}", "release_escrow {dispute} (town)", "fund {dispute} (fund a first round into escrow)", "terms {min_losses, deposit} (your terms for filers against you)", "dispute_records {against}", "offer {dispute}", "arbitrate {dispute, answer: yes|no|refer, to}", "disputes", "pay_arbiters {dispute}", "handoff {parcel, to}", "take {manifest, as?: identity}", "name_provider {parcel, provider}", "pay_provider {parcel, price}", "who_took {parcel}", "deliver {manifest}", "custody {parcel}", "pay_couriers {parcel}", "identities", "identity {label} (a stable credential to share with the people who should recognize you)", "add_contact {name, credential}", "reply {job, note, trade: true}", "reputation {contractor}", "receive", "trade (this wallet's contractor id, made on first use)", "check {state}", "spend {state, to}", "cheat {state, to}", "meet {peer}",
+    "pay {job} or {job, vouch, note, as: identity}", "parcel_budget {to, count} (town)", "ship {what, from, to, addressee, pay, mode: signed|code|drop, window}", "deliver_code {manifest, code}", "drop {manifest, cell, photo_file}", "parcel_evidence {parcel, statement?} (submit what this wallet can show)", "submit_evidence {subject, kind: image|reference|statement, image_file, caption, source, url, text, as?}", "examine {subject, peer, out_dir?} (panel or party: fetch and check the evidence)", "dispute {subject, question, claim, panel, pay, appeal_of?, against?, as?}", "release_escrow {dispute} (town)", "fund {dispute} (fund a first round into escrow)", "terms {min_losses, deposit} (your terms for filers against you)", "dispute_records {against}", "offer {dispute}", "arbitrate {dispute, answer: yes|no|refer, to}", "disputes", "pay_arbiters {dispute}", "handoff {parcel, to}", "take {manifest, as?: identity}", "name_provider {parcel, provider}", "pay_provider {parcel, price}", "who_took {parcel}", "deliver {manifest}", "custody {parcel}", "pay_couriers {parcel}", "identities", "identity {label} (a stable credential to share with the people who should recognize you)", "add_contact {name, credential}", "reply {job, note, trade: true}", "reputation {contractor}", "receive", "trade (this wallet's contractor id, made on first use)", "check {state}", "spend {state, to}", "cheat {state, to}", "meet {peer}",
     "gossip {peer}", "refill {peer, count}", "sync {peer} (send queued posts to the board host, fetch the boards)",
     "evidence", "issues", "report {category, lat, lon, observed, note, photo} or {issue, observed, note}", "respond {issue, text, permit}", "forward {issue, channel, receipt}", "clear {issue}", "reports_on {issue}", "mirror {file} (town)", "rule {report, malicious} (town)", "send {peer, amount, memo}", "resume {peer}", "swap {peer, state}", "collect {peer}", "roll {revoke: [group, ...], revoke_class: [class, ...]} (operator)", "help",
 ];
@@ -101,6 +101,31 @@ fn command(node: &Arc<Mutex<Node>>, v: &Value) -> Result<Value, String> {
             let paid: Vec<String> = got.iter().filter_map(|r| if let net::SwapResult::Paid(h) = r { Some(hx(h)) } else { None }).collect();
             let held: Vec<u32> = got.iter().filter_map(|r| if let net::SwapResult::Held(u) = r { Some(*u) } else { None }).collect();
             Ok(json!({ "paid": paid, "held_until": held }))
+        }
+        "examine" => {
+            let peer = v["peer"].as_str().ok_or("missing peer")?;
+            let subject = parse_hash(v, "subject")?;
+            let given = net::fetch_evidence(node, peer, &subject).map_err(|e| e.to_string())?;
+            let mut n = node.lock().unwrap();
+            let ex = n.examine_parcel(&subject, &given);
+            // Pictures go to files, for whoever rules to look at.
+            let dir = match v["out_dir"].as_str() {
+                Some(d) => std::path::PathBuf::from(d),
+                None => n.path.with_extension(format!("evidence-{}", &hx(&subject)[..8])),
+            };
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let mut pictures = vec![];
+            for (i, p) in ex.pictures.iter().enumerate() {
+                let file = dir.join(format!("{:02}-{}.img", i + 1, p.label.chars().map(|c| if c.is_alphanumeric() { c } else { '-' }).collect::<String>()));
+                std::fs::write(&file, &p.bytes).map_err(|e| e.to_string())?;
+                pictures.push(json!({ "label": p.label, "from": p.from, "committed_at_drop": p.committed_at_drop, "url": p.url, "file": file.display().to_string() }));
+            }
+            Ok(json!({
+                "mode": ex.mode, "custody": ex.custody, "delivery": ex.delivery,
+                "code_matches": format!("{:?}", ex.code_matches), "photo_matches": format!("{:?}", ex.photo_matches), "cell_matches": format!("{:?}", ex.cell_matches),
+                "pictures": pictures,
+                "exhibits": ex.exhibits.iter().map(|e| json!({ "kind": e.kind, "from": e.from, "detail": e.detail })).collect::<Vec<_>>(),
+            }))
         }
         "sync" => {
             let peer = v["peer"].as_str().ok_or("missing peer")?;
@@ -239,12 +264,41 @@ fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
             let bytes = hex::decode(v["manifest"].as_str().ok_or("missing manifest")?).map_err(|e| e.to_string())?;
             let m: pave_board::parcel::Manifest = ciborium::from_reader(bytes.as_slice()).map_err(|e| e.to_string())?;
             let state = if cmd == "drop" {
-                let photo = pave_kernel::hash::hash_of("pave/parcel/photo", &v["photo"].as_str().unwrap_or(""));
-                n.drop_off(&m, v["cell"].as_str().ok_or("missing cell")?, photo)?
+                // A photo file, or for a quick test a description standing in for one.
+                let photo = match v["photo_file"].as_str() {
+                    Some(f) => std::fs::read(f).map_err(|e| format!("{f}: {e}"))?,
+                    None => v["photo"].as_str().unwrap_or("").as_bytes().to_vec(),
+                };
+                n.drop_off_photo(&m, v["cell"].as_str().ok_or("missing cell")?, &photo)?
             } else {
                 n.deliver_by_code(&m, v["code"].as_str().ok_or("missing code")?)?
             };
             Ok(json!({ "parcel": hx(&m.parcel), "state": hx(&state) }))
+        }
+        "parcel_evidence" => {
+            let parcel = parse_hash(v, "parcel")?;
+            let m = n.parcels.get(&parcel).ok_or("no manifest for that parcel")?.clone();
+            let hashes = n.submit_parcel_evidence(&m, v["statement"].as_str())?;
+            Ok(json!({ "submitted": hashes.iter().map(hx).collect::<Vec<_>>(), "queued": n.evidence_out.len() }))
+        }
+        "submit_evidence" => {
+            use pave_board::evidence::Evidence;
+            let read = |k: &str| -> Result<Vec<u8>, String> {
+                match (v[format!("{k}_file")].as_str(), v[k].as_str()) {
+                    (Some(f), _) => std::fs::read(f).map_err(|e| format!("{f}: {e}")),
+                    (None, Some(s)) => Ok(s.as_bytes().to_vec()),
+                    _ => Err(format!("missing {k} or {k}_file")),
+                }
+            };
+            let s = |k: &str| v[k].as_str().unwrap_or("").to_string();
+            let ev = match v["kind"].as_str().unwrap_or("") {
+                "image" => Evidence::Image { caption: s("caption"), image: read("image")? },
+                "reference" => Evidence::Reference { source: s("source"), url: s("url"), caption: s("caption"), image: read("image")? },
+                "statement" => Evidence::Statement { text: s("text") },
+                other => return Err(format!("kind image, reference or statement, not {other}")),
+            };
+            let as_cred = if v.get("as").is_some() { Some(parse_cred(v, "as")?) } else { None };
+            Ok(json!({ "submitted": hx(&n.submit_evidence(parse_hash(v, "subject")?, &ev, as_cred)?) }))
         }
         "dispute" => {
             let appeal_of = if v.get("appeal_of").is_some() { Some(parse_hash(v, "appeal_of")?) } else { None };

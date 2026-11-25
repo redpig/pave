@@ -56,6 +56,11 @@ pub enum Wire {
     Posted(Box<PostReceipt>),
     Fetch { scope: Hash, have: std::collections::BTreeSet<Prefix> },
     Posts(Vec<Submission>),
+    /// Evidence for the host to hold, and a panelist asking for it.
+    Evidence(Box<crate::evidence::Sealed>),
+    Kept,
+    AskEvidence(Box<crate::evidence::Ask>),
+    EvidenceList(Vec<crate::evidence::Sealed>),
 }
 
 pub fn write_msg(s: &mut TcpStream, m: &Wire) -> std::io::Result<usize> {
@@ -149,7 +154,15 @@ pub fn serve_peer(node: Arc<Mutex<Node>>, mut s: TcpStream) -> std::io::Result<(
                     Err(e) => Wire::Refused(e),
                 },
                 Wire::Fetch { scope, have } => Wire::Posts(n.posts_since(&scope, &have)),
-                Wire::RefillTerms(_) | Wire::Tickets(_) | Wire::Refused(_) | Wire::Quote(_) | Wire::Swapped(_) | Wire::Invoice(_) | Wire::Lacks(_) | Wire::Verdict(_) | Wire::Ack(_) | Wire::Posted(_) | Wire::Posts(_) => {
+                Wire::Evidence(e) => match n.host_evidence(&e) {
+                    Ok(()) => Wire::Kept,
+                    Err(e) => Wire::Refused(e),
+                },
+                Wire::AskEvidence(a) => match n.answer_evidence(&a) {
+                    Ok(list) => Wire::EvidenceList(list),
+                    Err(e) => Wire::Refused(e),
+                },
+                Wire::RefillTerms(_) | Wire::Tickets(_) | Wire::Refused(_) | Wire::Quote(_) | Wire::Swapped(_) | Wire::Invoice(_) | Wire::Lacks(_) | Wire::Verdict(_) | Wire::Ack(_) | Wire::Posted(_) | Wire::Posts(_) | Wire::Kept | Wire::EvidenceList(_) => {
                     Wire::Refused("unexpected".into())
                 }
                 Wire::Standing(v) => {
@@ -431,6 +444,19 @@ pub fn sync_boards(node: &Arc<Mutex<Node>>, addr: &str) -> std::io::Result<Board
             _ => return Err(std::io::Error::other("unexpected reply")),
         }
     }
+    let evidence = node.lock().unwrap().evidence_out.clone();
+    for e in evidence {
+        write_msg(&mut s, &Wire::Evidence(Box::new(e.clone())))?;
+        let (reply, _) = read_msg(&mut s)?;
+        let mut n = node.lock().unwrap();
+        n.evidence_out.retain(|x| *x != e);
+        let _ = n.save();
+        match reply {
+            Wire::Kept => out.sent += 1,
+            Wire::Refused(e) => out.refused.push(e),
+            _ => return Err(std::io::Error::other("unexpected reply")),
+        }
+    }
     let scopes: Vec<Hash> = node.lock().unwrap().board_infos().iter().map(|b| b.scope).collect();
     for scope in scopes {
         let have = node.lock().unwrap().board_have(&scope);
@@ -440,4 +466,16 @@ pub fn sync_boards(node: &Arc<Mutex<Node>>, addr: &str) -> std::io::Result<Board
         }
     }
     Ok(out)
+}
+
+/// Panelist: fetch a subject's evidence from the board's host.
+pub fn fetch_evidence(node: &Arc<Mutex<Node>>, addr: &str, subject: &Hash) -> std::io::Result<Vec<crate::evidence::Sealed>> {
+    let ask = node.lock().unwrap().ask_evidence(subject).map_err(std::io::Error::other)?;
+    let mut s = TcpStream::connect(addr)?;
+    write_msg(&mut s, &Wire::AskEvidence(Box::new(ask)))?;
+    match read_msg(&mut s)?.0 {
+        Wire::EvidenceList(list) => Ok(list),
+        Wire::Refused(e) => Err(std::io::Error::other(e)),
+        _ => Err(std::io::Error::other("unexpected reply")),
+    }
 }
