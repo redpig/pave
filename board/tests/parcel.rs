@@ -78,7 +78,7 @@ fn parcels() {
     meet(&mut ana, &mut shop);
     let c = shop.custody(&m);
     assert!(c.delivered && c.holder.is_none());
-    let kinds: Vec<&str> = c.steps.iter().map(|s| match s { Step::Handoff { .. } => "handoff", Step::Take { .. } => "take", Step::Retired { .. } => "retired" }).collect();
+    let kinds: Vec<&str> = c.steps.iter().map(|s| match s { Step::Handoff { .. } => "handoff", Step::Take { .. } => "take", Step::Retired { .. } => "retired", Step::Closed { .. } => "closed" }).collect();
     assert_eq!(kinds, ["handoff", "take", "handoff", "take", "handoff", "retired"]);
     assert_eq!(c.steps.last(), Some(&Step::Retired { by: zoe_at }));
 

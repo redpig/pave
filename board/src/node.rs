@@ -188,6 +188,8 @@ pub struct Saved {
     pub contacts: Vec<(String, Credential)>,
     #[serde(default)]
     pub parcels: Vec<crate::parcel::Manifest>,
+    #[serde(default)]
+    pub codes: Vec<(Hash, String)>,
 }
 
 /// A summary of what a wallet has: id prefixes of its records, evidence
@@ -255,6 +257,8 @@ pub struct Node {
     pub contacts: BTreeMap<String, Credential>,
     /// Manifests of parcels this wallet shipped, carried or received.
     pub parcels: BTreeMap<Hash, crate::parcel::Manifest>,
+    /// Delivery codes for parcels this wallet shipped by code.
+    pub codes: BTreeMap<Hash, String>,
 }
 
 fn cash_schema() -> Schema {
@@ -391,6 +395,7 @@ impl Node {
             identities: BTreeMap::new(),
             contacts: BTreeMap::new(),
             parcels: BTreeMap::new(),
+            codes: BTreeMap::new(),
             vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(path)?)),
         };
         node.open_boards()?;
@@ -513,6 +518,7 @@ impl Node {
             identities: BTreeMap::new(),
             contacts: BTreeMap::new(),
             parcels: BTreeMap::new(),
+            codes: BTreeMap::new(),
             vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(out)?)),
         };
         for c in &e.creds {
@@ -569,6 +575,7 @@ impl Node {
             identities: saved.identities.into_iter().collect(),
             contacts: saved.contacts.into_iter().collect(),
             parcels: saved.parcels.into_iter().map(|m| (m.parcel, m)).collect(),
+            codes: saved.codes.into_iter().collect(),
             vault: std::sync::Mutex::new(vault),
         };
         node.absorb_bundle(&Bundle {
@@ -622,6 +629,7 @@ impl Node {
             identities: self.identities.iter().map(|(l, c)| (l.clone(), c.clone())).collect(),
             contacts: self.contacts.iter().map(|(n, c)| (n.clone(), c.clone())).collect(),
             parcels: self.parcels.values().cloned().collect(),
+            codes: self.codes.iter().map(|(p, c)| (*p, c.clone())).collect(),
         };
         let bytes = pave_kernel::hash::encode(&saved);
         let mut vault = self.vault.lock().unwrap();

@@ -56,6 +56,12 @@ pub enum BoardMsg {
     Accept { job: Hash, worker: Credential },
     Done { job: Hash },
     Paid { job: Hash, payment: Hash },
+    /// A dispute: see [`crate::dispute`].
+    Dispute { subject: Hash, question: String, tier: u32, panel: u32, pay_each: u64, appeal_of: Option<Hash> },
+    /// A panelist's answer to a dispute.
+    Ruling { dispute: Hash, answer: crate::dispute::Answer },
+    /// A courier's note on an unattended drop: see [`crate::parcel`].
+    Dropped { parcel: Hash, cell: String, photo: Hash },
     /// In the contractor's thread, from the job's poster: the payment
     /// record, whose second output is the vouch coin.
     Vouch {
@@ -82,12 +88,17 @@ impl BoardMsg {
             BoardMsg::Done { .. } => "done",
             BoardMsg::Paid { .. } => "paid",
             BoardMsg::Vouch { .. } => "vouch",
+            BoardMsg::Dispute { .. } => "dispute",
+            BoardMsg::Ruling { .. } => "ruling",
+            BoardMsg::Dropped { .. } => "dropped",
         }
     }
     /// The job a message is about; None for a new job.
     pub fn job(&self) -> Option<Hash> {
         match self {
-            BoardMsg::Post { .. } => None,
+            BoardMsg::Post { .. } | BoardMsg::Dispute { .. } => None,
+            BoardMsg::Ruling { dispute, .. } => Some(*dispute),
+            BoardMsg::Dropped { parcel, .. } => Some(*parcel),
             BoardMsg::Reply { job, .. } | BoardMsg::Accept { job, .. } | BoardMsg::Done { job } | BoardMsg::Paid { job, .. } | BoardMsg::Vouch { job, .. } => Some(*job),
         }
     }
@@ -177,7 +188,7 @@ pub fn jobs(copy: &Copy) -> BTreeMap<Hash, Job> {
                     }
                 }
             }
-            BoardMsg::Vouch { .. } => {}
+            BoardMsg::Vouch { .. } | BoardMsg::Dispute { .. } | BoardMsg::Ruling { .. } | BoardMsg::Dropped { .. } => {}
             BoardMsg::Paid { job, payment } => {
                 if let Some(j) = jobs.get_mut(&job) {
                     if &j.poster == signer && j.status == Status::Done {

@@ -7,6 +7,7 @@
 //! - [`node`]: a wallet's view, knowledge and keys, saved as a record log
 //! - [`net`]: the peer link (meet, two-tier gossip) over TCP
 //! - [`report`]: the civic reports board
+//! - [`dispute`]: disputes as jobs, with appeals and arbiter reputation
 //! - [`parcel`]: packages, with custody as a coin from shipper to addressee
 //! - [`pay`]: the payment handshake, sending only what a payment needs
 //! - [`swap`]: old coins in, fresh coins out
@@ -14,6 +15,7 @@
 
 pub mod board;
 pub mod bulletin;
+pub mod dispute;
 pub mod net;
 pub mod node;
 pub mod parcel;

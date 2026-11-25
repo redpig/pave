@@ -59,6 +59,7 @@ We do not assume that any role behaves well (principle 10), that devices are tam
 15. Cross-cutting: the class break
 16. Civic reports
 17. Parcels
+18. Disputes
 
 ---
 
@@ -374,8 +375,31 @@ Where pave can do better once this is built:
 | PC4 | A courier is shown a false manifest (higher pay, another address) | Every handoff's receipt commits to the manifest's hash and hop | n/a | Built (mutation `takeanymanifest`) |
 | PC5 | A courier is paid twice for one hop | Each payment's receipt names the parcel and courier | n/a | Built (mutation `paytwice`) |
 | PC6 | A courier keeps the parcel | The custody chain shows who holds it | Name the courier to the co-op | Gap: couriers taking under an identity |
-| PC7 | The addressee takes the parcel but won't retire it | The last handoff was to the addressee's own credential | A dispute | Gap |
+| PC7 | The addressee takes the parcel but won't retire it, or isn't there | Code and drop delivery modes; a party's dispute | A panel rules on it | Built (mutations `anycode`, `nowindow`) |
+| PC9 | A courier backdates a drop note to settle its window at once | The host takes a post only in its current epoch or the one before | n/a | Built (mutation `backdate`); Gap: a copy served by someone other than the host could carry a post the host never took |
+| PC10 | A stranger disputes deliveries to hold them | Only a party's disputes, and their appeals, count for a parcel | n/a | Built (mutation `anyonedisputes`) |
 | PC8 | A shipper ships more than it was allowed | Parcels are minted from a budget the town issued | Budgets are capabilities (M1, M3) | Built |
+
+---
+
+## 18. Disputes
+
+`board/src/dispute.rs`; [spec/disputes.md](../spec/disputes.md)
+
+**Attack surface:** dispute, offer and ruling posts on the job board; the panel draw; appeals; arbiter scores. Briolette has no counterpart, so its column is omitted.
+
+| # | Attack | Prevent | React | Status |
+|---|---|---|---|---|
+| DS1 | A party picks a friendly arbiter | The panel is drawn by hash from eligible offers | n/a | Built |
+| DS2 | Someone off the panel rules | Only the drawn panelists' rulings count | n/a | Built (mutation `offpanelruling`) |
+| DS3 | A party appeals for free until it wins | An appeal needs a tier up, two more panelists and double the pay, paid by the appellant | n/a | Built (mutation `appealnoescalate`) |
+| DS4 | An overturned arbiter keeps taking high tiers | Scores fall for overturned rulings; tiers need scores | n/a | Built (mutations `noscorepenalty`, `noreputationgate`) |
+| DS5 | An arbiter rules again on appeal of its own ruling | Arbiters who ruled earlier on a subject can't be drawn | n/a | Built (mutation `reseat`) |
+| DS6 | A dispute is left open forever to hold its subject | Unstaffed or undecided disputes lapse | n/a | Built (mutation `nolapse`) |
+| DS7 | A plurality decides | A majority of the panel decides | n/a | Built (mutation `nomajority`) |
+| DS8 | A referral is appealed inside pave | A referral is final inside pave | n/a | Built (mutation `appealreferral`) |
+| DS9 | An arbiter games the draw by offering from many trade keys | Each trade key is a contractor; scores start at zero and tiers need them | Rulings are public | Partial: sybil arbiters can fill tier 0 |
+| DS10 | The opener doesn't pay the panel | n/a | Visible: payments name the dispute and arbiter | Gap: escrow |
 
 ---
 

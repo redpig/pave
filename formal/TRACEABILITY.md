@@ -78,5 +78,17 @@ The tests were checked against injected faults matching the TLA+ fault names. Ea
 | `anyretire` (parcels) | Any retirement counts as delivery | 1 |
 | `paycheat` (parcels) | A courier caught in a double handoff is paid | 1 |
 | `paytwice` (parcels) | A courier is paid again for the same hop | 1 |
+| `anycode` (parcels) | Any code closing counts as delivered | 1 |
+| `nowindow` (parcels) | A drop counts as delivered before its window | 1 |
+| `anyonedisputes` (parcels) | Anyone's dispute holds a parcel | 1 |
+| `backdate` (boards) | The host takes posts with any epoch | 1 |
+| `appealnoescalate` (disputes) | Appeals needn't grow the panel or the pay | 1 |
+| `appealreferral` (disputes) | A referral can be appealed | 1 |
+| `nomajority` (disputes) | A plurality decides | 1 |
+| `noscorepenalty` (disputes) | Overturned rulings don't cost reputation | 1 |
+| `noreputationgate` (disputes) | Tiers don't need scores | 1 |
+| `reseat` (disputes) | An arbiter can sit on the appeal of its own ruling | 1 |
+| `nolapse` (disputes) | Unstaffed disputes hold forever | 1 |
+| `offpanelruling` (disputes) | Rulings from offerers off the panel count | 1 |
 | `byunchecked` (boards) | A post's identity counts without its signature | 2 |
 | `bynotbound` (boards) | An identity's signature isn't bound to its post | 2 |

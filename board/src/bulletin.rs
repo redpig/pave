@@ -25,6 +25,10 @@
 //!   with its contacts, one public. Whoever was given that credential knows
 //!   who posted; anyone else sees one unnamed author behind every post it
 //!   signed. Without one, a post is as anonymous as its fresh key.
+//! - **The host keeps time.** A post's epoch is the poster's word, so the
+//!   host takes a post only in its current epoch or the one before. Windows
+//!   that count from a post (a drop's dispute window, a dispute's offers)
+//!   can't be backdated.
 //! - **Receipts make dropping visible.** The host answers every accepted post
 //!   with a signed receipt. If the host later omits the post, its author can
 //!   show the receipt.
@@ -318,7 +322,8 @@ impl Node {
         Ok(())
     }
 
-    pub(crate) fn epoch(&self) -> u32 {
+    /// The latest epoch this wallet knows.
+    pub fn epoch(&self) -> u32 {
         head(&self.view, &self.town.sequence).map_or(0, |h| h.number)
     }
 
@@ -385,6 +390,12 @@ impl Node {
             return Err("this node doesn't host that board".into());
         }
         let post = sub.post().ok_or("no binding in the record")?;
+        // The host keeps time for its board: a post's epoch is the poster's
+        // word, so it must be the host's current epoch or the one before.
+        let now = self.epoch();
+        if post.epoch > now || post.epoch + 1 < now {
+            return Err(format!("post epoch {} isn't current (the board is at {now})", post.epoch));
+        }
         if post.endorsement.is_some() && endorser(&self.town.classes, &scope, &post).is_none() {
             return Err("endorsement doesn't check out".into());
         }

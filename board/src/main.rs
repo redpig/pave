@@ -52,7 +52,7 @@ fn parse_cred(v: &Value, k: &str) -> Result<Credential, String> {
 
 const HELP: &[&str] = &[
     "whoami", "board", "post {title, pay}", "reply {job, note}", "accept {job, worker}", "done {job}",
-    "pay {job} or {job, vouch, note, as: identity}", "parcel_budget {to, count} (town)", "ship {what, from, to, addressee, pay}", "handoff {parcel, to}", "take {manifest}", "deliver {manifest}", "custody {parcel}", "pay_couriers {parcel}", "identities", "identity {label} (a stable credential to share with the people who should recognize you)", "add_contact {name, credential}", "reply {job, note, trade: true}", "reputation {contractor}", "receive", "check {state}", "spend {state, to}", "cheat {state, to}", "meet {peer}",
+    "pay {job} or {job, vouch, note, as: identity}", "parcel_budget {to, count} (town)", "ship {what, from, to, addressee, pay, mode: signed|code|drop, window}", "deliver_code {manifest, code}", "drop {manifest, cell, photo}", "dispute {subject, question, panel, pay, appeal_of?, as?}", "offer {dispute}", "arbitrate {dispute, answer: yes|no|refer, to}", "disputes", "pay_arbiters {dispute}", "handoff {parcel, to}", "take {manifest}", "deliver {manifest}", "custody {parcel}", "pay_couriers {parcel}", "identities", "identity {label} (a stable credential to share with the people who should recognize you)", "add_contact {name, credential}", "reply {job, note, trade: true}", "reputation {contractor}", "receive", "check {state}", "spend {state, to}", "cheat {state, to}", "meet {peer}",
     "gossip {peer}", "refill {peer, count}", "sync {peer} (send queued posts to the board host, fetch the boards)",
     "evidence", "issues", "report {category, lat, lon, observed, note, photo} or {issue, observed, note}", "respond {issue, text, permit}", "forward {issue, channel, receipt}", "clear {issue}", "reports_on {issue}", "mirror {file} (town)", "rule {report, malicious} (town)", "send {peer, amount, memo}", "resume {peer}", "swap {peer, state}", "collect {peer}", "roll {revoke: [group, ...], revoke_class: [class, ...]} (operator)", "help",
 ];
@@ -225,9 +225,55 @@ fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
         }
         "parcel_budget" => Ok(json!({ "budget": hx(&n.issue_parcel_budget(parse_cred(v, "to")?, v["count"].as_u64().unwrap_or(10))?) })),
         "ship" => {
-            let m = n.ship(v["what"].as_str().unwrap_or(""), v["from"].as_str().unwrap_or(""), v["to"].as_str().unwrap_or(""), parse_cred(v, "addressee")?, v["pay"].as_u64().unwrap_or(0))?;
-            Ok(json!({ "parcel": hx(&m.parcel), "manifest": hex::encode(pave_kernel::hash::encode(&m)) }))
+            use pave_board::parcel::Mode;
+            let mode = match v["mode"].as_str().unwrap_or("signed") {
+                "signed" => Mode::Signed,
+                "code" => Mode::Code,
+                "drop" => Mode::Drop { window: v["window"].as_u64().unwrap_or(2) as u32 },
+                other => return Err(format!("unknown mode {other}")),
+            };
+            let (m, code) = n.ship_with(v["what"].as_str().unwrap_or(""), v["from"].as_str().unwrap_or(""), v["to"].as_str().unwrap_or(""), parse_cred(v, "addressee")?, v["pay"].as_u64().unwrap_or(0), mode)?;
+            Ok(json!({ "parcel": hx(&m.parcel), "manifest": hex::encode(pave_kernel::hash::encode(&m)), "code": code }))
         }
+        "deliver_code" | "drop" => {
+            let bytes = hex::decode(v["manifest"].as_str().ok_or("missing manifest")?).map_err(|e| e.to_string())?;
+            let m: pave_board::parcel::Manifest = ciborium::from_reader(bytes.as_slice()).map_err(|e| e.to_string())?;
+            let state = if cmd == "drop" {
+                let photo = pave_kernel::hash::hash_of("pave/parcel/photo", &v["photo"].as_str().unwrap_or(""));
+                n.drop_off(&m, v["cell"].as_str().ok_or("missing cell")?, photo)?
+            } else {
+                n.deliver_by_code(&m, v["code"].as_str().ok_or("missing code")?)?
+            };
+            Ok(json!({ "parcel": hx(&m.parcel), "state": hx(&state) }))
+        }
+        "dispute" => {
+            let appeal_of = if v.get("appeal_of").is_some() { Some(parse_hash(v, "appeal_of")?) } else { None };
+            let party = if v.get("as").is_some() { Some(parse_cred(v, "as")?) } else { None };
+            let id = n.open_dispute(parse_hash(v, "subject")?, v["question"].as_str().unwrap_or(""), v["panel"].as_u64().unwrap_or(1) as u32, v["pay"].as_u64().unwrap_or(0), appeal_of, party)?;
+            Ok(json!({ "dispute": hx(&id) }))
+        }
+        "offer" => Ok(json!({ "message": hx(&n.offer_to_arbitrate(parse_hash(v, "dispute")?)?), "contractor": n.contractor().as_ref().map(hx) })),
+        "arbitrate" => {
+            use pave_board::dispute::Answer;
+            let answer = match v["answer"].as_str().unwrap_or("") {
+                "yes" => Answer::Yes,
+                "no" => Answer::No,
+                "refer" => Answer::Refer(v["to"].as_str().unwrap_or("court").into()),
+                other => return Err(format!("answer yes, no or refer, not {other}")),
+            };
+            Ok(json!({ "ruling": hx(&n.arbitrate(parse_hash(v, "dispute")?, answer)?) }))
+        }
+        "disputes" => {
+            let (ds, scores) = n.disputes();
+            let list: Vec<Value> = ds.values().map(|d| json!({
+                "id": hx(&d.id), "subject": hx(&d.subject), "question": d.question, "tier": d.tier, "panel_size": d.panel_size,
+                "pay_each": d.pay_each, "appeal_of": d.appeal_of.as_ref().map(hx), "offers": d.offers.len(),
+                "panel": d.panel.as_ref().map(|p| p.iter().map(|(_, k)| hx(k)).collect::<Vec<_>>()),
+                "rulings": d.rulings.len(), "outcome": d.outcome.as_ref().map(|a| format!("{a:?}")), "lapsed": d.lapsed,
+            })).collect();
+            Ok(json!({ "disputes": list, "arbiter_scores": scores.iter().map(|(k, s)| (hx(k), *s)).collect::<std::collections::BTreeMap<_, _>>() }))
+        }
+        "pay_arbiters" => Ok(json!({ "payments": n.pay_arbiters(parse_hash(v, "dispute")?)?.iter().map(hx).collect::<Vec<_>>() })),
         "handoff" => {
             let parcel = parse_hash(v, "parcel")?;
             let state = n.hand_off(&parcel, parse_cred(v, "to")?)?;
@@ -247,8 +293,9 @@ fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
                 pave_board::parcel::Step::Handoff { from, to } => json!({ "handoff": { "from": cx(from), "to": cx(to) } }),
                 pave_board::parcel::Step::Take { by } => json!({ "take": cx(by) }),
                 pave_board::parcel::Step::Retired { by } => json!({ "retired": cx(by) }),
+                pave_board::parcel::Step::Closed { by, .. } => json!({ "closed": cx(by) }),
             }).collect();
-            Ok(json!({ "what": m.what, "steps": steps, "holder": c.holder.as_ref().map(cx), "delivered": c.delivered }))
+            Ok(json!({ "what": m.what, "steps": steps, "holder": c.holder.as_ref().map(cx), "delivery": format!("{:?}", n.delivery(m)) }))
         }
         "pay_couriers" => {
             let parcel = parse_hash(v, "parcel")?;

@@ -129,7 +129,7 @@ fn reports() {
     let mut forged = town.copy(&town.town.reports.scope).unwrap().submissions().into_iter().find(|s| s.post().unwrap().endorsement.is_some()).unwrap();
     let Op::Send { body, .. } = &mut forged.record.op else { panic!() };
     let mut post = Post::decode(body).unwrap();
-    post.epoch += 1;
+    post.kind = "cleared".into();
     *body = post.encode();
     let forged = Submission { record: pave_kernel::sign(alice.view.scheme(), &alice.key, &cred, forged.record.op.clone()), content: forged.content };
     assert!(town.host_post(&forged).unwrap_err().contains("endorsement"));
