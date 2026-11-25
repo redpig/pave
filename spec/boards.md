@@ -50,7 +50,8 @@ This is the mechanism anonymous ticket requests use, and the standing proof that
 
 - **Submitting.** A wallet signs a post and queues it. At its next sync it sends the record and content directly to the host. The host checks the binding and any endorsement, keeps the post and answers with a **receipt**: its signature over (board, post id, content hash).
 - **Receipts make dropping visible.** If the host later omits a post, its author shows the receipt. A receipt stands for one post only, even when two posts have the same content.
-- **Fetching.** A reader sends the ids it has and gets the rest. Any node with a copy can serve a fetch: a mirror, a library kiosk, a neighbor. Copies are a choice, and checking makes them safe.
+- **Fetching.** A reader sends the ids it has and gets the rest. Any node with a copy can serve a fetch: a mirror, a library kiosk, a neighbor. Every post travels with the host's receipt, and a reader takes a post only with a receipt from the board's host for exactly that post. A copy can serve the board and can't add to it. Copies are a choice, and checking makes them safe.
+- **The host keeps time.** A post's epoch is the poster's word, so the host takes a post only in its current epoch or the one before. With receipts required, that holds for posts fetched from any copy.
 - **What the host sees.** The host sees the connection a post arrives on, as any website does. The post shows only its content, a fresh key and, if endorsed, a per-thread pseudonym and a class. A reporter who needs to hide the connection too can send through an anonymity network they already use, such as Tor or an Oblivious HTTP relay; pave doesn't build one.
 - **Roles.** A board names the credentials of roles whose posts the profile gives weight, such as a mirror and a moderator. Anyone can post anything; posts claiming a role from any other key are kept and ignored.
 

@@ -131,7 +131,7 @@ fn reports() {
     let mut post = Post::decode(body).unwrap();
     post.kind = "cleared".into();
     *body = post.encode();
-    let forged = Submission { record: pave_kernel::sign(alice.view.scheme(), &alice.key, &cred, forged.record.op.clone()), content: forged.content };
+    let forged = Submission { record: pave_kernel::sign(alice.view.scheme(), &alice.key, &cred, forged.record.op.clone()), content: forged.content, taken: None };
     assert!(town.host_post(&forged).unwrap_err().contains("endorsement"));
     assert_eq!(dave.absorb_posts(&dave.town.reports.scope.clone(), &[bad]), 0);
 
@@ -205,6 +205,15 @@ fn reports() {
     let posts = bob.posts_since(&scope, &dave.board_have(&scope));
     dave.absorb_posts(&scope, &posts);
     assert_eq!(dave.issues()[&issue].reporters, town.issues()[&issue].reporters);
+    // A copy can serve the board but can't add to it: a validly signed post
+    // the host never took has no receipt, and readers drop it.
+    alice.report(key.clone(), "2026-11-25", "never sent", None).unwrap();
+    let unsent = alice.outgoing.last().unwrap().clone();
+    assert_eq!(dave.absorb_posts(&scope, std::slice::from_ref(&unsent)), 0);
+    let mut stolen = unsent;
+    stolen.taken = town.copy(&scope).unwrap().submissions()[0].taken.clone();
+    assert_eq!(dave.absorb_posts(&scope, &[stolen]), 0, "nor with another post's receipt");
+    alice.outgoing.clear();
 
     // Reports never travel between wallets: meeting carries value, epochs
     // and evidence, and a wallet drops board posts slipped into a bundle.

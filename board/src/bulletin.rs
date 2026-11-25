@@ -33,8 +33,9 @@
 //!   with a signed receipt. If the host later omits the post, its author can
 //!   show the receipt.
 //! - **Copies are a choice.** Anyone holding a copy of a board can serve it,
-//!   and a reader checks every record and every content hash, so a copy
-//!   needn't be trusted. Wallets never carry posts when they meet: that path
+//!   and a reader checks every record, every content hash and the host's
+//!   receipt for every post, so a copy needn't be trusted: it can serve the
+//!   board, and can't add to it. Wallets never carry posts when they meet: that path
 //!   is for value, epochs and evidence.
 
 use crate::node::{Class, Node, S};
@@ -151,6 +152,10 @@ pub struct Submission {
     pub record: Record,
     #[serde(with = "serde_bytes")]
     pub content: Vec<u8>,
+    /// The host's receipt, once the host has taken it. Readers take a post
+    /// from a copy only with this.
+    #[serde(default)]
+    pub taken: Option<PostReceipt>,
 }
 
 impl Submission {
@@ -210,6 +215,8 @@ pub struct Copy {
     pub info: BoardInfo,
     view: View<S>,
     content: BTreeMap<Hash, Vec<u8>>,
+    /// The host's receipt for every post.
+    taken: BTreeMap<Hash, PostReceipt>,
     /// Receipts for this node's own posts.
     pub receipts: BTreeMap<Hash, PostReceipt>,
 }
@@ -225,13 +232,24 @@ impl Copy {
         if create.output(0) != info.scope {
             return Err("that record doesn't create this board".into());
         }
-        Ok(Copy { info, view, content: BTreeMap::new(), receipts: BTreeMap::new() })
+        Ok(Copy { info, view, content: BTreeMap::new(), taken: BTreeMap::new(), receipts: BTreeMap::new() })
     }
 
     /// Check a post and keep it: a validly signed record in this board's
     /// scope, with a binding, and content matching it. Returns whether it
     /// was new.
     pub fn absorb(&mut self, sub: &Submission) -> Result<bool, String> {
+        let r = sub.taken.as_ref().ok_or("no receipt from the host")?;
+        if r.scope != self.info.scope || r.post != sub.record.id() || r.content != content_hash(&sub.content) || !r.verify(self.view.scheme(), &self.info.host) {
+            return Err("that receipt isn't the host's for this post".into());
+        }
+        let new = self.take(sub)?;
+        self.taken.insert(r.post, r.clone());
+        Ok(new)
+    }
+
+    /// Check a post and keep it, without a receipt: the host's own intake.
+    fn take(&mut self, sub: &Submission) -> Result<bool, String> {
         if sub.scope() != Some(self.info.scope) {
             return Err("not a post on this board".into());
         }
@@ -281,7 +299,7 @@ impl Copy {
 
     /// The posts a reader lacks, given what it has.
     pub fn since(&self, have: &BTreeSet<Prefix>) -> Vec<Submission> {
-        self.view.messages().iter().filter(|r| !have.contains(&prefix(&r.id()))).filter_map(|r| self.content.get(&r.id()).map(|c| Submission { record: r.clone(), content: c.clone() })).collect()
+        self.view.messages().iter().filter(|r| !have.contains(&prefix(&r.id()))).filter_map(|r| self.content.get(&r.id()).map(|c| Submission { record: r.clone(), content: c.clone(), taken: self.taken.get(&r.id()).cloned() })).collect()
     }
 
     pub fn submissions(&self) -> Vec<Submission> {
@@ -366,7 +384,7 @@ impl Node {
         let post = Post { kind: kind.into(), thread, content: ch, epoch, endorsement, by };
         let record = pave_kernel::sign(self.view.scheme(), &self.key, signer, Op::Send { scope: *scope, presenting: None, body: post.encode(), receipt: ch });
         let id = record.id();
-        let sub = Submission { record, content };
+        let sub = Submission { record, content, taken: None };
         if self.hosts(scope) {
             let r = self.host_post(&sub)?;
             self.posted(&sub, &r)?;
@@ -399,13 +417,15 @@ impl Node {
         if post.endorsement.is_some() && endorser(&self.town.classes, &scope, &post).is_none() {
             return Err("endorsement doesn't check out".into());
         }
-        let copy = self.boards.get_mut(&scope).unwrap();
-        copy.absorb(sub)?;
-        let host = copy.info.host.clone();
+        let host = self.boards[&scope].info.host.clone();
         let (post_id, content) = (sub.record.id(), post.content);
         let sig = self.view.scheme().sign(&self.key, &host, &receipt_bytes(&scope, &post_id, &content), None);
+        let receipt = PostReceipt { scope, post: post_id, content, sig };
+        let copy = self.boards.get_mut(&scope).unwrap();
+        copy.take(sub)?;
+        copy.taken.insert(post_id, receipt.clone());
         self.save()?;
-        Ok(PostReceipt { scope, post: post_id, content, sig })
+        Ok(receipt)
     }
 
     /// Author: the host took a post. Check its receipt, keep the post in
@@ -417,7 +437,7 @@ impl Node {
         if r.scope != scope || r.post != sub.record.id() || r.content != content_hash(&sub.content) || !r.verify(&s, &copy.info.host) {
             return Err("that receipt isn't the host's for this post".into());
         }
-        copy.absorb(sub)?;
+        copy.absorb(&Submission { taken: Some(r.clone()), ..sub.clone() })?;
         copy.receipts.insert(r.post, r.clone());
         self.outgoing.retain(|o| o.record.id() != r.post);
         self.save()

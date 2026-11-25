@@ -120,7 +120,7 @@ fn vouches() {
     post.by = Some(alices);
     let Op::Send { scope, presenting, receipt, .. } = q.record.op.clone() else { panic!() };
     let record = pave_kernel::sign(carol.view.scheme(), &carol.key, &q.record.signer, Op::Send { scope, presenting, body: post.encode(), receipt });
-    carol.outgoing.push(pave_board::bulletin::Submission { record, content: q.content.clone() });
+    carol.outgoing.push(pave_board::bulletin::Submission { record, content: q.content.clone(), taken: None });
     carol.sync_with(&mut town);
     dave.sync_with(&mut town);
     let (_, dv) = dave.reputation(&who);
