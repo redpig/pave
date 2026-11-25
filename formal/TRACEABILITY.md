@@ -89,6 +89,12 @@ The tests were checked against injected faults matching the TLA+ fault names. Ea
 | `noreputationgate` (disputes) | Tiers don't need scores | 1 |
 | `reseat` (disputes) | An arbiter can sit on the appeal of its own ruling | 1 |
 | `nolapse` (disputes) | Unstaffed disputes hold forever | 1 |
+| `nodeposit` (disputes) | An appeal with pay counts without a deposit | 1 |
+| `depositanyterms` (disputes) | A deposit made for other terms counts | 1 |
+| `depositreuse` (disputes) | One deposit funds two appeals | 1 |
+| `nocap` (disputes) | A loser who never escalated owes every round | 1 |
+| `subjectnotchain` (disputes) | A dispute is judged by any ruling on its subject, not its own chain | 1 |
+| `countnotpeople` (disputes) | A counterparty's record counts disputes, not people | 1 |
 | `offpanelruling` (disputes) | Rulings from offerers off the panel count | 1 |
 | `byunchecked` (boards) | A post's identity counts without its signature | 2 |
 | `bynotbound` (boards) | An identity's signature isn't bound to its post | 2 |

@@ -3,7 +3,8 @@
 //! cost more and need better arbiters, reputation from upheld rulings,
 //! referral to an outside authority.
 
-use pave_board::dispute::Answer;
+use pave_board::board::contractor;
+use pave_board::dispute::{liability, Answer, DisputeRecord, Filing};
 use pave_board::node::{Node, PendingJoin};
 use pave_board::parcel::{Delivery, Mode};
 use pave_kernel::hash::hash_of;
@@ -14,8 +15,10 @@ fn join(town: &mut Node, name: &str, dir: &std::path::Path, credits: &[u64]) -> 
     let (pending, req) = PendingJoin::generate();
     let e = town.enroll(&req, "hardware", credits).unwrap();
     let mut n = Node::finish_enrollment(pending, &e, name, &dir.join(name)).unwrap();
-    let t = town.answer_refill(&n.refill_request(&town.refill_terms().unwrap(), 16).unwrap()).unwrap();
-    n.take_tickets(t);
+    for _ in 0..2 {
+        let t = town.answer_refill(&n.refill_request(&town.refill_terms().unwrap(), 16).unwrap()).unwrap();
+        n.take_tickets(t);
+    }
     n
 }
 
@@ -76,6 +79,8 @@ fn disputes() {
     let mut arbs: Vec<Node> = (0..7).map(|i| join(&mut town, &format!("arb{i}"), &dir, &[])).collect();
     let to = shop.receive().unwrap();
     town.issue_parcel_budget(to, 10).unwrap();
+    // Ana is the courier, under a trade key: disputes about her deliveries name her.
+    let ana_id = contractor(&ana.trade_key().unwrap());
     meet(&mut shop, &mut town);
 
     // ── A code delivery: Zoe has no wallet at the door, only the code.
@@ -108,7 +113,8 @@ fn disputes() {
     let e = shop.epoch();
     assert_eq!(shop.delivery(&m2), Delivery::Pending(e + 2));
     meet(&mut ana, &mut zoe);
-    let d0 = zoe.open_dispute(m2.parcel, "was it delivered?", 1, 2, None, Some(zoe_at)).unwrap();
+    let q = "was it delivered?";
+    let d0 = zoe.open_dispute(Filing::new(m2.parcel, q, false, 1, 2).against(ana_id).party(zoe_at)).unwrap();
     sync(&mut town, &mut [&mut shop, &mut ana, &mut zoe]);
     assert_eq!(shop.delivery(&m2), Delivery::Disputed);
 
@@ -143,16 +149,30 @@ fn disputes() {
     assert_eq!(shop.disputes().0[&d0].outcome, Some(Answer::No));
     assert_eq!(shop.delivery(&m2), Delivery::NotDelivered);
     assert!(shop.pay_couriers(&m2).is_err());
-    // The opener pays the panel.
-    assert_eq!(zoe.pay_arbiters(d0).unwrap().len(), 1);
-    meet(&mut zoe, &mut arbs[first]);
+    // The first round is funded by the side disputed: the courier.
+    assert_eq!(ana.pay_arbiters(d0).unwrap().len(), 1);
+    assert!(ana.pay_arbiters(d0).unwrap().is_empty(), "once");
+    meet(&mut ana, &mut arbs[first]);
     assert_eq!(balance(&arbs[first]), 2);
 
     // ── Ana appeals, and pays for a bigger, better-paid panel. Appeals that
     // don't escalate are ignored.
-    let bad_panel = ana.open_dispute(m2.parcel, "was it delivered?", 2, 4, Some(d0), None).unwrap();
-    let bad_pay = ana.open_dispute(m2.parcel, "was it delivered?", 3, 3, Some(d0), None).unwrap();
-    let d1 = ana.open_dispute(m2.parcel, "was it delivered?", 3, 4, Some(d0), None).unwrap();
+    assert!(ana.open_dispute(Filing::new(m2.parcel, q, true, 2, 4).appeal_of(d0)).is_err(), "her wallet won't file one");
+    assert!(ana.open_dispute(Filing::new(m2.parcel, q, true, 3, 3).appeal_of(d0)).is_err());
+    // Filed anyway, even with a deposit matching its terms, readers ignore it.
+    let dep = ana.deposit_for(&m2.parcel, 1, 2, 4, &Some(d0)).unwrap();
+    let bad_panel = ana.file(Filing::new(m2.parcel, q, true, 2, 4).appeal_of(d0), 1, Some(Box::new(dep))).unwrap();
+    // So is one whose deposit was made for other terms, even if it covers these.
+    let other_terms = ana.deposit_for(&m2.parcel, 1, 5, 4, &Some(d0)).unwrap();
+    let mismatched = ana.file(Filing::new(m2.parcel, q, true, 3, 4).appeal_of(d0), 1, Some(Box::new(other_terms))).unwrap();
+    // An appeal with pay and no deposit is ignored too.
+    let bad_pay = ana.file(Filing::new(m2.parcel, q, true, 3, 4).appeal_of(d0), 1, None).unwrap();
+    // The real appeal: paid upfront into escrow.
+    let d1 = ana.open_dispute(Filing::new(m2.parcel, q, true, 3, 4).appeal_of(d0)).unwrap();
+    // A second appeal reusing that deposit is ignored: a deposit pays once.
+    let sub = ana.outgoing.iter().find(|x| x.record.id() == d1).unwrap().clone();
+    let Some(pave_board::board::BoardMsg::Dispute { deposit, .. }) = pave_board::board::BoardMsg::decode(&sub.content) else { panic!() };
+    let reused = ana.file(Filing::new(m2.parcel, q, true, 3, 4).appeal_of(d0), 1, deposit).unwrap();
     ana.sync_with(&mut town);
     for a in arbs.iter_mut().take(5) {
         a.sync_with(&mut town);
@@ -167,7 +187,7 @@ fn disputes() {
         sync(&mut town, &mut all);
     }
     let (ds, _) = shop.disputes();
-    assert!(!ds.contains_key(&bad_panel) && !ds.contains_key(&bad_pay));
+    assert!(!ds.contains_key(&bad_panel) && !ds.contains_key(&bad_pay) && !ds.contains_key(&reused) && !ds.contains_key(&mismatched));
     let panel1: Vec<_> = ds[&d1].panel.clone().unwrap().into_iter().map(|(_, k)| k).collect();
     assert_eq!(panel1.len(), 3);
     assert!(!panel1.contains(&panel[0].1), "an arbiter who ruled below doesn't sit on the appeal");
@@ -184,6 +204,25 @@ fn disputes() {
     assert_eq!(ds[&d1].outcome, Some(Answer::Yes));
     assert_eq!(shop.delivery(&m2), Delivery::Delivered("ruled"));
     assert_eq!(shop.pay_couriers(&m2).unwrap().len(), 1);
+    assert!(ana.pay_arbiters(d1).unwrap_err().contains("escrow"));
+    // The town releases the escrow to the panel once it's decided.
+    meet(&mut ana, &mut town);
+    let before: Vec<u64> = on.iter().map(|i| balance(&arbs[*i])).collect();
+    assert_eq!(town.release_escrow(d1).unwrap().len(), 3);
+    assert!(town.release_escrow(d1).is_err(), "once");
+    for (j, i) in on.iter().enumerate() {
+        meet(&mut town, &mut arbs[*i]);
+        assert_eq!(balance(&arbs[*i]), before[j] + 4);
+    }
+    // Loser pays, as computed: Zoe lost and never escalated, so she owes the
+    // first round's 2 of the 14 the winning side paid.
+    let ds = shop.disputes().0;
+    assert_eq!(liability(&ds, &d0), Some(pave_board::dispute::Liability { loser: false, paid_by_winner: 14, owed: 2 }));
+    // Records: Ana sees one filer, by pseudonym, who filed against her and
+    // lost; and her own record counts that one person.
+    let (filers, hers) = shop.dispute_records(&ana_id);
+    assert_eq!(filers.values().cloned().collect::<Vec<_>>(), vec![DisputeRecord { filed: 1, won: 0, lost: 1, referred: 0 }]);
+    assert_eq!(hers, DisputeRecord { filed: 1, won: 1, lost: 0, referred: 0 });
     // Reputation follows the final outcome: overturned -1, upheld +1.
     let ids: Vec<_> = arbs.iter().map(|a| a.contractor()).collect();
     let k = |i: usize| ids[i].unwrap();
@@ -200,7 +239,7 @@ fn disputes() {
     ana.drop_off(&m3, "dn5bpth", photo).unwrap();
     let addressee = m3.addressee.clone();
     meet(&mut ana, &mut zoe);
-    let d2 = zoe.open_dispute(m3.parcel, "was it delivered?", 1, 0, None, Some(addressee)).unwrap();
+    let d2 = zoe.open_dispute(Filing::new(m3.parcel, q, false, 1, 0).against(ana_id).party(addressee)).unwrap();
     sync(&mut town, &mut [&mut shop, &mut ana, &mut zoe]);
     arbs[5].sync_with(&mut town);
     arbs[5].offer_to_arbitrate(d2).unwrap();
@@ -215,7 +254,7 @@ fn disputes() {
     arbs[5].arbitrate(d2, Answer::Yes).unwrap();
     arbs[5].sync_with(&mut town);
     zoe.sync_with(&mut town);
-    let d3 = zoe.open_dispute(m3.parcel, "was it delivered?", 3, 1, Some(d2), None).unwrap();
+    let d3 = zoe.open_dispute(Filing::new(m3.parcel, q, false, 3, 1).appeal_of(d2)).unwrap();
     zoe.sync_with(&mut town);
     for i in [first, on[0], on[1], 6] {
         arbs[i].sync_with(&mut town);
@@ -246,10 +285,13 @@ fn disputes() {
     }
     assert!(matches!(shop.delivery(&m3), Delivery::Referred(_)));
     assert!(shop.pay_couriers(&m3).is_err());
-    let d4 = zoe.open_dispute(m3.parcel, "was it delivered?", 5, 2, Some(d3), None).unwrap();
+    assert!(zoe.open_dispute(Filing::new(m3.parcel, q, false, 5, 2).appeal_of(d3)).is_err());
+    let dep = zoe.deposit_for(&m3.parcel, 2, 5, 2, &Some(d3)).unwrap();
+    let d4 = zoe.file(Filing::new(m3.parcel, q, false, 5, 2).appeal_of(d3), 2, Some(Box::new(dep))).unwrap();
     zoe.sync_with(&mut town);
     shop.sync_with(&mut town);
     assert!(!shop.disputes().0.contains_key(&d4), "a referral can't be appealed inside pave");
+    assert_eq!(liability(&shop.disputes().0, &d2), None, "a referral settles no costs");
 
     // ── A stranger's dispute holds nothing, even staffed and ruled against
     // delivery, and neither does a party's that nobody staffs: the drop
@@ -264,11 +306,11 @@ fn disputes() {
     // A wallet behind on epochs can't post: the host keeps time, so nobody
     // backdates a drop note or a dispute.
     stranger.sync_with(&mut town);
-    stranger.open_dispute(m5.parcel, "was it delivered?", 1, 0, None, None).unwrap();
+    stranger.open_dispute(Filing::new(m5.parcel, q, false, 1, 0)).unwrap();
     assert!(stranger.sync_with(&mut town).refused[0].contains("epoch"));
     hear(&town, &mut stranger);
-    let ds5 = stranger.open_dispute(m5.parcel, "was it delivered?", 1, 0, None, None).unwrap();
-    zoe.open_dispute(m5.parcel, "was it delivered?", 1, 0, None, Some(m5.addressee.clone())).unwrap();
+    let ds5 = stranger.open_dispute(Filing::new(m5.parcel, q, false, 1, 0)).unwrap();
+    zoe.open_dispute(Filing::new(m5.parcel, q, false, 1, 0).against(ana_id).party(m5.addressee.clone())).unwrap();
     sync(&mut town, &mut [&mut shop, &mut ana, &mut zoe, &mut stranger]);
     assert_eq!(shop.delivery(&m5), Delivery::Disputed, "zoe's dispute holds while it may be staffed");
     arbs[6].sync_with(&mut town);
@@ -285,6 +327,12 @@ fn disputes() {
     shop.sync_with(&mut town);
     assert_eq!(shop.disputes().0[&ds5].outcome, Some(Answer::No));
     assert_eq!(shop.delivery(&m5), Delivery::Delivered("drop"));
+
+    // Zoe filed three times against Ana, under one pseudonym with her: one
+    // lost, one referred, one lapsed. Against anyone else she'd be unrelated.
+    let (filers, hers) = shop.dispute_records(&ana_id);
+    assert_eq!(filers.values().cloned().collect::<Vec<_>>(), vec![DisputeRecord { filed: 3, won: 0, lost: 1, referred: 1 }]);
+    assert_eq!(hers, DisputeRecord { filed: 1, won: 1, lost: 0, referred: 1 });
 
     // Codes and manifests survive a restart.
     shop.save().unwrap();

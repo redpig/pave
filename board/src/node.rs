@@ -345,7 +345,7 @@ impl Node {
             cash: cash_schema().id(),
             classes,
             parcels: crate::parcel::parcel_schema().id(),
-            jobs: BoardInfo { scope: jobs.output(0), host: s.credential(&me), roles: BTreeMap::new() },
+            jobs: BoardInfo { scope: jobs.output(0), host: s.credential(&me), roles: [("escrow".to_string(), s.credential(&me))].into_iter().collect() },
             reports: BoardInfo {
                 scope: reports.output(0),
                 host: s.credential(&me),

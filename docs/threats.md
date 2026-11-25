@@ -399,7 +399,12 @@ Where pave can do better once this is built:
 | DS7 | A plurality decides | A majority of the panel decides | n/a | Built (mutation `nomajority`) |
 | DS8 | A referral is appealed inside pave | A referral is final inside pave | n/a | Built (mutation `appealreferral`) |
 | DS9 | An arbiter games the draw by offering from many trade keys | Each trade key is a contractor; scores start at zero and tiers need them | Rulings are public | Partial: sybil arbiters can fill tier 0 |
-| DS10 | The opener doesn't pay the panel | n/a | Visible: payments name the dispute and arbiter | Gap: escrow |
+| DS10 | An appellant doesn't pay the panel | Appeals with pay carry an escrow deposit committing to their terms; the town pays the panel from it | n/a | Built (mutations `nodeposit`, `depositanyterms`) |
+| DS11 | One deposit funds two appeals | Readers count each deposit once | n/a | Built (mutation `depositreuse`) |
+| DS12 | A provider escalates to leave a customer owing for rounds it never chose | A loser who never escalated owes at most the first round | n/a | Built, computed not enforced (mutation `nocap`) |
+| DS13 | A spurious filer keeps disputing a provider | The filer's record with that provider, by pseudonym | The provider asks it for a deposit | Built: records (mutation `subjectnotchain`); Gap: deposits for first rounds |
+| DS14 | One person disputes a provider many times to ruin its record | The provider's record counts distinct people | n/a | Built (mutation `countnotpeople`) |
+| DS15 | The first round's funder doesn't pay its panel | n/a | Visible: payments name the dispute and arbiter | Gap: escrow for first rounds |
 
 ---
 

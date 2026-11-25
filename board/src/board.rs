@@ -57,7 +57,18 @@ pub enum BoardMsg {
     Done { job: Hash },
     Paid { job: Hash, payment: Hash },
     /// A dispute: see [`crate::dispute`].
-    Dispute { subject: Hash, question: String, tier: u32, panel: u32, pay_each: u64, appeal_of: Option<Hash> },
+    Dispute {
+        subject: Hash,
+        question: String,
+        claim: bool,
+        against: Option<Hash>,
+        tier: u32,
+        panel: u32,
+        pay_each: u64,
+        appeal_of: Option<Hash>,
+        /// For an appeal with pay: its escrow deposit.
+        deposit: Option<Box<Record>>,
+    },
     /// A panelist's answer to a dispute.
     Ruling { dispute: Hash, answer: crate::dispute::Answer },
     /// A courier's note on an unattended drop: see [`crate::parcel`].
@@ -96,7 +107,8 @@ impl BoardMsg {
     /// The job a message is about; None for a new job.
     pub fn job(&self) -> Option<Hash> {
         match self {
-            BoardMsg::Post { .. } | BoardMsg::Dispute { .. } => None,
+            BoardMsg::Post { .. } => None,
+            BoardMsg::Dispute { against, .. } => *against,
             BoardMsg::Ruling { dispute, .. } => Some(*dispute),
             BoardMsg::Dropped { parcel, .. } => Some(*parcel),
             BoardMsg::Reply { job, .. } | BoardMsg::Accept { job, .. } | BoardMsg::Done { job } | BoardMsg::Paid { job, .. } | BoardMsg::Vouch { job, .. } => Some(*job),
