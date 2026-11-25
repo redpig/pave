@@ -2,7 +2,7 @@
 
 Packages for a delivery co-op, with custody as a coin. A parcel moves from shipper to courier to courier to addressee, hand to hand and offline if need be, because each next holder wants it: holding it is what gets a courier paid. Nothing here needs the kernel to change.
 
-The prototype is [`board/src/parcel.rs`](../board/src/parcel.rs), with a test in [`board/tests/parcel.rs`](../board/tests/parcel.rs).
+The prototype is [`board/src/parcel.rs`](../board/src/parcel.rs), with a test in [`board/tests/parcel.rs`](../board/tests/parcel.rs). [`demo/parcel_demo.py`](../demo/parcel_demo.py) runs signed, code and drop deliveries, a dispute and an escrowed appeal across separate processes.
 
 ## Objects
 
@@ -46,4 +46,3 @@ A party (the addressee, the shipper, a courier in its custody) can dispute deliv
 - Couriers accountable to the co-op by name: a courier's take signed with one of its identities, so dispatch knows which member holds a parcel.
 - Dispatch: offering parcels as jobs on the job board, and routing.
 - Proof of where a handoff happened.
-- A demo across processes.
