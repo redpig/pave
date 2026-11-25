@@ -274,15 +274,24 @@ Specified as a holder-created capability (spec C9), not yet built
 
 ## 12. Boards and the job board
 
-`board/src/board.rs`
+`board/src/bulletin.rs`, `board/src/board.rs`; [spec/boards.md](../spec/boards.md)
 
-**Attack surface:** posts, replies, accept, done and paid messages in the board scope; proof of means; payment receipts.
+**Attack surface:** the host that takes posts and serves them; copies that serve readers; post records and their content; endorsements, identities and receipts; on the job board, posts, replies, accept, done and paid messages, proof of means and payment receipts.
 
 | # | Attack | Prevent | React | Briolette | Status |
 |---|---|---|---|---|---|
+| H1 | The host alters a post's content | The record binds the content by hash; readers check it | n/a | n/a | Built (mutation `nocontenthash`) |
+| H2 | The host or a copy invents posts | Posts are signed records; readers take a post only with the host's receipt for exactly that post | n/a | n/a | Built (mutations `copynoreceipt`, `copyanyreceipt`) |
+| H3 | The host drops posts it took, or censors selectively | Every post gets a signed receipt; a receipt stands for one post only | The author shows the receipt; several hosts for one board | n/a | Built (mutations `noreceiptsig`, `receiptanypost`); Gap: several hosts |
+| H4 | The host refuses posts up front | n/a | Post to another host of the board; the refusal is visible to the author | n/a | Gap: several hosts |
+| H5 | The host links a post to the connection it arrived on | The post carries a fresh key and, if endorsed, a per-thread pseudonym and a class, nothing else | Send through an anonymity network the author already uses (Tor, Oblivious HTTP) | n/a | Accepted: like any website |
+| H6 | Board posts ride along in wallet meets, so peers learn who carried what | Wallets drop board posts from bundles; posts go to the host | n/a | n/a | Built (mutation `carryposts`) |
+| H7 | A forged endorsement inflates a count | The host and every reader check endorsements against the classes' issuers | n/a | n/a | Built (mutation `noendorsecheck`) |
+| H8 | A post is backdated to open or close a window early | The host takes a post only in its current epoch or the one before, and receipts carry that to every copy | n/a | n/a | Built (mutation `backdate`) |
+| H9 | Someone signs a post as another person's identity | An identity's signature covers the post's binding; holding someone's identity doesn't let you sign with it | n/a | n/a | Built (mutations `byunchecked`, `bynotbound`) |
 | B1 | Post a job without the pay to back it | Proof of means: a zero-value split of the poster's coin that commits to the terms | The proof is evidence if the coin is spent elsewhere first | n/a | Built |
 | B2 | Accept or mark paid on someone else's job | Only the poster's key can accept or mark paid; only the accepted worker's key can mark done | Ignored | n/a | Built (mutation `anyaccept`) |
-| B3 | A false "done", or a poster who doesn't pay | n/a | Disputes and mediation posted as jobs (principle 20) | n/a | Gap |
+| B3 | A false "done", or a poster who doesn't pay | n/a | A dispute about the job, posted as a job (section 18) | n/a | Partial: disputes take any subject; nothing yet ties a job's payment to a ruling |
 | B4 | Spam posts | Posting costs something or needs a capability (principle 17); the host can require endorsements and limit posts per pseudonym | n/a | n/a | Gap |
 | B5 | Sybil reputation | A vouch rides on a real payment from the job's poster, and counts each enrolled person once per job type; only the poster can vouch, and only for a worker who named the contractor with its trade key | Rulings against false vouches | n/a | Built (mutations `vouchanyone`, `vouchanytype`, `notradesig`, `vouchperjob`, `vouchunnamed`); Gap: rulings. Self-dealing still costs a second enrollment, not money: the pay goes back to oneself |
 | B6 | Link a worker across jobs | A fresh credential per role | n/a | n/a | Built |
@@ -377,7 +386,7 @@ Where pave can do better once this is built:
 | PC6 | A courier keeps the parcel | The custody chain shows who holds it; a courier taking under its co-op identity is named to dispatch | The co-op acts on its member | Built (mutation `anytook`): opt-in per courier; a co-op can require it |
 | PC11 | A shipper or provider pays a courier twice, or both pay | With a provider, only the provider pays couriers; payments name the parcel and courier; the shipper's own handoff is never paid | n/a | Built (mutations `shipperpayscouriers`, `payshipper`, `providertwice`) |
 | PC7 | The addressee takes the parcel but won't retire it, or isn't there | Code and drop delivery modes; a party's dispute | A panel rules on it | Built (mutations `anycode`, `nowindow`) |
-| PC9 | A courier backdates a drop note to settle its window at once | The host takes a post only in its current epoch or the one before | n/a | Built (mutation `backdate`); Gap: a copy served by someone other than the host could carry a post the host never took |
+| PC9 | A courier backdates a drop note to settle its window at once | As H8: the host keeps time, and readers take a post from any copy only with the host's receipt | n/a | Built (mutations `backdate`, `copynoreceipt`) |
 | PC10 | A stranger disputes deliveries to hold them | Only a party's disputes, and their appeals, count for a parcel | n/a | Built (mutation `anyonedisputes`) |
 | PC8 | A shipper ships more than it was allowed | Parcels are minted from a budget the town issued | Budgets are capabilities (M1, M3) | Built |
 

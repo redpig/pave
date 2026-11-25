@@ -106,5 +106,7 @@ The tests were checked against injected faults matching the TLA+ fault names. Ea
 | `unsettledrelease` (disputes) | A filer's deposit is paid out before the chain settles | 1 |
 | `noappealwindow` (disputes) | Appeals are allowed any time | 1 |
 | `offpanelruling` (disputes) | Rulings from offerers off the panel count | 1 |
+| `copynoreceipt` (boards) | A reader takes a post from a copy without the host's receipt | 1 |
+| `copyanyreceipt` (boards) | A reader takes a post with a receipt for another post | 1 |
 | `byunchecked` (boards) | A post's identity counts without its signature | 2 |
 | `bynotbound` (boards) | An identity's signature isn't bound to its post | 2 |
