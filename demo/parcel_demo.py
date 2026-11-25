@@ -120,12 +120,29 @@ def main():
         print(f"  with Zoe's code: {GREEN}{shop('custody', quiet=True, parcel=parcel)['delivery']}{OFF}")
 
         say("4. A drop at the wrong door: the courier photographs a porch two doors down")
-        # Stand-in images (invented): a real wallet would attach real photos.
-        def img(name, text):
+        # Stand-in images (invented): a JPEG's structure with Exif and a C2PA
+        # segment, and a line of text standing in for the pixels.
+        def seg(marker, payload):
+            return bytes([0xFF, marker]) + (len(payload) + 2).to_bytes(2, "big") + payload
+
+        def img(name, pixels, exif=None):
+            data = b"\xff\xd8" + seg(0xE0, b"JFIF\0")
+            if exif:
+                data += seg(0xE1, b"Exif\0\0" + exif.encode()) + seg(0xEB, b"JP\0jumb c2pa: captured by camera app")
+            data += seg(0xDA, b"scan") + pixels.encode() + b"\xff\xd9"
             path = os.path.join(d, name)
             with open(path, "wb") as f:
-                f.write(text.encode())
+                f.write(data)
             return path
+
+        def shows(path):
+            """What a stand-in picture shows, and its Exif if it kept any."""
+            data = open(path, "rb").read()
+            i = data.find(b"\xff\xda")
+            pixels = data[i + 2 + int.from_bytes(data[i + 2:i + 4], "big"):-2].decode()
+            j = data.find(b"Exif\0\0")
+            exif = data[j + 6:data.find(b"\xff", j)].decode() if j >= 0 else None
+            return pixels, exif
         ana_id = ana("trade", quiet=True)["contractor"]
         zoe_at = zoe("receive", quiet=True)["credential"]
         r = shop("ship", what="books", **{"from": "dn5bpsb", "to": "dn5bpth"}, addressee=zoe_at, pay=3, mode="drop", window=2)
@@ -133,15 +150,15 @@ def main():
         shop("handoff", parcel=parcel, to=ana("receive", quiet=True)["credential"])
         shop.meet(ana)
         ana("take", manifest=manifest)
-        ana("drop", manifest=manifest, cell="dn5bpth", photo_file=img("porch.img", "PHOTO: blue door, white railing, number 125"))
+        ana("drop", manifest=manifest, cell="dn5bpth", photo_file=img("porch.jpg", "blue door, white railing, number 125", exif="GPS 36.1621,-86.7812 at 14:02"))
         ana.meet(shop)
         ana.meet(zoe)
         sync(ana, shop)
         d0 = zoe("dispute", subject=parcel, question="was it delivered?", claim=False, panel=1, pay=2, against=ana_id, **{"as": zoe_at})["dispute"]
         print("  Zoe disputes, and shows her own door and two public records of her address:")
-        zoe("submit_evidence", subject=parcel, kind="image", caption="my front door", image_file=img("door.img", "PHOTO: red door, brick steps, number 123"), **{"as": zoe_at})
-        zoe("submit_evidence", subject=parcel, kind="reference", source="street view", url="https://maps.example/123-pine", caption="123 Pine St", image_file=img("sv.img", "STREET VIEW: red door, 123"), **{"as": zoe_at})
-        zoe("submit_evidence", subject=parcel, kind="reference", source="city tax assessor", url="https://assessor.example/123-pine", caption="123 Pine St", image_file=img("tax.img", "ASSESSOR: brick house, red door"), **{"as": zoe_at})
+        zoe("submit_evidence", subject=parcel, kind="image", caption="my front door", image_file=img("door.jpg", "red door, brick steps, number 123", exif="GPS 36.1624,-86.7809 at 18:30"), **{"as": zoe_at})
+        zoe("submit_evidence", subject=parcel, kind="reference", source="street view", url="https://maps.example/123-pine", caption="123 Pine St", image_file=img("sv.jpg", "red door, number 123"), **{"as": zoe_at})
+        zoe("submit_evidence", subject=parcel, kind="reference", source="city tax assessor", url="https://assessor.example/123-pine", caption="123 Pine St", image_file=img("tax.jpg", "brick house, red door"), **{"as": zoe_at})
         zoe("submit_evidence", subject=parcel, kind="statement", text="That photo is 125, two doors down. Mine is 123, the red door.", **{"as": zoe_at})
         print("  Ana shows custody and the photo she committed to at the drop:")
         ana("parcel_evidence", parcel=parcel, statement="left at the door of the address")
@@ -162,9 +179,15 @@ def main():
         print(f"  {arb.name} is drawn and examines it. Its wallet checked:")
         print(f"    custody: {'; '.join(r['custody'])}")
         print(f"    the photo is the one committed at the drop: {r['photo_matches']}; left in the destination cell: {r['cell_matches']}")
-        print("    so the question is the door. Side by side:")
+        print("    so the question is the door. Side by side, metadata stripped:")
         for p in r["pictures"]:
-            print(f"      {p['label']:<30} from {p['from']:<10} {open(p['file']).read()}")
+            print(f"      {p['label']:<30} from {p['from']:<10} {shows(p['file'])[0]}")
+        ana("reveal", subject=parcel)
+        sync(ana)
+        r = arb("examine", quiet=True, subject=parcel, peer=town.addr)
+        o = next(p for p in r["pictures"] if p["label"] == "original of drop photo")
+        print(f"  Ana reveals her original to show where she was. It matches her commitment ({o['original']}),")
+        print(f"  carries {', '.join(o['metadata'])}, and its Exif says: {shows(o['file'])[1]}, Zoe's door is at 36.1624,-86.7809")
         arb("arbitrate", dispute=d0, answer="no")
         sync(arb, shop, ana, zoe)
         print(f"  ruled: {RED}{shop('custody', quiet=True, parcel=parcel)['delivery']}{OFF}")

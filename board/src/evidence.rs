@@ -17,13 +17,24 @@
 //!     view and works out custody itself.
 //!   - *Code*: the shipper reveals a code delivery's code. The panelist
 //!     checks whether the courier's closing record commits to it.
-//!   - *Photo*: the courier reveals a drop's photo and the salt it was
-//!     committed with. The panelist checks it against the drop note.
-//!   - *Image*: any party's picture, such as the addressee's own front door.
+//!   - *Drop photo*: the courier's photo of a drop, as shown (its metadata
+//!     stripped), with the commitment to the original. The panelist checks
+//!     the commitment against the drop note: the original was fixed when
+//!     the parcel was dropped.
+//!   - *Image*: any party's picture, such as the addressee's own front
+//!     door, optionally with a commitment to its original.
+//!   - *Original*: the original behind a commitment, with its salt, revealed
+//!     when it helps: its metadata (time, place, a C2PA provenance
+//!     manifest) can then be inspected. The panelist checks it against the
+//!     commitment.
 //!   - *Reference*: a public record, such as a street-view image or the
 //!     city's tax-assessor photo of an address: where it came from, and
 //!     the image as fetched, so a panelist can look and check the source.
 //!   - *Statement*: words, from whoever submitted them.
+//!
+//!   What a party shows is normally stripped of metadata (see
+//!   [`crate::media`]); the original stays with the party, who alone holds
+//!   the salt, until it chooses to reveal it.
 //!
 //!   A drop photo that matches the drop note was fixed when the parcel was
 //!   dropped, before anyone disputed anything. That proves it wasn't
@@ -50,18 +61,25 @@ pub enum Evidence {
     Custody { manifest: Manifest, records: Vec<Record> },
     /// The code a code delivery was shipped with.
     Code { code: String },
-    /// A drop's photo and the salt it was committed with.
-    Photo {
+    /// A drop's photo as shown, and the commitment to its original.
+    DropPhoto {
         #[serde(with = "serde_bytes")]
-        salt: Vec<u8>,
-        #[serde(with = "serde_bytes")]
-        photo: Vec<u8>,
+        image: Vec<u8>,
+        commitment: Hash,
     },
-    /// A party's picture.
+    /// A party's picture as shown, and optionally a commitment to its original.
     Image {
         caption: String,
         #[serde(with = "serde_bytes")]
         image: Vec<u8>,
+        original: Option<Hash>,
+    },
+    /// The original behind a commitment, and its salt.
+    Original {
+        #[serde(with = "serde_bytes")]
+        salt: Vec<u8>,
+        #[serde(with = "serde_bytes")]
+        original: Vec<u8>,
     },
     /// A public record: its source, where to find it, and the image as fetched.
     Reference {
@@ -79,8 +97,9 @@ impl Evidence {
         match self {
             Evidence::Custody { .. } => "custody",
             Evidence::Code { .. } => "code",
-            Evidence::Photo { .. } => "photo",
+            Evidence::DropPhoto { .. } => "photo",
             Evidence::Image { .. } => "image",
+            Evidence::Original { .. } => "original",
             Evidence::Reference { .. } => "reference",
             Evidence::Statement { .. } => "statement",
         }
@@ -159,8 +178,15 @@ pub struct Picture {
     pub from: String,
     /// Fixed before any dispute: a drop photo that matches its drop note.
     pub committed_at_drop: bool,
+    /// Whether the original behind this picture was revealed and matches
+    /// (Yes), revealed and doesn't (No), or wasn't revealed (Unknown).
+    pub original: Check,
+    /// For a revealed original: the metadata it carries.
+    pub metadata: Vec<String>,
     /// Where a public record came from.
     pub url: Option<String>,
+    #[serde(skip)]
+    commitment: Option<Hash>,
     #[serde(skip)]
     pub bytes: Vec<u8>,
 }
@@ -301,15 +327,42 @@ impl Node {
         out
     }
 
-    /// Courier: drop a parcel with a photo, committed with a fresh salt
-    /// that this wallet keeps, to reveal to a panel if it comes to that.
-    pub fn drop_off_photo(&mut self, m: &Manifest, cell: &str, photo: &[u8]) -> Result<Hash, String> {
+    /// Commit to an original about a subject with a fresh salt this wallet
+    /// keeps. Returns the commitment.
+    fn commit_original(&mut self, subject: &Hash, original: &[u8]) -> Hash {
         let mut salt = vec![0u8; 32];
         rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut salt);
-        let state = self.drop_off(m, cell, photo_commitment(&salt, photo))?;
-        self.photos.insert(m.parcel, (salt, photo.to_vec()));
+        let c = photo_commitment(&salt, original);
+        self.originals.insert(c, (*subject, salt, original.to_vec()));
+        c
+    }
+
+    /// Courier: drop a parcel with a photo. The drop note commits to the
+    /// original, metadata and provenance included; the wallet keeps it and
+    /// its salt, and shows a panel a stripped copy unless it reveals more.
+    pub fn drop_off_photo(&mut self, m: &Manifest, cell: &str, photo: &[u8]) -> Result<Hash, String> {
+        let c = self.commit_original(&m.parcel, photo);
+        let state = self.drop_off(m, cell, c)?;
+        self.drop_photos.insert(m.parcel, c);
         self.save()?;
         Ok(state)
+    }
+
+    /// Submit a picture about a subject. With `redact`, what is shown is
+    /// stripped of metadata and carries a commitment to the original, which
+    /// this wallet keeps to reveal if it helps.
+    pub fn submit_image(&mut self, subject: Hash, caption: &str, original: &[u8], redact: bool, as_cred: Option<Credential>) -> Result<Hash, String> {
+        let (image, commitment) = if redact { (crate::media::strip_metadata(original), Some(self.commit_original(&subject, original))) } else { (original.to_vec(), None) };
+        self.submit_evidence(subject, &Evidence::Image { caption: caption.into(), image, original: commitment }, as_cred)
+    }
+
+    /// Reveal the originals this wallet committed to about a subject.
+    pub fn reveal_originals(&mut self, subject: &Hash, as_cred: Option<Credential>) -> Result<Vec<Hash>, String> {
+        let mine: Vec<(Vec<u8>, Vec<u8>)> = self.originals.values().filter(|(s, _, _)| s == subject).map(|(_, salt, o)| (salt.clone(), o.clone())).collect();
+        if mine.is_empty() {
+            return Err("no originals about that".into());
+        }
+        mine.into_iter().map(|(salt, original)| self.submit_evidence(*subject, &Evidence::Original { salt, original }, as_cred.clone())).collect()
     }
 
     /// Everything this wallet can show about a parcel: its custody, the
@@ -323,8 +376,9 @@ impl Node {
         if let Some(code) = self.codes.get(&m.parcel) {
             items.push(Evidence::Code { code: code.clone() });
         }
-        if let Some((salt, photo)) = self.photos.get(&m.parcel) {
-            items.push(Evidence::Photo { salt: salt.clone(), photo: photo.clone() });
+        if let Some((_, _, original)) = self.drop_photos.get(&m.parcel).and_then(|c| self.originals.get(c)) {
+            let commitment = self.drop_photos[&m.parcel];
+            items.push(Evidence::DropPhoto { image: crate::media::strip_metadata(original), commitment });
         }
         if let Some(t) = statement {
             items.push(Evidence::Statement { text: t.into() });
@@ -392,10 +446,9 @@ impl Node {
                             ex.code_matches = if hit { Check::Yes } else { Check::No };
                         }
                     }
-                    Evidence::Photo { salt, photo } if matches!(m.mode, Mode::Drop { .. }) => {
-                        let commit = photo_commitment(salt, photo);
+                    Evidence::DropPhoto { commitment, .. } if matches!(m.mode, Mode::Drop { .. }) => {
                         let noted = self.copy(&self.town.jobs.scope).ok().is_some_and(|copy| {
-                            copy.items().into_iter().any(|i| matches!(BoardMsg::decode(i.content), Some(BoardMsg::Dropped { parcel, photo: p, .. }) if parcel == *subject && p == commit))
+                            copy.items().into_iter().any(|i| matches!(BoardMsg::decode(i.content), Some(BoardMsg::Dropped { parcel, photo: p, .. }) if parcel == *subject && p == *commitment))
                         });
                         if noted || ex.photo_matches == Check::Unknown {
                             ex.photo_matches = if noted { Check::Yes } else { Check::No };
@@ -413,26 +466,54 @@ impl Node {
                 _ => None,
             }).collect())
             .unwrap_or_default();
+        let pic = |label: String, from: &str, committed: bool, url: Option<String>, bytes: &[u8], commitment: Option<Hash>| Picture {
+            label,
+            from: from.into(),
+            committed_at_drop: committed,
+            original: Check::Unknown,
+            metadata: vec![],
+            url,
+            bytes: bytes.to_vec(),
+            commitment,
+        };
         for (from, ev, hash) in &good {
             let who = roles.get(from).cloned().unwrap_or_else(|| "not a party".into());
             let detail = match ev {
                 Evidence::Statement { text } => text.clone(),
-                Evidence::Photo { photo, .. } => format!("{} bytes", photo.len()),
-                Evidence::Image { caption, image } => format!("{caption} ({} bytes)", image.len()),
+                Evidence::DropPhoto { image, .. } => format!("{} bytes as shown", image.len()),
+                Evidence::Image { caption, image, .. } => format!("{caption} ({} bytes)", image.len()),
+                Evidence::Original { original, .. } => format!("{} bytes; metadata: {}", original.len(), crate::media::metadata_kinds(original).join(", ")),
                 Evidence::Reference { source, url, caption, image } => format!("{source}: {caption} <{url}> ({} bytes)", image.len()),
                 Evidence::Custody { records, .. } => format!("{} records", records.len()),
                 Evidence::Code { code } => code.clone(),
             };
             match ev {
-                Evidence::Photo { salt, photo } => {
-                    let committed = commits.contains(&photo_commitment(salt, photo));
-                    ex.pictures.push(Picture { label: "drop photo".into(), from: who.clone(), committed_at_drop: committed, url: None, bytes: photo.clone() });
-                }
-                Evidence::Image { caption, image } => ex.pictures.push(Picture { label: caption.clone(), from: who.clone(), committed_at_drop: false, url: None, bytes: image.clone() }),
-                Evidence::Reference { source, url, caption, image } => ex.pictures.push(Picture { label: format!("{source}: {caption}"), from: who.clone(), committed_at_drop: false, url: Some(url.clone()), bytes: image.clone() }),
+                Evidence::DropPhoto { image, commitment } => ex.pictures.push(pic("drop photo".into(), &who, commits.contains(commitment), None, image, Some(*commitment))),
+                Evidence::Image { caption, image, original } => ex.pictures.push(pic(caption.clone(), &who, false, None, image, *original)),
+                Evidence::Reference { source, url, caption, image } => ex.pictures.push(pic(format!("{source}: {caption}"), &who, false, Some(url.clone()), image, None)),
                 _ => {}
             }
             ex.exhibits.push(Exhibit { kind: ev.kind().into(), from: who, hash: *hash, detail });
+        }
+        // Originals last: each is checked against the commitment it claims to
+        // open, and shown beside the picture it is the original of.
+        for (from, ev, _) in &good {
+            let Evidence::Original { salt, original } = ev else { continue };
+            let who = roles.get(from).cloned().unwrap_or_else(|| "not a party".into());
+            let c = photo_commitment(salt, original);
+            let of = ex.pictures.iter_mut().find(|p| p.commitment == Some(c));
+            let (label, committed, check) = match of {
+                Some(p) => {
+                    p.original = Check::Yes;
+                    (format!("original of {}", p.label), p.committed_at_drop, Check::Yes)
+                }
+                None if commits.contains(&c) => ("original of the drop photo".into(), true, Check::Yes),
+                None => ("an original that matches nothing shown".into(), false, Check::No),
+            };
+            let mut p = pic(label, &who, committed, None, original, Some(c));
+            p.original = check;
+            p.metadata = crate::media::metadata_kinds(original);
+            ex.pictures.push(p);
         }
         ex
     }

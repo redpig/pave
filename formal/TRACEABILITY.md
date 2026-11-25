@@ -110,6 +110,10 @@ The tests were checked against injected faults matching the TLA+ fault names. Ea
 | `staleask` (evidence) | Old requests are honored | 1 |
 | `evidenceunsigned` (evidence) | The host keeps evidence without its submitter's signature | 1 |
 | `anyphoto` (evidence) | Any photo is labeled as taken at the drop | 1 |
+| `anyoriginal` (evidence) | A revealed original attaches to any committed picture | 1 |
+| `unmatchedoriginal` (evidence) | An original that opens nothing is labeled as matching | 1 |
+| `showoriginal` (evidence) | A drop photo is shown with its metadata | 1 |
+| `keepc2pa` (media) | Stripping keeps the metadata segments after Exif | 1 |
 | `nocell` (evidence) | The drop cell check always fails | 1 |
 | `anycodeevidence` (evidence) | Any closing counts as matching the revealed code | 1 |
 | `offpanelruling` (disputes) | Rulings from offerers off the panel count | 1 |

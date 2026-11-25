@@ -24,11 +24,13 @@ A panel rules on evidence, not on claims. The prototype is [`board/src/evidence.
   |---|---|---|
   | Custody | Anyone holding the chain | Applies the signed records, from the town's issuance on, to its own view and works out custody and each party's role itself |
   | Code | The shipper of a code delivery | Whether the courier's closing record commits to that code |
-  | Photo | The courier of a drop, with its salt | Whether it is the photo committed to in the drop note when the parcel was dropped, before any dispute |
-  | Image | Any party | Nothing: a picture for the panel, labeled with who sent it |
+  | Drop photo | The courier of a drop: the photo as shown, and the commitment to its original | Whether the commitment is the one in the drop note, so the original was fixed when the parcel was dropped, before any dispute |
+  | Image | Any party: as shown, and optionally a commitment to its original | Nothing: a picture for the panel, labeled with who sent it |
+  | Original | Whoever committed to it, with its salt | Whether it opens a commitment shown (a drop photo's, an image's); then shown beside it with the kinds of metadata it carries |
   | Reference | Any party | Nothing: a public record (a street-view image, a tax-assessor photo) with its source and URL, for the panel to look at and check |
   | Statement | Any party | Nothing: words, labeled with who sent them |
 
+- **Redacted copies, provable originals.** What a party shows is normally stripped of metadata: location, time, device, a C2PA provenance manifest. The original stays with the party, committed to with a salt only it holds. If the metadata helps its case (where and when a photo was taken, a camera's provenance signature), it reveals the original to the panel, which checks it against the commitment. Stripping metadata is something a prototype can do from a file's structure alone ([`board/src/media.rs`](../board/src/media.rs), JPEG and PNG). Blurring faces and number plates needs an app with a vision model.
 - **The examination.** The panelist's wallet reports custody, whether the code and photo check out, whether the drop note's cell is the destination's, and every picture side by side with who sent it and whether it was fixed at the drop. A drop photo that checks out proves it wasn't swapped, not that it shows the right door: the panel compares it with the addressee's pictures and the public records. The report is structured, so a person or an AI agent can rule on it.
 
 ## Panels

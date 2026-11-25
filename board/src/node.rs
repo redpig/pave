@@ -191,7 +191,9 @@ pub struct Saved {
     #[serde(default)]
     pub codes: Vec<(Hash, String)>,
     #[serde(default)]
-    pub photos: Vec<(Hash, serde_bytes::ByteBuf, serde_bytes::ByteBuf)>,
+    pub originals: Vec<(Hash, Hash, serde_bytes::ByteBuf, serde_bytes::ByteBuf)>,
+    #[serde(default)]
+    pub drop_photos: Vec<(Hash, Hash)>,
     #[serde(default)]
     pub evidence_out: Vec<crate::evidence::Sealed>,
     #[serde(default)]
@@ -265,8 +267,10 @@ pub struct Node {
     pub parcels: BTreeMap<Hash, crate::parcel::Manifest>,
     /// Delivery codes for parcels this wallet shipped by code.
     pub codes: BTreeMap<Hash, String>,
-    /// Drop photos this wallet committed to, with their salts, by parcel.
-    pub photos: BTreeMap<Hash, (Vec<u8>, Vec<u8>)>,
+    /// Originals this wallet committed to, by commitment: subject, salt, original.
+    pub originals: BTreeMap<Hash, (Hash, Vec<u8>, Vec<u8>)>,
+    /// The commitment of each parcel this wallet dropped.
+    pub drop_photos: BTreeMap<Hash, Hash>,
     /// Evidence signed and waiting for the host.
     pub evidence_out: Vec<crate::evidence::Sealed>,
     /// Host: evidence held for panels, by subject.
@@ -408,7 +412,8 @@ impl Node {
             contacts: BTreeMap::new(),
             parcels: BTreeMap::new(),
             codes: BTreeMap::new(),
-            photos: BTreeMap::new(),
+            originals: BTreeMap::new(),
+            drop_photos: BTreeMap::new(),
             evidence_out: vec![],
             held_evidence: BTreeMap::new(),
             vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(path)?)),
@@ -534,7 +539,8 @@ impl Node {
             contacts: BTreeMap::new(),
             parcels: BTreeMap::new(),
             codes: BTreeMap::new(),
-            photos: BTreeMap::new(),
+            originals: BTreeMap::new(),
+            drop_photos: BTreeMap::new(),
             evidence_out: vec![],
             held_evidence: BTreeMap::new(),
             vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(out)?)),
@@ -594,7 +600,8 @@ impl Node {
             contacts: saved.contacts.into_iter().collect(),
             parcels: saved.parcels.into_iter().map(|m| (m.parcel, m)).collect(),
             codes: saved.codes.into_iter().collect(),
-            photos: saved.photos.into_iter().map(|(p, s, b)| (p, (s.into_vec(), b.into_vec()))).collect(),
+            originals: saved.originals.into_iter().map(|(c, sub, s, b)| (c, (sub, s.into_vec(), b.into_vec()))).collect(),
+            drop_photos: saved.drop_photos.into_iter().collect(),
             evidence_out: saved.evidence_out,
             held_evidence: saved.held_evidence.into_iter().fold(BTreeMap::new(), |mut m, e| {
                 m.entry(e.subject).or_insert_with(Vec::new).push(e);
@@ -654,7 +661,8 @@ impl Node {
             contacts: self.contacts.iter().map(|(n, c)| (n.clone(), c.clone())).collect(),
             parcels: self.parcels.values().cloned().collect(),
             codes: self.codes.iter().map(|(p, c)| (*p, c.clone())).collect(),
-            photos: self.photos.iter().map(|(p, (s, b))| (*p, serde_bytes::ByteBuf::from(s.clone()), serde_bytes::ByteBuf::from(b.clone()))).collect(),
+            originals: self.originals.iter().map(|(c, (sub, s, b))| (*c, *sub, serde_bytes::ByteBuf::from(s.clone()), serde_bytes::ByteBuf::from(b.clone()))).collect(),
+            drop_photos: self.drop_photos.iter().map(|(p, c)| (*p, *c)).collect(),
             evidence_out: self.evidence_out.clone(),
             held_evidence: self.held_evidence.values().flatten().cloned().collect(),
         };
