@@ -2,12 +2,11 @@
 //! permits from mirrored city data, rulings that stop a reporter without
 //! unmasking them, forwarding and clearing.
 
-use pave_board::bulletin::{content_hash, Post, Submission};
+use pave_board::bulletin::{purpose, Clock};
 use pave_board::node::{Node, PendingJoin};
 use pave_board::report::{cell, IssueKey, PermitStatus, PublishedPermit, ReportMsg, CELL_PRECISION};
 use pave_kernel::{Hash, Op, Scheme};
 use pave_protocol::gossip;
-use pave_scheme_briolette::BrioletteV1;
 use std::collections::BTreeSet;
 
 fn join(town: &mut Node, name: &str, class: &str, dir: &std::path::Path) -> Node {
@@ -28,11 +27,21 @@ fn tick(town: &mut Node, people: &mut [&mut Node]) {
     }
 }
 
-/// The pseudonym on a report post.
+/// The pseudonym on a report post: its ticket's tag.
 fn nym_of(n: &Node, id: &Hash) -> Vec<u8> {
     let copy = n.copy(&n.town.reports.scope).unwrap();
     let item = copy.items().into_iter().find(|i| i.id == *id).unwrap();
-    BrioletteV1 { group_public_key: vec![] }.nym(&item.post.endorsement.unwrap().sig).unwrap()
+    item.tag.unwrap().nym.clone()
+}
+
+/// A fresh key for a wallet.
+fn erin_key(n: &Node) -> pave_kernel::Credential {
+    n.view.scheme().credential(&n.key)
+}
+
+/// Alice's posts in her own copy, as the server took them.
+fn taken(n: &Node) -> Vec<pave_board::bulletin::Submission> {
+    n.copy(&n.town.reports.scope).unwrap().submissions().into_iter().filter(|s| n.mine.contains(&s.record.signer)).collect()
 }
 
 #[test]
@@ -63,21 +72,26 @@ fn reports() {
     assert!(alice.outgoing.is_empty());
     let i = &town.issues()[&issue];
     assert_eq!((i.reporters, i.permit.clone()), (1, PermitStatus::None));
-    // Alice holds the host's receipt, so dropping her post later is provable.
-    let alice_post = town.reports_on(&issue)[0];
-    assert!(alice.copy(&alice.town.reports.scope).unwrap().receipts.contains_key(&alice_post));
-    // A receipt is the host's word for one post: it doesn't stand for another,
-    // and nobody but the host can make one.
+    // Her post is her token's transfer to the server, and the server's
+    // retire of that token is its word that it took it, so dropping her post
+    // later is provable.
+    let mine = taken(&alice);
+    assert_eq!(mine.len(), 1);
+    let retire = mine[0].taken.clone().unwrap();
+    assert_eq!(retire.signer, town.town.reports.host);
+    assert_eq!(retire.op, Op::Retire { state: mine[0].record.output(0) });
+    // The retire stands for that post's token, not another's.
     alice.report(key.clone(), "2026-11-24", "queued", None).unwrap();
     let queued = alice.outgoing[0].clone();
-    let r = alice.copy(&alice.town.reports.scope).unwrap().receipts[&alice_post].clone();
-    assert!(alice.posted(&queued, &r).is_err());
-    let mut fake_receipt = r.clone();
-    fake_receipt.post = queued.record.id();
-    fake_receipt.content = content_hash(&queued.content);
-    assert!(alice.posted(&queued, &fake_receipt).is_err());
-    alice.refused(&queued).unwrap();
+    let terms = town.token_terms().unwrap();
+    let req = alice.token_request(&terms, std::slice::from_ref(&queued.signer), queued.count).unwrap();
+    let grant = town.answer_tokens(&req).unwrap();
+    alice.take_grant(grant).unwrap();
+    let sub = alice.sign_post(&queued, &town.board_clock(&queued.board).unwrap()).unwrap();
+    assert!(alice.posted(&sub, &retire).is_err());
+    alice.refused(&queued.name()).unwrap();
 
+    let scope_r = alice.town.reports.scope;
     // Bob corroborates; Alice reporting again, under a fresh credential,
     // still counts once.
     bob.sync_with(&mut town);
@@ -88,7 +102,7 @@ fn reports() {
     let i = &town.issues()[&issue];
     assert_eq!(i.reporters, 2, "one person, one count");
     assert_eq!(i.classes.get("software"), Some(&1));
-    let alice_reports: Vec<Hash> = alice.copy(&alice.town.reports.scope).unwrap().receipts.keys().copied().collect();
+    let alice_reports: Vec<Hash> = taken(&alice).iter().map(|s| s.name()).collect();
     assert_eq!(alice_reports.len(), 2);
     // Alice's two reports share a pseudonym on this issue...
     let nyms: BTreeSet<_> = alice_reports.iter().map(|id| nym_of(&town, id)).collect();
@@ -121,25 +135,68 @@ fn reports() {
     let i = &town.issues()[&issue];
     assert_eq!((i.permit.clone(), i.reporters), (PermitStatus::None, 2));
 
-    // The host refuses content that doesn't match its binding, or a forged
-    // endorsement; a reader drops such posts from any copy.
+    // A server or reader refuses content that doesn't match the binding, or
+    // a binding changed after signing; a token can't be used twice, at this
+    // server or another; and a server takes only its own clock.
     let mut bad = town.copy(&town.town.reports.scope).unwrap().submissions()[1].clone();
     bad.content.push(0);
-    assert!(town.host_post(&bad).unwrap_err().contains("hash"));
-    let mut forged = town.copy(&town.town.reports.scope).unwrap().submissions().into_iter().find(|s| s.post().unwrap().endorsement.is_some()).unwrap();
-    let Op::Send { body, .. } = &mut forged.record.op else { panic!() };
-    let mut post = Post::decode(body).unwrap();
-    post.kind = "cleared".into();
-    *body = post.encode();
-    let forged = Submission { record: pave_kernel::sign(alice.view.scheme(), &alice.key, &cred, forged.record.op.clone()), content: forged.content, taken: None };
-    assert!(town.host_post(&forged).unwrap_err().contains("endorsement"));
-    assert_eq!(dave.absorb_posts(&dave.town.reports.scope.clone(), &[bad]), 0);
+    assert_eq!(dave.absorb_posts(&dave.town.reports.scope.clone(), std::slice::from_ref(&bad)), 0);
+    let mut changed = town.copy(&town.town.reports.scope).unwrap().submissions()[1].clone();
+    changed.post.kind = "cleared".into();
+    assert!(town.host_post(&changed).unwrap_err().contains("this post"));
+    assert_eq!(dave.absorb_posts(&dave.town.reports.scope.clone(), &[changed]), 0);
+    let again = town.copy(&town.town.reports.scope).unwrap().submissions()[1].clone();
+    assert!(town.host_post(&pave_board::bulletin::Submission { taken: None, ..again }).is_err(), "one token, one post");
+    alice.report(key.clone(), "2026-11-24", "late", None).unwrap();
+    let late = alice.outgoing.pop().unwrap();
+    let req = alice.token_request(&town.token_terms().unwrap(), std::slice::from_ref(&late.signer), late.count).unwrap();
+    alice.take_grant(town.answer_tokens(&req).unwrap()).unwrap();
+    let now = town.board_clock(&late.board).unwrap();
+    let stale = alice.sign_post(&late, &Clock { clock: now.clock - 3600, ..now }).unwrap();
+    assert!(town.host_post(&stale).unwrap_err().contains("clock"));
+    let behind = alice.sign_post(&late, &Clock { epoch: now.epoch + 5, ..now });
+    assert!(behind.is_err(), "one token, one signature");
+    alice.report(key.clone(), "2026-11-24", "early", None).unwrap();
+    let early = alice.outgoing.pop().unwrap();
+    let req = alice.token_request(&town.token_terms().unwrap(), std::slice::from_ref(&early.signer), early.count).unwrap();
+    alice.take_grant(town.answer_tokens(&req).unwrap()).unwrap();
+    let ahead = alice.sign_post(&early, &Clock { epoch: now.epoch + 5, ..now }).unwrap();
+    assert!(town.host_post(&ahead).unwrap_err().contains("epoch"));
+
+    // A tag is the mint's word: a request signed for one purpose can't
+    // claim another.
+    let terms = town.token_terms().unwrap();
+    let fresh = alice.view.scheme().credential(&alice.key);
+    let mut req = alice.token_request(&terms, std::slice::from_ref(&fresh), Some(Hash([1; 32]))).unwrap();
+    req.purpose = Some(Hash([2; 32]));
+    assert!(town.answer_tokens(&req).is_err());
+    let mut req = alice.token_request(&terms, std::slice::from_ref(&fresh), Some(Hash([1; 32]))).unwrap();
+    req.count_sig = alice.token_request(&terms, std::slice::from_ref(&fresh), Some(Hash([2; 32]))).unwrap().count_sig;
+    assert!(town.answer_tokens(&req).unwrap_err().contains("purpose"));
+
+    // Only the board mint's tokens post: a budget of the same schema under
+    // the root's own capability makes tokens no server or reader takes.
+    let op = town.operator.clone().unwrap();
+    let s = town.view.scheme().clone();
+    let rogue = pave_kernel::sign(&s, &op.root, &op.root_cred, Op::IssueBudget { authority: town.town.genesis.rooting_capability(), schema: pave_board::bulletin::post_schema(), amount: 1, to: op.root_cred.clone() });
+    let token = pave_kernel::sign(&s, &op.root, &op.root_cred, Op::Mint { budget: rogue.output(0), amount: 1, to: fresh.clone(), change_to: op.root_cred.clone() });
+    alice.view.apply(&rogue).unwrap();
+    alice.view.apply(&token).unwrap();
+    alice.compose(&scope_r, &fresh, "reply", Some(issue), b"rogue".to_vec(), None).unwrap();
+    let d = alice.outgoing.pop().unwrap();
+    let mut rogue_sub = alice.sign_post(&d, &town.board_clock(&scope_r).unwrap()).unwrap();
+    assert!(town.host_post(&rogue_sub).unwrap_err().contains("another mint"));
+    rogue_sub.taken = Some(pave_kernel::sign(&s, &town.key, &town.town.reports.host, Op::Retire { state: rogue_sub.record.output(0) }));
+    assert_eq!(dave.absorb_posts(&scope_r, &[rogue_sub]), 0, "nor does a reader, even if the server took it");
 
     // A report filed under a thread other than its issue's would carry a
     // second pseudonym for the same person. It doesn't count.
     let msg = ReportMsg::Report { key: key.clone(), observed: "2026-11-24".into(), note: "sneaky".into(), photo: None };
-    let ruled = pave_board::report::ruled(alice.copy(&alice.town.reports.scope).unwrap(), &alice.town.classes);
-    alice.compose(&alice.town.reports.scope.clone(), &cred, "report", Some(Hash([7; 32])), msg.encode(), Some(&ruled)).unwrap();
+    let scope = alice.town.reports.scope;
+    alice.compose(&scope, &cred, "report", Some(Hash([7; 32])), msg.encode(), Some(purpose(&scope, "report", &Hash([7; 32])))).unwrap();
+    // Nor does one counted for another issue.
+    let fresh = alice.view.scheme().credential(&alice.key);
+    alice.compose(&scope, &fresh, "report", Some(issue), msg.encode(), Some(purpose(&scope, "report", &other))).unwrap();
     alice.sync_with(&mut town);
     assert_eq!(town.issues()[&issue].reporters, 2);
 
@@ -158,41 +215,56 @@ fn reports() {
     assert_eq!(alice.issues()[&issue].reporters, 2);
 
     // Clearing counts each person once. Two clearings have the same
-    // content, and a receipt for one doesn't stand for the other.
+    // content and different names.
     dave.sync_with(&mut town);
     dave.clear_issue(&issue).unwrap();
     dave.sync_with(&mut town);
     dave.clear_issue(&issue).unwrap();
-    let second = dave.outgoing[0].clone();
-    let first = dave.copy(&dave.town.reports.scope).unwrap().receipts.values().next().unwrap().clone();
-    assert_eq!(first.content, content_hash(&second.content));
-    assert!(dave.posted(&second, &first).is_err());
     dave.sync_with(&mut town);
+    let clearings: BTreeSet<Hash> = taken(&dave).iter().map(|s| s.name()).collect();
+    assert_eq!(clearings.len(), 2);
     assert_eq!(town.issues()[&issue].cleared, 1);
 
     // A malicious report: Carol invents one, the moderator rules it, and
-    // it stops counting. Her later reports need standing against the ruling,
-    // which she can't produce, while everyone else can.
+    // it stops counting. Carol had asked for two tokens for that key.
     let fake = IssueKey { category: "sidewalk blocked".into(), cell: cell(36.17, -86.79, CELL_PRECISION), opened: "2026-11-24".into() };
-    let fake_issue = carol.report(fake.clone(), "2026-11-24", "made up", None).unwrap();
-    carol.sync_with(&mut town);
+    let ck = carol.view.scheme().credential(&carol.key);
+    let fake_purpose = purpose(&scope, "report", &fake.id());
+    let req = carol.token_request(&town.token_terms().unwrap(), &[ck.clone(), ck.clone()], Some(fake_purpose)).unwrap();
+    carol.take_grant(town.answer_tokens(&req).unwrap()).unwrap();
+    let made_up = ReportMsg::Report { key: fake.clone(), observed: "2026-11-24".into(), note: "made up".into(), photo: None };
+    carol.compose(&scope, &ck, "report", Some(fake.id()), made_up.encode(), Some(fake_purpose)).unwrap();
+    let s = carol.sync_with(&mut town);
+    assert_eq!((s.sent, s.refused.len()), (1, 0), "no new request: she held a tagged token");
+    let fake_issue = fake.id();
     assert_eq!(town.issues()[&fake_issue].reporters, 1);
     let fake_report = town.reports_on(&fake_issue)[0];
     town.rule(fake_report, true).unwrap();
     let i = &town.issues()[&fake_issue];
     assert_eq!((i.reporters, i.discounted), (0, 1));
 
-    // Carol hears of the next epoch but reports from a stale copy, without
-    // the ruling. Her standing doesn't cover a ruling older than her report,
-    // so it doesn't count, and nothing about it says who she is.
-    tick(&mut town, &mut [&mut alice, &mut bob, &mut carol, &mut dave]);
-    let again = carol.report(key.clone(), "2026-11-25", "still blocked", None).unwrap();
-    assert_eq!(again, issue);
+    // A wallet that ignores the ruling and asks on the terms from before it
+    // is refused by the mint.
+    let before = pave_board::bulletin::TokenTerms { ruled: vec![], ..town.token_terms().unwrap() };
+    let fresh_c = carol.view.scheme().credential(&carol.key);
+    let stale_req = carol.token_request(&before, std::slice::from_ref(&fresh_c), None).unwrap();
+    assert!(town.answer_tokens(&stale_req).unwrap_err().contains("ruled"));
+    // The ruling puts her tag on the mint's list: she can't get tokens any
+    // more, for anything, since she can't show standing against it, and
+    // nothing about that says who she is.
     carol.sync_with(&mut town);
-    let i = &town.issues()[&issue];
-    assert_eq!((i.reporters, i.discounted), (2, 1));
-    // Once she has the ruling, her wallet can't produce standing at all.
-    assert!(carol.report(key.clone(), "2026-11-25", "again", None).unwrap_err().contains("ruled"));
+    carol.report(key.clone(), "2026-11-25", "still blocked", None).unwrap();
+    let s = carol.sync_with(&mut town);
+    assert!(s.refused.iter().any(|e| e.contains("ruled")), "{s:?}");
+    // At the next roll its ticket group is revoked, which stops the other
+    // token she already held.
+    let group = town.copy(&scope).unwrap().group(&fake_report).unwrap();
+    tick(&mut town, &mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    assert!(town.operator.as_ref().unwrap().revoked.contains_key(&group));
+    carol.compose(&scope, &ck, "report", Some(fake.id()), made_up.encode(), Some(fake_purpose)).unwrap();
+    let s = carol.sync_with(&mut town);
+    assert!(s.refused.iter().any(|e| e.contains("Revoked")), "{s:?}");
+    assert_eq!(town.issues()[&issue].reporters, 2);
     // Everyone else still can.
     bob.sync_with(&mut town);
     bob.report(fake.clone(), "2026-11-25", "I don't see anything here", None).unwrap();
@@ -206,28 +278,52 @@ fn reports() {
     dave.absorb_posts(&scope, &posts);
     assert_eq!(dave.issues()[&issue].reporters, town.issues()[&issue].reporters);
     // A copy can serve the board but can't add to it: a validly signed post
-    // the host never took has no receipt, and readers drop it.
-    alice.report(key.clone(), "2026-11-25", "never sent", None).unwrap();
-    let unsent = alice.outgoing.last().unwrap().clone();
-    assert_eq!(dave.absorb_posts(&scope, std::slice::from_ref(&unsent)), 0);
-    let mut stolen = unsent;
+    // the server never took has no retire, and readers drop it.
+    assert_eq!(dave.absorb_posts(&scope, std::slice::from_ref(&sub)), 0);
+    let mut stolen = sub.clone();
     stolen.taken = town.copy(&scope).unwrap().submissions()[0].taken.clone();
-    assert_eq!(dave.absorb_posts(&scope, &[stolen]), 0, "nor with another post's receipt");
-    alice.outgoing.clear();
+    assert_eq!(dave.absorb_posts(&scope, &[stolen]), 0, "nor with another post's retire");
 
-    // Reports never travel between wallets: meeting carries value, epochs
-    // and evidence, and a wallet drops board posts slipped into a bundle.
+    // A counted post gets a token tagged for its purpose even if its key
+    // already holds an untagged one, so it counts.
+    let third = IssueKey { category: "streetlight out".into(), cell: cell(36.15, -86.78, CELL_PRECISION), opened: "2026-11-25".into() };
+    let dk = dave.view.scheme().credential(&dave.key);
+    let req = dave.token_request(&town.token_terms().unwrap(), std::slice::from_ref(&dk), None).unwrap();
+    dave.take_grant(town.answer_tokens(&req).unwrap()).unwrap();
+    let out = ReportMsg::Report { key: third.clone(), observed: "2026-11-25".into(), note: "dark all night".into(), photo: None };
+    dave.compose(&scope, &dk, "report", Some(third.id()), out.encode(), Some(purpose(&scope, "report", &third.id()))).unwrap();
+    dave.sync_with(&mut town);
+    assert_eq!(town.issues()[&third.id()].reporters, 1);
+
+    // The mint limits token requests per access pseudonym per epoch.
+    let terms = town.token_terms().unwrap();
+    let limited: Vec<bool> = (0..=pave_board::bulletin::TOKEN_REQUESTS_PER_EPOCH)
+        .map(|_| {
+            let c = erin_key(&dave);
+            town.answer_tokens(&dave.token_request(&terms, &[c], None).unwrap()).is_ok()
+        })
+        .collect();
+    // Dave has made some this epoch already: the rest succeed, then none.
+    let first_refused = limited.iter().position(|ok| !ok).expect("the limit is reached");
+    assert!(first_refused > 0 && limited[first_refused..].iter().all(|ok| !ok));
+
+    // Posts and post tokens never travel between wallets: meeting carries
+    // value, epochs and evidence. Alice's bundle leaves out her tokens, and
+    // a wallet drops token records slipped into one.
     let mut b = alice.bundle();
-    b.records.push(town.copy(&scope).unwrap().submissions()[0].record.clone());
+    assert!(b.records.iter().all(|r| !alice.post_record(r)));
+    let theirs = town.copy(&scope).unwrap().submissions()[0].clone();
+    b.records.extend(theirs.provenance.iter().cloned());
+    b.records.push(theirs.record.clone());
     let mut erin = join(&mut town, "erin", "hardware", &dir);
     erin.absorb_bundle(&b);
-    assert!(erin.view.messages().iter().all(|r| !matches!(&r.op, Op::Send { scope: s, .. } if *s == scope)));
+    assert!(erin.view.coin(&theirs.record.output(0)).is_none());
     assert!(erin.issues().is_empty());
 
-    // Saved state keeps the copy and its receipts.
+    // Saved state keeps the copy.
     alice.save().unwrap();
     let again = Node::load(&alice.path).unwrap();
     assert_eq!(again.issues()[&issue].reporters, alice.issues()[&issue].reporters);
-    assert_eq!(again.copy(&scope).unwrap().receipts.len(), alice.copy(&scope).unwrap().receipts.len());
+    assert_eq!(taken(&again).len(), taken(&alice).len());
     let _ = std::fs::remove_dir_all(&dir);
 }

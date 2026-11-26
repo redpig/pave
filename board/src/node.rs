@@ -9,9 +9,10 @@
 //! each under its own enrolled key.
 
 use crate::board::{self, BoardMsg};
-use crate::bulletin::{BoardInfo, Copy, PostReceipt, Submission};
+use crate::bulletin::{BoardInfo, Copy, Draft, Submission};
 use pave_kernel::receipt::Receipt;
 use pave_kernel::*;
+use pave_kernel::objects::rights;
 use pave_protocol::gossip::Hint;
 use pave_protocol::*;
 use pave_scheme_briolette::{join_nonce, randomize, BrioletteV1, HolderKey, Issuer, JoinReply, JoinRequest, PendingKey};
@@ -61,6 +62,10 @@ pub struct Town {
     pub reports: BoardInfo,
     /// The parcel schema: packages in custody. See [`crate::parcel`].
     pub parcels: Hash,
+    /// The post token schema, and the record deriving the board mint's
+    /// capability to issue it. See [`crate::bulletin`].
+    pub posts: Hash,
+    pub post_mint: Record,
 }
 
 /// The operator: registrar plus the root, clerk and minter roles, each its
@@ -82,6 +87,11 @@ pub struct Operator {
     /// Ticket requests this epoch, by request pseudonym, for the rate limit.
     pub asked: BTreeMap<Vec<u8>, usize>,
     pub asked_epoch: u32,
+    /// Post token requests this epoch, by request pseudonym.
+    #[serde(default)]
+    pub tokens_asked: BTreeMap<Vec<u8>, usize>,
+    #[serde(default)]
+    pub tokens_epoch: u32,
     /// Swaps waiting out their hold.
     pub held: Vec<crate::swap::Held>,
     pub root: HolderKey,
@@ -175,11 +185,11 @@ pub struct Saved {
     pub invoices: Vec<(Credential, u64, Hash)>,
     pub paid: Vec<(Hash, Credential)>,
     pub pending: Vec<Record>,
-    /// Each board copy: its posts, and receipts for this wallet's own.
+    /// Each board copy: its posts.
     #[serde(default)]
-    pub boards: Vec<(Hash, Vec<Submission>, Vec<PostReceipt>)>,
+    pub boards: Vec<(Hash, Vec<Submission>)>,
     #[serde(default)]
-    pub outgoing: Vec<Submission>,
+    pub outgoing: Vec<Draft>,
     #[serde(default)]
     pub trade: Option<Credential>,
     #[serde(default)]
@@ -255,8 +265,8 @@ pub struct Node {
     pub pending: Vec<Record>,
     /// Copies of the town's boards, by scope. See [`crate::bulletin`].
     pub boards: BTreeMap<Hash, Copy>,
-    /// Posts signed and waiting for their host.
-    pub outgoing: Vec<Submission>,
+    /// Posts written and waiting for a server.
+    pub outgoing: Vec<Draft>,
     /// This wallet's trade key, once it replies as a contractor.
     pub trade: Option<Credential>,
     /// Stable credentials this wallet signs with for chosen audiences, by label.
@@ -352,6 +362,9 @@ impl Node {
         apply_ok(&mut view, &jobs)?;
         let reports = sign(&s, &root, &rc, Op::CreateScope { parent: genesis.root_scope(), rules: ScopeRules::default(), authority: auth });
         apply_ok(&mut view, &reports)?;
+        // The board mint: the minter's capability to issue post tokens.
+        let post_mint = sign(&s, &root, &rc, Op::Derive { parent: auth, rights: [rights::ISSUE.to_string()].into_iter().collect(), to: mc.clone() });
+        apply_ok(&mut view, &post_mint)?;
 
         let access: BTreeMap<String, Issuer> = default_classes().iter().map(|(c, _)| (c.to_string(), Issuer::new())).collect();
         let classes = default_classes()
@@ -366,6 +379,8 @@ impl Node {
             cash: cash_schema().id(),
             classes,
             parcels: crate::parcel::parcel_schema().id(),
+            posts: crate::bulletin::post_schema().id(),
+            post_mint,
             jobs: BoardInfo { scope: jobs.output(0), host: s.credential(&me), roles: [("escrow".to_string(), s.credential(&me))].into_iter().collect() },
             reports: BoardInfo {
                 scope: reports.output(0),
@@ -382,6 +397,8 @@ impl Node {
             revoked: BTreeMap::new(),
             asked: BTreeMap::new(),
             asked_epoch: 0,
+            tokens_asked: BTreeMap::new(),
+            tokens_epoch: 0,
             held: vec![],
             root,
             root_cred: rc,
@@ -452,6 +469,11 @@ impl Node {
     /// Operator: the clerk certifies a batch of credentials from `class`, in
     /// a fresh random group, at the current epoch, on the class's terms.
     pub fn issue_tickets(&mut self, creds: &[Credential], class: &str) -> Result<(u32, Vec<SignedTicket>), String> {
+        self.issue_tickets_tagged(creds, class, None)
+    }
+
+    /// As [`Node::issue_tickets`], each ticket carrying `tag`.
+    pub fn issue_tickets_tagged(&mut self, creds: &[Credential], class: &str, tag: Option<Tag>) -> Result<(u32, Vec<SignedTicket>), String> {
         let group = self.new_group(class)?;
         let max_spend = self.town.classes.get(class).ok_or("unknown class")?.max_spend;
         let op = self.operator.as_ref().ok_or("only the town operator issues tickets")?;
@@ -459,7 +481,7 @@ impl Node {
         let s = self.view.scheme().clone();
         let out: Vec<SignedTicket> = creds
             .iter()
-            .map(|c| SignedTicket::issue(&s, &op.clerk, &self.town.clerk, Ticket { credential: c.clone(), sequence: self.town.sequence, epoch, group, max_spend }))
+            .map(|c| SignedTicket::issue(&s, &op.clerk, &self.town.clerk, Ticket { credential: c.clone(), sequence: self.town.sequence, epoch, group, max_spend, tag: tag.clone() }))
             .collect();
         for t in &out {
             self.know.add_ticket(&s, t.clone());
@@ -634,11 +656,8 @@ impl Node {
         pave_protocol::gossip::absorb_hints(&mut node.know, &saved.hints);
         node.absorb_standings(saved.standing);
         node.open_boards()?;
-        for (scope, posts, receipts) in saved.boards {
+        for (scope, posts) in saved.boards {
             node.absorb_posts(&scope, &posts);
-            if let Some(c) = node.boards.get_mut(&scope) {
-                c.receipts.extend(receipts.into_iter().map(|r| (r.post, r)));
-            }
         }
         Ok(node)
     }
@@ -668,7 +687,7 @@ impl Node {
             invoices: self.invoices.iter().map(|(c, (a, m))| (c.clone(), *a, *m)).collect(),
             paid: self.paid.iter().map(|(h, c)| (*h, c.clone())).collect(),
             pending: self.pending.clone(),
-            boards: self.boards.iter().map(|(s, c)| (*s, c.submissions(), c.receipts.values().cloned().collect())).collect(),
+            boards: self.boards.iter().map(|(s, c)| (*s, c.submissions())).collect(),
             outgoing: self.outgoing.clone(),
             trade: self.trade.clone(),
             identities: self.identities.iter().map(|(l, c)| (l.clone(), c.clone())).collect(),
@@ -698,7 +717,9 @@ impl Node {
     pub fn bundle(&self) -> Bundle {
         // An honest wallet shares everything it has seen. A cheating one
         // hides its other spends of the states it double-spent.
-        let hidden = |r: &Record| r.op.consumes().iter().any(|s| self.cheat_states.contains(s));
+        // Post tokens go between a wallet, the mint and a board server, never
+        // between wallets: they would show which keys posted.
+        let hidden = |r: &Record| r.op.consumes().iter().any(|s| self.cheat_states.contains(s)) || self.post_record(r);
         let mut records: Vec<Record> = self.view.records().iter().filter(|r| !hidden(r)).cloned().collect();
         records.extend(self.outbox.iter().cloned());
         let conflicts: Vec<Record> = self.view.conflicts().iter().filter(|r| !hidden(r)).cloned().collect();
@@ -743,13 +764,21 @@ impl Node {
         b
     }
 
+    /// Whether a record makes or moves a post token.
+    pub fn post_record(&self, r: &Record) -> bool {
+        match &r.op {
+            Op::IssueBudget { schema, .. } => schema.id() == self.town.posts,
+            op => op.consumes().iter().any(|s| self.view.coin(s).is_some_and(|c| c.schema == self.town.posts)),
+        }
+    }
+
     /// Merge what a peer sent. Returns the states with new evidence.
     pub fn absorb_bundle(&mut self, b: &Bundle) -> Vec<Hash> {
         let before: BTreeSet<Hash> = self.view.evidence().map(|e| e.basename).collect();
         // Board posts don't travel between wallets; they go to their host.
         let boards: BTreeSet<Hash> = [self.town.jobs.scope, self.town.reports.scope].into_iter().collect();
         for r in b.records.iter().chain(b.conflicts.iter()) {
-            if matches!(&r.op, Op::Send { scope, .. } if boards.contains(scope)) {
+            if matches!(&r.op, Op::Send { scope, .. } if boards.contains(scope)) || self.post_record(r) {
                 continue;
             }
             let _ = self.view.apply(r);
@@ -952,7 +981,7 @@ impl Node {
     /// A contractor's reputation on the job board: distinct people per job
     /// type, and the vouches that count.
     pub fn reputation(&self, who: &Hash) -> (BTreeMap<String, usize>, Vec<board::Vouched>) {
-        self.copy(&self.town.jobs.scope).map(|c| board::reputation(c, &self.town.classes, &self.contacts, who)).unwrap_or_default()
+        self.copy(&self.town.jobs.scope).map(|c| board::reputation(c, &self.contacts, who)).unwrap_or_default()
     }
 
     /// The vouch coins this wallet holds, by state.
@@ -1053,7 +1082,7 @@ impl Node {
 
     /// Pay the accepted worker and vouch for them for `category`: the
     /// payment's second output is a zero-value vouch coin to the worker,
-    /// and the vouch is posted, endorsed, in the contractor's thread. The
+    /// and the vouch is posted, counted, in the contractor's thread. The
     /// worker must have replied as a contractor.
     /// With `as_stable`, the vouch is also signed with that stable
     /// credential, so whoever was given it knows the vouch is this wallet's.
@@ -1095,7 +1124,7 @@ impl Node {
         if let (Some((category, note, identity)), Some(who)) = (vouch, who) {
             let msg = BoardMsg::Vouch { job: job_id, category: category.into(), note: note.into(), payment: Box::new(rec) };
             let scope = self.town.jobs.scope;
-            self.compose_as(&scope, &job.poster, msg.kind(), Some(who), msg.encode(), Some(&[]), identity)?;
+            self.compose_as(&scope, &job.poster, msg.kind(), Some(who), msg.encode(), Some(crate::bulletin::purpose(&scope, "vouch", &who)), identity)?;
         }
         Ok(payment)
     }
@@ -1133,6 +1162,8 @@ impl Node {
     /// wallets get no tickets until they update and enroll again.
     pub fn roll_epoch(&mut self, groups: BTreeSet<u32>, classes: BTreeSet<String>) -> Result<u32, String> {
         let at = head(&self.view, &self.town.sequence).ok_or("no epoch")?.number + 1;
+        // Rulings revoke the ticket groups of the posts they rule on.
+        let ruled = self.boards.get(&self.town.reports.scope).map(crate::report::ruled_groups).unwrap_or_default();
         let op = self.operator.as_mut().ok_or("only the town operator rolls epochs")?;
         for c in &classes {
             if !op.access.contains_key(c) {
@@ -1140,7 +1171,7 @@ impl Node {
             }
         }
         let class_groups: Vec<u32> = op.groups.iter().filter(|(_, c)| classes.contains(*c)).map(|(g, _)| *g).collect();
-        for g in groups.into_iter().chain(class_groups) {
+        for g in groups.into_iter().chain(class_groups).chain(ruled) {
             op.revoked.entry(g).or_insert(at);
         }
         op.closed.extend(classes);

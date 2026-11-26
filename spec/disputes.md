@@ -8,7 +8,7 @@ The prototype is [`board/src/dispute.rs`](../board/src/dispute.rs), with a test 
 
 | Kind | Content | Signed by |
 |---|---|---|
-| `dispute` | Subject (a parcel, a job), a yes-or-no question, the answer the filer argues for, the counterparty if any, tier, panel size, pay per arbiter, the dispute it appeals if any, and for a paid appeal its escrow deposit | The opener: a party's credential, or a fresh one; endorsed when it names a counterparty |
+| `dispute` | Subject (a parcel, a job), a yes-or-no question, the answer the filer argues for, the counterparty if any, tier, panel size, pay per arbiter, the dispute it appeals if any, and for a paid appeal its escrow deposit | The opener: a party's credential, or a fresh one; counted for the counterparty when it names one |
 | `reply` | An offer to arbitrate, under the arbiter's trade key | The arbiter's fresh credential, which the trade key signs over |
 | `ruling` | Yes, no, or refer to a named outside authority | The panelist's offering credential |
 
@@ -61,7 +61,7 @@ A counterparty may publish terms under its trade key: from filers who have lost 
 
 ## Sides and records
 
-A dispute states the answer its filer argues for. It may name its counterparty, a contractor (a courier, a provider). Then the filer endorses it with the counterparty as basename, so the filer has one pseudonym per counterparty:
+A dispute states the answer its filer argues for. It may name its counterparty, a contractor (a courier, a provider). Then the filing is a post counted for the counterparty (see [boards.md](boards.md)), so the filer has one pseudonym per counterparty:
 
 - **A filer's record with a counterparty**: filed, won, lost, referred, judged by each dispute's own appeal chain. A provider sees that one pseudonym has filed five times against it and lost five, without learning who it is; against anyone else the same person is unrelated.
 - **The counterparty's record**: distinct people who disputed it, how many it lost to and won against. Ten disputes from one angry customer count once.

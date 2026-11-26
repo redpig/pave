@@ -12,18 +12,17 @@
 //! the worker, and its receipt commits to the job, the contractor and the
 //! job type. That output is the vouch coin. It goes to the contractor with
 //! the pay, is held like money and checks like money, offline too. The
-//! poster also posts the vouch in the contractor's thread, endorsed with
-//! the contractor as basename, so readers count distinct people per job
-//! type without learning who they are, and one person counts once however
-//! many jobs they vouch for.
+//! poster also posts the vouch in the contractor's thread as a counted
+//! post for that contractor (see [`crate::bulletin`]), so readers count
+//! distinct people per job type without learning who they are, and one
+//! person counts once however many jobs they vouch for.
 //!
 //! **Known to your contacts.** Like any post, a vouch may be signed with
 //! one of the voucher's identities (see [`crate::bulletin`]): contacts who
 //! were given it see who vouched; anyone else sees only that one unnamed
 //! person vouched for several jobs. Without one, a vouch is anonymous.
 
-use crate::bulletin::{endorser, Copy};
-use crate::node::Class;
+use crate::bulletin::{purpose, Copy};
 use pave_kernel::hash::{hash_of, Hash};
 use pave_kernel::{Credential, Op, Record, Scheme, Sig};
 use serde::{Deserialize, Serialize};
@@ -254,10 +253,10 @@ pub struct Vouched {
 /// poster, the job is paid, the worker named this contractor with its trade
 /// key, the payment record is signed and pays the worker with a vouch
 /// output whose receipt names this job, contractor and type, and the
-/// endorsement checks out. Each job counts once, and each person once per
+/// post counts its author for this contractor. Each job counts once, and each person once per
 /// type.
 /// `contacts` are the reader's: names for the stable credentials it was given.
-pub fn reputation(copy: &Copy, classes: &BTreeMap<String, Class>, contacts: &BTreeMap<String, Credential>, who: &Hash) -> (BTreeMap<String, usize>, Vec<Vouched>) {
+pub fn reputation(copy: &Copy, contacts: &BTreeMap<String, Credential>, who: &Hash) -> (BTreeMap<String, usize>, Vec<Vouched>) {
     let jobs = jobs(copy);
     let scope = copy.info.scope;
     let mut seen_jobs: BTreeSet<Hash> = BTreeSet::new();
@@ -286,7 +285,7 @@ pub fn reputation(copy: &Copy, classes: &BTreeMap<String, Class>, contacts: &BTr
         if item.signer != &j.poster || !paid || !named || !pays || !seen_jobs.insert(job) {
             continue;
         }
-        let Some((class, nym)) = endorser(classes, &scope, &item.post) else { continue };
+        let Some((class, nym)) = item.counted(&purpose(&scope, "vouch", who)) else { continue };
         people.entry(category.clone()).or_default().insert(nym);
         let by = item.by.clone();
         let known_by = by.as_ref().and_then(|c| contacts.iter().find(|(_, k)| *k == c).map(|(n, _)| n.clone()));

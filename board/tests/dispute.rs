@@ -170,7 +170,7 @@ fn disputes() {
     // The real appeal: paid upfront into escrow.
     let d1 = ana.open_dispute(Filing::new(m2.parcel, q, true, 3, 4).appeal_of(d0)).unwrap();
     // A second appeal reusing that deposit is ignored: a deposit pays once.
-    let sub = ana.outgoing.iter().find(|x| x.record.id() == d1).unwrap().clone();
+    let sub = ana.outgoing.iter().find(|x| x.name() == d1).unwrap().clone();
     let Some(pave_board::board::BoardMsg::Dispute { deposit, .. }) = pave_board::board::BoardMsg::decode(&sub.content) else { panic!() };
     let reused = ana.file(Filing::new(m2.parcel, q, true, 3, 4).appeal_of(d0), 1, deposit, None).unwrap();
     ana.sync_with(&mut town);
@@ -303,13 +303,14 @@ fn disputes() {
     ana.drop_off(&m5, "dn5bpth", photo).unwrap();
     meet(&mut ana, &mut shop);
     meet(&mut ana, &mut zoe);
-    // A wallet behind on epochs can't post: the host keeps time, so nobody
-    // backdates a drop note or a dispute.
-    stranger.sync_with(&mut town);
-    stranger.open_dispute(Filing::new(m5.parcel, q, false, 1, 0)).unwrap();
-    assert!(stranger.sync_with(&mut town).refused[0].contains("epoch"));
-    hear(&town, &mut stranger);
+    // A wallet behind on epochs posts at the board's epoch: the board
+    // proposes the epoch and clock a post commits to, so nobody backdates a
+    // drop note or a dispute.
+    assert!(stranger.epoch() < town.epoch());
     let ds5 = stranger.open_dispute(Filing::new(m5.parcel, q, false, 1, 0)).unwrap();
+    stranger.sync_with(&mut town);
+    assert_eq!(town.disputes().0[&ds5].epoch, town.epoch());
+    hear(&town, &mut stranger);
     zoe.open_dispute(Filing::new(m5.parcel, q, false, 1, 0).against(ana_id).party(m5.addressee.clone())).unwrap();
     sync(&mut town, &mut [&mut shop, &mut ana, &mut zoe, &mut stranger]);
     assert_eq!(shop.delivery(&m5), Delivery::Disputed, "zoe's dispute holds while it may be staffed");

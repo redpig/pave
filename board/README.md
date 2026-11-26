@@ -20,8 +20,9 @@ The same node runs the [civic reports profile](../spec/reports.md): public repor
 - **Sealed state and the signing log.** A wallet's state file is encrypted and authenticated, and every save seals it under a fresh key and retires the old one. Every signature first goes into the wallet's signing log, saved before the signature leaves, so the wallet never signs one coin state twice, even after a crash. On a rollback-resistant keystore an old copy of the state won't open at all. The keystore here is a file beside the state, which only detects a restore through evidence; see [docs/phone-keys.md](../docs/phone-keys.md).
 - **Revocation.** Evidence names one credential, and standing stops the cheat under all the others. A town can also revoke ticket groups, or close a whole class after a class break: every group it ever gave that class is revoked, and its wallets get no tickets until they update and enroll again. Revocation is cumulative.
 
-- **A job** is a message to the board scope. Its post carries a proof of means: a zero-value split of the poster's coin that commits to the terms.
-- **Replies, accepting and marking done** are messages too. Only the poster can accept or mark a job paid, and only the accepted worker can mark it done; anything else is ignored.
+- **Posting spends a post token.** A board is a clerk: the town's board mint answers anonymous token requests the way the clerk answers refills, tickets each key the wallet wants to post as and mints it a token. A post is that token's transfer to the board server, committing to the content hash, a prior post and the epoch and clock the server proposed; the server takes it by retiring the token. Ordinary wallets don't accept post tokens and board servers do, so one mint can serve many boards and servers. See [spec/boards.md](../spec/boards.md).
+- **A job** is a post on the job board. It carries a proof of means: a zero-value split of the poster's coin that commits to the terms.
+- **Replies, accepting and marking done** are posts too. Only the poster can accept or mark a job paid, and only the accepted worker can mark it done; anything else is ignored.
 - **Payment** is an ordinary transfer whose receipt commits to the job.
 
 Test credit only; it has no cash value.

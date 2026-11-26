@@ -276,23 +276,25 @@ Specified as a holder-created capability (spec C9), not yet built
 
 `board/src/bulletin.rs`, `board/src/board.rs`; [spec/boards.md](../spec/boards.md)
 
-**Attack surface:** the host that takes posts and serves them; copies that serve readers; post records and their content; endorsements, identities and receipts; on the job board, posts, replies, accept, done and paid messages, proof of means and payment receipts.
+**Attack surface:** the board mint and the token requests it answers; the server that takes posts and serves them; copies that serve readers; post records and their content; tags, identities and retires; on the job board, posts, replies, accept, done and paid messages, proof of means and payment receipts.
 
 | # | Attack | Prevent | React | Briolette | Status |
 |---|---|---|---|---|---|
 | H1 | The host alters a post's content | The record binds the content by hash; readers check it | n/a | n/a | Built (mutation `nocontenthash`) |
-| H2 | The host or a copy invents posts | Posts are signed records; readers take a post only with the host's receipt for exactly that post | n/a | n/a | Built (mutations `copynoreceipt`, `copyanyreceipt`) |
-| H3 | The host drops posts it took, or censors selectively | Every post gets a signed receipt; a receipt stands for one post only | The author shows the receipt; several hosts for one board | n/a | Built (mutations `noreceiptsig`, `receiptanypost`); Gap: several hosts |
+| H2 | The server or a copy invents posts | A post is a token from the board mint, transferred to the server and retired by it; readers check all three records | n/a | n/a | Built (mutations `copy_receipt`, `retire_state`, `copy_mint`) |
+| H3 | The server drops posts it took, or censors selectively | The server takes a post by retiring its token, a kernel record naming exactly that token | The author shows the retire; several servers for one board | n/a | Built (mutation `retire_state`); Gap: several servers |
 | H4 | The host refuses posts up front | n/a | Post to another host of the board; the refusal is visible to the author | n/a | Gap: several hosts |
-| H5 | The host links a post to the connection it arrived on | The post carries a fresh key and, if endorsed, a per-thread pseudonym and a class, nothing else | Send through an anonymity network the author already uses (Tor, Oblivious HTTP) | n/a | Accepted: like any website |
-| H6 | Board posts ride along in wallet meets, so peers learn who carried what | Wallets drop board posts from bundles; posts go to the host | n/a | n/a | Built (mutation `carryposts`) |
-| H7 | A forged endorsement inflates a count | The host and every reader check endorsements against the classes' issuers | n/a | n/a | Built (mutation `noendorsecheck`) |
+| H5 | The server links a post to the connection it arrived on | The post carries a fresh key and, if counted, a per-purpose pseudonym and a class, nothing else | Send through an anonymity network the author already uses (Tor, Oblivious HTTP) | n/a | Accepted: like any website |
+| H6 | Posts or post tokens ride along in wallet meets, so peers learn which keys posted | Bundles leave out every record that makes or moves a post token, and wallets drop them from bundles they get; posts go to the server | n/a | n/a | Built (mutation `bundle_filter`) |
+| H7 | A forged tag inflates a count | The mint tags a ticket only after checking the access credential's signature with the purpose as basename; a post counts only for the purpose its ticket is tagged with | n/a | n/a | Built (mutations `tag_sig`, `report_purpose`, `vouch_purpose`) |
+| H8 | A post backdated or a token used twice | The binding commits to the server's proposed epoch and clock, checked on arrival; a token's second use is a conflict at any server | Evidence names the poster | n/a | Built (mutations `clock`, `epoch`) |
+| H9 | Tokens from another issuer, or tokens a ruled or revoked author still holds | Servers and readers take tokens only from the board mint's budgets; servers run the ordinary acceptance check, which refuses revoked groups | Rulings revoke the ruled post's group at the next roll | n/a | Built (mutations `host_mint`, `copy_mint`, `accept_check`, `ruled_groups`) |
 | H8 | A post is backdated to open or close a window early | The host takes a post only in its current epoch or the one before, and receipts carry that to every copy | n/a | n/a | Built (mutation `backdate`) |
 | H9 | Someone signs a post as another person's identity | An identity's signature covers the post's binding; holding someone's identity doesn't let you sign with it | n/a | n/a | Built (mutations `byunchecked`, `bynotbound`) |
 | B1 | Post a job without the pay to back it | Proof of means: a zero-value split of the poster's coin that commits to the terms | The proof is evidence if the coin is spent elsewhere first | n/a | Built |
 | B2 | Accept or mark paid on someone else's job | Only the poster's key can accept or mark paid; only the accepted worker's key can mark done | Ignored | n/a | Built (mutation `anyaccept`) |
 | B3 | A false "done", or a poster who doesn't pay | n/a | A dispute about the job, posted as a job (section 18) | n/a | Partial: disputes take any subject; nothing yet ties a job's payment to a ruling |
-| B4 | Spam posts | Posting costs something or needs a capability (principle 17); the host can require endorsements and limit posts per pseudonym | n/a | n/a | Gap |
+| B4 | Spam posts | Every post spends a token from the mint, which gives an access pseudonym at most 32 requests of 16 tokens per epoch | Rule the author out; revoke its group | n/a | Partial (mutation `token_rate`); Gap: per-class budgets, and Sybils get their own budgets (R1) |
 | B5 | Sybil reputation | A vouch rides on a real payment from the job's poster, and counts each enrolled person once per job type; only the poster can vouch, and only for a worker who named the contractor with its trade key | Rulings against false vouches | n/a | Built (mutations `vouchanyone`, `vouchanytype`, `notradesig`, `vouchperjob`, `vouchunnamed`); Gap: rulings. Self-dealing still costs a second enrollment, not money: the pay goes back to oneself |
 | B6 | Link a worker across jobs | A fresh credential per role | n/a | n/a | Built |
 | B7 | Claim a payment that doesn't match the job | The payment receipt commits to the job | n/a | n/a | Built |
@@ -346,18 +348,18 @@ Where pave can do better once this is built:
 
 `board/src/report.rs`; [spec/boards.md](../spec/boards.md)
 
-**Attack surface:** reports, clearings, replies and forwards on a public board; endorsements and their pseudonyms; the mirror's permits; the moderator's rulings; the reporter's device. The board host is covered in section 12. Briolette has no counterpart, so its column is omitted.
+**Attack surface:** reports, clearings, replies and forwards on a public board; tags and their pseudonyms; the mirror's permits; the moderator's rulings; the reporter's device. The board host is covered in section 12. Briolette has no counterpart, so its column is omitted.
 
 | # | Attack | Prevent | React | Status |
 |---|---|---|---|---|
-| RP1 | Retaliation: the subject of a report finds out who filed it | Reports are signed by a fresh credential and endorsed by a fresh randomization of the access credential; the pseudonym is per issue and unrelated across issues; only a 150 m cell and a day are public | n/a | Built |
-| RP2 | Timing gives the reporter away ("posted at 8:02 from that corner") | The post shows only the epoch, never a time; a report made offline goes out at the next sync | n/a | Built; the host sees when it arrives (H5) |
+| RP1 | Retaliation: the subject of a report finds out who filed it | Reports are signed by a fresh credential whose ticket's tag is a per-issue pseudonym of the access credential, unrelated across issues; only a 150 m cell and a day are public | n/a | Built |
+| RP2 | Timing gives the reporter away ("posted at 8:02 from that corner") | A post shows the server's epoch and clock when it arrived, which is when the wallet synced, not when the reporter saw anything; a report made offline goes out at the next sync | n/a | Partial: the clock is the arrival time the server already knew (H5); Gap: a coarser clock for reports |
 | RP3 | The host learns which connection a report came from | As H5: the post carries nothing that names the reporter | Send through an anonymity network the reporter already uses | Accepted: like any website |
 | RP4 | A photo identifies the reporter, bystanders or number plates | Photos are committed by a salted hash and revealed only to a verifier; strip metadata, blur faces and plates on the device | n/a | Partial: commitment built; Gap: reveal, stripping, blurring |
 | RP5 | Brigading: one person files many reports, or many reports from many credentials | One pseudonym per person per issue, whatever credential they use; reporters must be enrolled members, so Sybils cost an enrollment each | Counts by wallet class show a skew toward low-assurance wallets | Built (mutation `nodedupe`) |
-| RP6 | A false or malicious report about a business or a rival crew | The report states only what was seen; the permit check comes from the city's data, and a valid permit settles it; the subject can reply in the thread | A ruling discounts the report and lists its pseudonym; the reporter's later reports need standing against it, which only they can't produce | Built (mutations `ignoreruling`, `nostanding`) |
-| RP7 | A ruled reporter starts a fresh issue to get around the ruling | Standing is against every ruling, on every issue | n/a | Built |
-| RP8 | A ruled reporter's wallet doesn't learn of the ruling, and keeps posting | A report counts only if its standing covers every ruling made before the report's epoch | n/a | Built |
+| RP6 | A false or malicious report about a business or a rival crew | The report states only what was seen; the permit check comes from the city's data, and a valid permit settles it; the subject can reply in the thread | A ruling discounts the report and puts its tag on the board mint's list; the reporter's later token requests need standing against it, which only they can't produce | Built (mutations `ruled_standing`, `report_purpose`) |
+| RP7 | A ruled reporter starts a fresh issue to get around the ruling | The mint's list stops token requests for any purpose, on any board | n/a | Built |
+| RP8 | A ruled reporter keeps posting with tokens it already holds | The ruled post's ticket group is revoked at the next roll, and servers refuse revoked tokens | n/a | Built (mutation `ruled_groups`); tokens from the same request work until the roll |
 | RP9 | The moderator silences critics by ruling honest reports malicious | Rulings are public and name the report; a panel rather than one moderator; appeals | Rulings are evidence against the moderator; a recipient can choose not to honor a moderator | Partial: rulings public; Gap: panels and appeals |
 | RP10 | A forged permit or ruling, posted by someone other than the role | Only the mirror's permits and the moderator's rulings count | n/a | Built (test: forged permit and ruling ignored) |
 | RP11 | The mirror invents permits, or leaves real ones out so honest work looks unpermitted | Anyone can check a mirrored permit against the city's data; several independent mirrors | A false or missing permit is evidence against the mirror | Partial: one mirror; Gap: comparing mirrors |
@@ -365,7 +367,7 @@ Where pave can do better once this is built:
 | RP13 | The subject's allies mark an issue cleared while it isn't | Clearings count each person once, like reports; the thread shows both counts | n/a | Built |
 | RP14 | A reporter claims a place or day they weren't at | Not preventable; independent corroboration by distinct people is what carries weight | A verifier's visit, as a paid job | Accepted |
 | RP15 | Paying for reports creates false ones | Pay for checking and forwarding, never for reporting | n/a | Design rule |
-| RP16 | Spam on the board | Endorsed posts come from enrolled members; per-issue counting caps what one person adds; rate limits | n/a | Partial |
+| RP16 | Spam on the board | Every post spends a token from the mint, rate-limited per access pseudonym; per-issue counting caps what one person adds | n/a | Partial (B4) |
 | RP17 | One person counts twice by filing a report under another thread | A report counts only under its own issue's thread | n/a | Built (mutation `anythread`) |
 
 ---
@@ -386,7 +388,7 @@ Where pave can do better once this is built:
 | PC6 | A courier keeps the parcel | The custody chain shows who holds it; a courier taking under its co-op identity is named to dispatch | The co-op acts on its member | Built (mutation `anytook`): opt-in per courier; a co-op can require it |
 | PC11 | A shipper or provider pays a courier twice, or both pay | With a provider, only the provider pays couriers; payments name the parcel and courier; the shipper's own handoff is never paid | n/a | Built (mutations `shipperpayscouriers`, `payshipper`, `providertwice`) |
 | PC7 | The addressee takes the parcel but won't retire it, or isn't there | Code and drop delivery modes; a party's dispute | A panel rules on it | Built (mutations `anycode`, `nowindow`) |
-| PC9 | A courier backdates a drop note to settle its window at once | As H8: the host keeps time, and readers take a post from any copy only with the host's receipt | n/a | Built (mutations `backdate`, `copynoreceipt`) |
+| PC9 | A courier backdates a drop note to settle its window at once | As H8: the binding commits to the server's epoch and clock, and readers take a post from any copy only with the server's retire | n/a | Built (mutations `epoch`, `retire_state`) |
 | PC10 | A stranger disputes deliveries to hold them | Only a party's disputes, and their appeals, count for a parcel | n/a | Built (mutation `anyonedisputes`) |
 | PC8 | A shipper ships more than it was allowed | Parcels are minted from a budget the town issued | Budgets are capabilities (M1, M3) | Built |
 

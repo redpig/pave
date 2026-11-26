@@ -10,13 +10,14 @@
 //!   a day. Everyone who reports the same thing reports the same issue, and
 //!   the issue is the thread.
 //! - **One person, one report per issue, unlinkably.** Reports and
-//!   clearings are endorsed posts, so ten neighbors count as ten and one
-//!   person counts once, and nobody learns who they are. The endorsement's
-//!   issuer shows which class of wallet reported, nothing more.
-//! - **Rulings without unmasking.** A report ruled malicious puts its
-//!   (basename, pseudonym) on a public list. Later endorsements carry
-//!   standing against every ruling made before their epoch: the ruled
-//!   reporter can't produce it, and nobody else is affected or identified.
+//!   clearings are counted posts: their tokens' tickets carry a tag for the
+//!   issue (see [`crate::bulletin`]), so ten neighbors count as ten and one
+//!   person counts once, and nobody learns who they are. The tag shows
+//!   which class of wallet reported, nothing more.
+//! - **Rulings without unmasking.** A report ruled malicious puts its tag on
+//!   the board mint's list, so its reporter can't get post tokens again (it
+//!   can't show standing against the tag), and revokes its ticket group at
+//!   the next roll. Nobody else is affected or identified.
 //! - **Facts, not verdicts.** A report states what was seen, where (a cell
 //!   about 150 m across) and on what day, and commits to a photo by a salted
 //!   hash its reporter can reveal to whoever checks it. Whether a permit
@@ -26,8 +27,8 @@
 //!   a post to any website would. The host sees the connection; the post
 //!   shows only what's in it.
 
-use crate::bulletin::{endorse_basename, endorser, Cheat, Copy};
-use crate::node::{Class, Node};
+use crate::bulletin::{purpose, Cheat, Copy};
+use crate::node::Node;
 use pave_kernel::hash::{hash_of, Hash};
 use pave_kernel::Scheme;
 use serde::{Deserialize, Serialize};
@@ -80,9 +81,9 @@ impl IssueKey {
 /// The content of a post on a reports board.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReportMsg {
-    /// A report of an issue (endorsed). The first one opens it.
+    /// A report of an issue (counted). The first one opens it.
     Report { key: IssueKey, observed: String, note: String, photo: Option<Hash> },
-    /// Someone confirms the issue is cleared (endorsed).
+    /// Someone confirms the issue is cleared (counted).
     Cleared,
     /// A reply, such as from whoever the issue is about, optionally pointing
     /// to a mirrored permit.
@@ -173,41 +174,37 @@ fn messages(copy: &Copy) -> Vec<Msg<'_>> {
         .collect()
 }
 
-/// Every report the moderator ruled malicious: its (basename, pseudonym)
-/// and the epoch of the ruling.
-fn ruled_at(copy: &Copy, classes: &BTreeMap<String, Class>) -> (BTreeSet<Hash>, Vec<(Cheat, u32)>) {
-    let msgs = messages(copy);
+/// Every report the moderator ruled malicious.
+fn ruled_reports(copy: &Copy) -> BTreeSet<Hash> {
     let moderator = copy.info.role("moderator");
-    let mut ruled: BTreeMap<Hash, u32> = BTreeMap::new();
-    for m in &msgs {
-        if let ReportMsg::Ruling { report, malicious: true } = &m.msg {
-            if Some(m.item.signer) == moderator {
-                ruled.entry(*report).or_insert(m.item.post.epoch);
-            }
-        }
-    }
-    let mut list = vec![];
-    for m in &msgs {
-        if let (ReportMsg::Report { key, .. }, Some(at)) = (&m.msg, ruled.get(&m.item.id)) {
-            if let Some((_, nym)) = endorser(classes, &copy.info.scope, &m.item.post) {
-                list.push(((endorse_basename(&copy.info.scope, "report", &key.id()), nym), *at));
-            }
-        }
-    }
-    (ruled.into_keys().collect(), list)
+    messages(copy).iter().filter(|m| Some(m.item.signer) == moderator).filter_map(|m| match m.msg {
+        ReportMsg::Ruling { report, malicious: true } => Some(report),
+        _ => None,
+    }).collect()
 }
 
-/// The ruled list a reporter must have standing against.
-pub fn ruled(copy: &Copy, classes: &BTreeMap<String, Class>) -> Vec<Cheat> {
-    ruled_at(copy, classes).1.into_iter().map(|(c, _)| c).collect()
+/// The board mint's ruled list from this board: the tag of every report
+/// ruled malicious. A token request needs standing against all of them.
+pub fn ruled(copy: &Copy) -> Vec<Cheat> {
+    let ruled = ruled_reports(copy);
+    copy.items().iter().filter(|i| i.post.kind == "report" && ruled.contains(&i.id)).filter_map(|i| i.cheat()).collect()
+}
+
+/// The ticket groups of reports ruled malicious, revoked at the next roll.
+pub fn ruled_groups(copy: &Copy) -> Vec<u32> {
+    ruled_reports(copy).iter().filter_map(|r| copy.group(r)).collect()
+}
+
+/// What a report or clearing on `issue` counts for.
+pub fn counts_for(copy: &Copy, kind: &str, issue: &Hash) -> Hash {
+    purpose(&copy.info.scope, kind, issue)
 }
 
 /// The reports board as a copy has it.
-pub fn issues(copy: &Copy, classes: &BTreeMap<String, Class>) -> BTreeMap<Hash, Issue> {
-    let scope = copy.info.scope;
+pub fn issues(copy: &Copy) -> BTreeMap<Hash, Issue> {
     let mirror = copy.info.role("mirror");
     let msgs = messages(copy);
-    let (ruled, ruled_list) = ruled_at(copy, classes);
+    let ruled = ruled_reports(copy);
     let mut permits: BTreeMap<Hash, (String, String, String)> = BTreeMap::new();
     for m in &msgs {
         if let ReportMsg::Permit { cell, start, end, .. } = &m.msg {
@@ -220,13 +217,11 @@ pub fn issues(copy: &Copy, classes: &BTreeMap<String, Class>) -> BTreeMap<Hash, 
     let mut nyms: BTreeMap<Hash, BTreeSet<Vec<u8>>> = BTreeMap::new();
     let mut clearers: BTreeMap<Hash, BTreeSet<Vec<u8>>> = BTreeMap::new();
     for m in &msgs {
-        let post = &m.item.post;
         match &m.msg {
             ReportMsg::Report { key, observed, note, photo } => {
                 let issue = key.id();
                 let entry = out.entry(issue).or_insert_with(|| Issue { id: issue, key: key.clone(), reporters: 0, classes: BTreeMap::new(), notes: vec![], photos: 0, permit: permit_status(&permits, key, observed), replies: vec![], forwarded: vec![], cleared: 0, discounted: 0, identified: BTreeSet::new(), known_by: vec![] });
-                let standing_ok = |s: &pave_protocol::Standing| ruled_list.iter().filter(|(_, at)| *at < post.epoch).all(|(c, _)| s.cheats.contains(c));
-                let counted = endorser(classes, &scope, post).filter(|_| !ruled.contains(&m.item.id)).filter(|_| post.endorsement.as_ref().is_some_and(|e| standing_ok(&e.standing)));
+                let counted = m.item.counted(&counts_for(copy, "report", &issue)).filter(|_| !ruled.contains(&m.item.id));
                 match counted {
                     Some((class, nym)) => {
                         if nyms.entry(issue).or_default().insert(nym) {
@@ -244,7 +239,7 @@ pub fn issues(copy: &Copy, classes: &BTreeMap<String, Class>) -> BTreeMap<Hash, 
                 }
             }
             ReportMsg::Cleared => {
-                if let Some((_, nym)) = endorser(classes, &scope, post) {
+                if let Some((_, nym)) = m.item.counted(&counts_for(copy, "cleared", &m.item.thread())) {
                     clearers.entry(m.item.thread()).or_default().insert(nym);
                 }
             }
@@ -319,20 +314,24 @@ impl Node {
 
     /// The reports board, with the reader's contacts named on each issue.
     pub fn issues(&self) -> BTreeMap<Hash, Issue> {
-        let mut out = self.reports().map(|c| issues(c, &self.town.classes)).unwrap_or_default();
+        let mut out = self.reports().map(issues).unwrap_or_default();
         for i in out.values_mut() {
             i.known_by = self.contacts.iter().filter(|(_, c)| i.identified.contains(*c)).map(|(n, _)| n.clone()).collect();
         }
         out
     }
 
-    /// Post to the reports board under a fresh, unticketed credential,
-    /// endorsed when it counts a person, and signed with `identity` if given.
-    fn post_report(&mut self, thread: Option<Hash>, msg: ReportMsg, endorse: bool, identity: Option<&str>) -> Result<Hash, String> {
+    /// Post to the reports board under a fresh credential, counted once per
+    /// person on its issue when `count`, and signed with `identity` if given.
+    fn post_report(&mut self, thread: Option<Hash>, msg: ReportMsg, count: bool, identity: Option<&str>) -> Result<Hash, String> {
         let signer = self.view.scheme().credential(&self.key);
-        let list = if endorse { Some(ruled(self.reports()?, &self.town.classes)) } else { None };
         let scope = self.town.reports.scope;
-        self.compose_as(&scope, &signer, msg.kind(), thread, msg.encode(), list.as_deref(), identity)
+        let count = match (count, thread) {
+            (true, Some(t)) => Some(purpose(&scope, msg.kind(), &t)),
+            (true, None) => return Err("a counted report needs its issue".into()),
+            _ => None,
+        };
+        self.compose_as(&scope, &signer, msg.kind(), thread, msg.encode(), count, identity)
     }
 
     /// Report an issue, or add this wallet's report to one already open.

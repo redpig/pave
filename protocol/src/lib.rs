@@ -13,4 +13,4 @@ pub mod tickets;
 pub use accept::{check, cheat_list, Knowledge, Policy, Refusal, Standing};
 pub use epochs::{epoch_schema, head, roll, EpochData, Head};
 pub use gossip::{Hint, Proof, Want};
-pub use tickets::{SignedTicket, Ticket};
+pub use tickets::{SignedTicket, Tag, Ticket};

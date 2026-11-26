@@ -3,6 +3,7 @@
 //! the contractor's thread and counts each person once per job type.
 
 use pave_board::board::{contractor, vouch_receipt, BoardMsg, Status};
+use pave_board::bulletin::{purpose, Draft, Submission};
 use pave_board::node::{Node, PendingJoin};
 use pave_kernel::{Hash, Op, Record};
 
@@ -13,6 +14,13 @@ fn join(town: &mut Node, name: &str, dir: &std::path::Path, credits: &[u64]) -> 
     let t = town.answer_refill(&n.refill_request(&town.refill_terms().unwrap(), 16).unwrap()).unwrap();
     n.take_tickets(t);
     n
+}
+
+/// Get a token for a draft's key from the town and sign it now.
+fn signed_now(n: &mut Node, town: &mut Node, d: &Draft) -> Submission {
+    let req = n.token_request(&town.token_terms().unwrap(), std::slice::from_ref(&d.signer), d.count).unwrap();
+    n.take_grant(town.answer_tokens(&req).unwrap()).unwrap();
+    n.sign_post(d, &town.board_clock(&d.board).unwrap()).unwrap()
 }
 
 fn meet(a: &mut Node, b: &mut Node) {
@@ -65,7 +73,8 @@ fn vouches() {
     let payment = bob.view.records().iter().find(|r| matches!(&r.op, Op::Split { receipt, .. } if *receipt == vouch_receipt(&job, &who, "fencing"))).unwrap().clone();
     let selfie = BoardMsg::Vouch { job, category: "fencing".into(), note: "I'm great".into(), payment: Box::new(payment) };
     let bk = bob.receive().unwrap();
-    bob.compose(&bob.town.jobs.scope.clone(), &bk, selfie.kind(), Some(who), selfie.encode(), Some(&[])).unwrap();
+    let js = bob.town.jobs.scope;
+    bob.compose(&js, &bk, selfie.kind(), Some(who), selfie.encode(), Some(purpose(&js, "vouch", &who))).unwrap();
     bob.sync_with(&mut town);
     alice.sync_with(&mut town);
     bob.sync_with(&mut town);
@@ -111,16 +120,17 @@ fn vouches() {
     carol.add_contact("alice", neighbors.clone()).unwrap();
     let job8 = job_done(&mut town, &mut carol, &mut bob, "Gate latch", true);
     carol.pay_and_vouch(job8, "fencing", "", Some("close")).unwrap();
-    let q = carol.outgoing.iter().find(|s| s.post().unwrap().kind == "vouch").unwrap().clone();
-    carol.refused(&q).unwrap();
+    let q = carol.outgoing.iter().find(|d| d.kind == "vouch").unwrap().clone();
+    carol.refused(&q.name()).unwrap();
     let alice_poster = dave.jobs()[&job].poster.clone();
     let alices = dave.copy(&dave.town.jobs.scope).unwrap().items().into_iter().find(|i| *i.signer == alice_poster && i.post.kind == "vouch").unwrap().post.by.clone().unwrap();
     assert_eq!(alices.key, neighbors);
-    let mut post = q.post().unwrap();
+    let sub = signed_now(&mut carol, &mut town, &q);
+    let mut post = sub.post.clone();
     post.by = Some(alices);
-    let Op::Send { scope, presenting, receipt, .. } = q.record.op.clone() else { panic!() };
-    let record = pave_kernel::sign(carol.view.scheme(), &carol.key, &q.record.signer, Op::Send { scope, presenting, body: post.encode(), receipt });
-    carol.outgoing.push(pave_board::bulletin::Submission { record, content: q.content.clone(), taken: None });
+    let Op::Transfer { state, to, .. } = sub.record.op.clone() else { panic!() };
+    let record = pave_kernel::sign(carol.view.scheme(), &carol.key, &sub.record.signer, Op::Transfer { state, to, receipt: post.receipt() });
+    town.host_post(&Submission { record, post, ..sub }).unwrap();
     carol.sync_with(&mut town);
     dave.sync_with(&mut town);
     let (_, dv) = dave.reputation(&who);
@@ -144,7 +154,8 @@ fn vouches() {
     let rec: Record = carol.view.records().iter().find(|r| matches!(&r.op, Op::Split { parts, .. } if parts.len() >= 2 && parts[1].0 == 0 && parts[0].0 == 10)).unwrap().clone();
     let fake = BoardMsg::Vouch { job: job3, category: "plumbing".into(), note: "fake".into(), payment: Box::new(rec.clone()) };
     let mk = mallory.receive().unwrap();
-    mallory.compose(&mallory.town.jobs.scope.clone(), &mk, fake.kind(), Some(who), fake.encode(), Some(&[])).unwrap();
+    let js = mallory.town.jobs.scope;
+    mallory.compose(&js, &mk, fake.kind(), Some(who), fake.encode(), Some(purpose(&js, "vouch", &who))).unwrap();
     // - or replaying a real payment under another job type, with the poster's key she doesn't have;
     // - or naming Bob's contractor id in her own reply without his trade key.
     let job5 = mallory.post("Help", 10).unwrap();
@@ -163,17 +174,30 @@ fn vouches() {
     let (counts, vouches) = bob.reputation(&who);
     assert_eq!((counts.get("fencing"), counts.get("plumbing"), vouches.len()), (Some(&2), None, 4));
 
+    // A vouch counted for another purpose doesn't count: Carol's tag would
+    // otherwise let her count once per contractor she names.
+    let job9 = job_done(&mut town, &mut carol, &mut bob, "Fence stain", true);
+    carol.pay_and_vouch(job9, "fencing", "", None).unwrap();
+    let q = carol.outgoing.iter().find(|d| d.kind == "vouch").unwrap().clone();
+    carol.refused(&q.name()).unwrap();
+    let js = carol.town.jobs.scope;
+    carol.compose(&js, &q.signer, &q.kind, q.thread, q.content.clone(), Some(purpose(&js, "vouch", &Hash([9; 32])))).unwrap();
+    carol.sync_with(&mut town);
+    bob.sync_with(&mut town);
+    assert!(bob.reputation(&who).1.iter().all(|v| v.job != job9));
+
     // A vouch's payment must commit to its job type: relabeling fails.
     // Carol pays for a new job with a fencing vouch, then swaps her queued
     // vouch for one saying roofing. The payment commits to fencing.
     let job6 = job_done(&mut town, &mut carol, &mut bob, "Fence repair", true);
     carol.pay_and_vouch(job6, "fencing", "", None).unwrap();
-    let queued = carol.outgoing.iter().find(|s| s.post().unwrap().kind == "vouch").unwrap().clone();
-    carol.refused(&queued).unwrap();
+    let queued = carol.outgoing.iter().find(|d| d.kind == "vouch").unwrap().clone();
+    carol.refused(&queued.name()).unwrap();
     let Some(BoardMsg::Vouch { payment, .. }) = BoardMsg::decode(&queued.content) else { panic!() };
     let relabeled = BoardMsg::Vouch { job: job6, category: "roofing".into(), note: "".into(), payment };
     let poster = carol.jobs()[&job6].poster.clone();
-    carol.compose(&carol.town.jobs.scope.clone(), &poster, relabeled.kind(), Some(who), relabeled.encode(), Some(&[])).unwrap();
+    let js = carol.town.jobs.scope;
+    carol.compose(&js, &poster, relabeled.kind(), Some(who), relabeled.encode(), Some(purpose(&js, "vouch", &who))).unwrap();
     carol.sync_with(&mut town);
     bob.sync_with(&mut town);
     assert_eq!(bob.reputation(&who).0.get("roofing"), None);
@@ -191,7 +215,7 @@ fn vouches() {
     let paid = BoardMsg::Paid { job: job7, payment: rec.output(0) };
     carol.compose(&scope, &j.poster, paid.kind(), Some(job7), paid.encode(), None).unwrap();
     let v = BoardMsg::Vouch { job: job7, category: "fencing".into(), note: "".into(), payment: Box::new(rec) };
-    carol.compose(&scope, &j.poster, v.kind(), Some(who), v.encode(), Some(&[])).unwrap();
+    carol.compose(&scope, &j.poster, v.kind(), Some(who), v.encode(), Some(purpose(&scope, "vouch", &who))).unwrap();
     carol.sync_with(&mut town);
     bob.sync_with(&mut town);
     assert_eq!(bob.jobs()[&job7].status, Status::Paid);

@@ -21,6 +21,22 @@ pub struct Ticket {
     pub group: u32,
     /// Optional most this ticket may receive in one transfer.
     pub max_spend: Option<u64>,
+    /// Optional: the holder's pseudonym for one purpose, which the clerk
+    /// checked when it issued the ticket. The same person gets the same tag
+    /// for the same purpose and unrelated tags for others, so readers can
+    /// count people per purpose without learning who they are.
+    #[serde(default)]
+    pub tag: Option<Tag>,
+}
+
+/// A pseudonym for one purpose: the nym of the holder's access credential
+/// signed with that purpose's basename, and the class it showed.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct Tag {
+    pub purpose: Hash,
+    #[serde(with = "serde_bytes")]
+    pub nym: Vec<u8>,
+    pub class: String,
 }
 
 impl Ticket {

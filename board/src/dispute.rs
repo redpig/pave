@@ -23,8 +23,8 @@
 //!   paid panels. A dispute's eligibility counts only disputes opened
 //!   before it, so nothing about a dispute shapes its own panel.
 //! - **Sides and records.** A dispute says what its filer claims (yes or
-//!   no) and may name its counterparty, a contractor. Then the filer
-//!   endorses it with the counterparty as basename: one pseudonym per
+//!   no) and may name its counterparty, a contractor. Then the filing is a
+//!   counted post for the counterparty (see [`crate::bulletin`]): one pseudonym per
 //!   person per counterparty, so a provider sees each filer's record with
 //!   it ("filed 5, lost 5") without learning who they are, and the
 //!   counterparty's own record counts distinct people.
@@ -45,8 +45,8 @@
 //!   computed, not enforced. See the example in spec/disputes.md.
 
 use crate::board::{contractor, trade_bytes, BoardMsg};
-use crate::bulletin::{endorser, Copy};
-use crate::node::{apply_ok, Class, Node};
+use crate::bulletin::{purpose, Copy};
+use crate::node::{apply_ok, Node};
 use pave_kernel::hash::{hash_of, Hash};
 use pave_kernel::{Credential, Op, Record, Scheme};
 use serde::{Deserialize, Serialize};
@@ -126,8 +126,8 @@ pub struct Filing {
     pub question: String,
     /// The answer the filer argues for.
     pub claim: bool,
-    /// The counterparty, a contractor, if any: the filer then endorses the
-    /// dispute, and both sides' records count it.
+    /// The counterparty, a contractor, if any: the filing is then counted
+    /// for it, and both sides' records count it.
     pub against: Option<Hash>,
     pub panel: u32,
     pub pay_each: u64,
@@ -170,7 +170,7 @@ pub struct Dispute {
     pub epoch: u32,
     pub claim: bool,
     pub against: Option<Hash>,
-    /// The filer's pseudonym with the counterparty, if it endorsed.
+    /// The filer's pseudonym with the counterparty, if the filing was counted.
     pub filer: Option<Vec<u8>>,
     /// The escrow deposit's state: an appeal's, or a funded first round's.
     pub deposit: Option<Hash>,
@@ -232,7 +232,7 @@ fn deposit_ok(s: &crate::node::S, rec: &Record, escrow: &Credential, amount: u64
 
 /// Every dispute on the job board as a copy has it at epoch `now`, and
 /// each arbiter's score.
-pub fn disputes(copy: &Copy, classes: &BTreeMap<String, Class>, now: u32) -> (BTreeMap<Hash, Dispute>, BTreeMap<Hash, i64>) {
+pub fn disputes(copy: &Copy, now: u32) -> (BTreeMap<Hash, Dispute>, BTreeMap<Hash, i64>) {
     let s = copy.scheme();
     let escrow = copy.info.role("escrow").cloned();
     let mut used_deposits: BTreeSet<Hash> = BTreeSet::new();
@@ -255,7 +255,7 @@ pub fn disputes(copy: &Copy, classes: &BTreeMap<String, Class>, now: u32) -> (BT
                 // Naming a counterparty means endorsing: one pseudonym per
                 // person per counterparty.
                 let filer = match against {
-                    Some(_) => match endorser(classes, &copy.info.scope, &item.post) {
+                    Some(c) => match item.counted(&purpose(&copy.info.scope, "dispute", &c)) {
                         Some((_, nym)) => Some(nym),
                         None => continue,
                     },
@@ -547,7 +547,7 @@ fn score(out: &BTreeMap<Hash, Dispute>, order: &[Hash]) -> BTreeMap<Hash, i64> {
 impl Node {
     /// The job board's disputes now, and each arbiter's score.
     pub fn disputes(&self) -> (BTreeMap<Hash, Dispute>, BTreeMap<Hash, i64>) {
-        self.copy(&self.town.jobs.scope).map(|c| disputes(c, &self.town.classes, self.epoch())).unwrap_or_default()
+        self.copy(&self.town.jobs.scope).map(|c| disputes(c, self.epoch())).unwrap_or_default()
     }
 
     /// Open a dispute, or appeal one with `appeal_of`. An appeal must
@@ -567,7 +567,7 @@ impl Node {
         };
         let deposit = if f.appeal_of.is_some() && f.pay_each > 0 { Some(Box::new(self.deposit_for(&f.subject, tier, f.panel, f.pay_each, &f.appeal_of)?)) } else { None };
         // If the counterparty's terms ask this wallet for a deposit, pay it.
-        // Its record is by its pseudonym, which only an endorsement shows,
+        // Its record is by its pseudonym, which only its counted posts show,
         // so pay whenever the terms could apply and losses are on record.
         let filer_deposit = match (tier, f.against) {
             (0, Some(c)) => match self.terms_for(&c) {
@@ -630,8 +630,8 @@ impl Node {
         };
         let msg = BoardMsg::Dispute { subject: f.subject, question: f.question, claim: f.claim, against: f.against, tier, panel: f.panel, pay_each: f.pay_each, appeal_of: f.appeal_of, deposit, filer_deposit };
         let scope = self.town.jobs.scope;
-        let endorse: Option<&[crate::bulletin::Cheat]> = if f.against.is_some() { Some(&[]) } else { None };
-        self.compose(&scope, &me, msg.kind(), f.against, msg.encode(), endorse)
+        let count = f.against.map(|c| purpose(&scope, "dispute", &c));
+        self.compose(&scope, &me, msg.kind(), f.against, msg.encode(), count)
     }
 
     /// Pay an appeal's panel upfront: a split of one coin with

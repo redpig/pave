@@ -1,7 +1,7 @@
 //! A civic work board on pave, and the node that runs one wallet.
 //!
-//! - [`bulletin`]: the board profile: posts to an online host, bound by
-//!   hash, with endorsements that count people and receipts from the host
+//! - [`bulletin`]: the board profile: a board is a clerk; a post spends a
+//!   token from the board mint at a board server, bound by hash
 //! - [`board`]: the job board (posts with proof of means, replies, accept,
 //!   done; payment is a coin whose receipt commits to the job)
 //! - [`node`]: a wallet's view, knowledge and keys, saved as a record log

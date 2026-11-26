@@ -5,7 +5,7 @@
 //! - Gossip: the two tiers. Hints first (fits one packet), then per-hint
 //!   wants answered with proofs.
 
-use crate::bulletin::{PostReceipt, Submission};
+use crate::bulletin::{Clock, Submission, TokenGrant, TokenRequest, TokenTerms};
 use crate::node::{Bundle, Have, Node, RefillRequest, RefillTerms};
 use crate::pay::{Ack, Invoice, Offer, PayVerdict, Prefix, Proposal};
 use pave_kernel::Record;
@@ -50,10 +50,17 @@ pub enum Wire {
     Ack(Box<Ack>),
     /// Proofs that the credentials a wallet paid from aren't known cheats.
     Standing(Vec<Standing>),
-    /// Boards: a post to its host, the host's receipt, and fetching what a
-    /// reader lacks from any node holding a copy.
+    /// Boards: the server's clock, post tokens from the mint, a post and the
+    /// server's retire of its token, and fetching what a reader lacks from
+    /// any node holding a copy.
+    ClockAsk(Hash),
+    Clock(Clock),
+    TokenTermsAsk,
+    TokenTerms(Box<TokenTerms>),
+    Tokens(Box<TokenRequest>),
+    Granted(Box<TokenGrant>),
     Post(Box<Submission>),
-    Posted(Box<PostReceipt>),
+    Posted(Box<Record>),
     Fetch { scope: Hash, have: std::collections::BTreeSet<Prefix> },
     Posts(Vec<Submission>),
     /// The network access gate: the server's challenge and the client's answer.
@@ -178,6 +185,18 @@ pub fn serve_peer(node: Arc<Mutex<Node>>, mut s: TcpStream, service: &str) -> st
                     Ok(o) => Wire::Swapped(Box::new(o)),
                     Err(e) => Wire::Refused(e),
                 },
+                Wire::ClockAsk(b) => match n.board_clock(&b) {
+                    Ok(c) => Wire::Clock(c),
+                    Err(e) => Wire::Refused(e),
+                },
+                Wire::TokenTermsAsk => match n.token_terms() {
+                    Ok(t) => Wire::TokenTerms(Box::new(t)),
+                    Err(e) => Wire::Refused(e),
+                },
+                Wire::Tokens(req) => match n.answer_tokens(&req) {
+                    Ok(g) => Wire::Granted(Box::new(g)),
+                    Err(e) => Wire::Refused(e),
+                },
                 Wire::Post(sub) => match n.host_post(&sub) {
                     Ok(r) => Wire::Posted(Box::new(r)),
                     Err(e) => Wire::Refused(e),
@@ -191,7 +210,7 @@ pub fn serve_peer(node: Arc<Mutex<Node>>, mut s: TcpStream, service: &str) -> st
                     Ok(list) => Wire::EvidenceList(list),
                     Err(e) => Wire::Refused(e),
                 },
-                Wire::RefillTerms(_) | Wire::Tickets(_) | Wire::Refused(_) | Wire::Quote(_) | Wire::Swapped(_) | Wire::Invoice(_) | Wire::Lacks(_) | Wire::Verdict(_) | Wire::Ack(_) | Wire::Posted(_) | Wire::Posts(_) | Wire::Kept | Wire::EvidenceList(_) | Wire::Challenge(_) | Wire::Nac(_) => {
+                Wire::RefillTerms(_) | Wire::Tickets(_) | Wire::Refused(_) | Wire::Quote(_) | Wire::Swapped(_) | Wire::Invoice(_) | Wire::Lacks(_) | Wire::Verdict(_) | Wire::Ack(_) | Wire::Posted(_) | Wire::Clock(_) | Wire::TokenTerms(_) | Wire::Granted(_) | Wire::Posts(_) | Wire::Kept | Wire::EvidenceList(_) | Wire::Challenge(_) | Wire::Nac(_) => {
                     Wire::Refused("unexpected".into())
                 }
                 Wire::Standing(v) => {
@@ -450,29 +469,54 @@ pub struct BoardSync {
     pub received: usize,
 }
 
-/// Sync with a board host: send every queued post, then fetch what this
-/// node lacks of each of the town's boards. Posts go directly to the host,
-/// as to any website; nothing about them passes through other wallets.
-pub fn sync_boards(node: &Arc<Mutex<Node>>, addr: &str) -> std::io::Result<BoardSync> {
-    let mut s = connect(node, addr)?;
-    let mut out = BoardSync::default();
-    let queued = node.lock().unwrap().outgoing.clone();
-    for sub in queued {
-        write_msg(&mut s, &Wire::Post(Box::new(sub.clone())))?;
-        let (reply, _) = read_msg(&mut s)?;
-        let mut n = node.lock().unwrap();
-        match reply {
-            Wire::Posted(r) => {
-                n.posted(&sub, &r).map_err(std::io::Error::other)?;
-                out.sent += 1;
-            }
-            Wire::Refused(e) => {
-                n.refused(&sub).map_err(std::io::Error::other)?;
-                out.refused.push(e);
-            }
-            _ => return Err(std::io::Error::other("unexpected reply")),
+/// A board server at the other end of a connection.
+struct NetHost<'a>(&'a mut TcpStream);
+
+impl NetHost<'_> {
+    fn ask(&mut self, m: Wire) -> Result<Wire, String> {
+        write_msg(self.0, &m).map_err(|e| e.to_string())?;
+        match read_msg(self.0).map_err(|e| e.to_string())?.0 {
+            Wire::Refused(e) => Err(e),
+            w => Ok(w),
         }
     }
+}
+
+impl crate::bulletin::Host for NetHost<'_> {
+    fn clock(&mut self, board: &Hash) -> Result<Clock, String> {
+        match self.ask(Wire::ClockAsk(*board))? {
+            Wire::Clock(c) => Ok(c),
+            _ => Err("unexpected reply".into()),
+        }
+    }
+    fn terms(&mut self) -> Result<TokenTerms, String> {
+        match self.ask(Wire::TokenTermsAsk)? {
+            Wire::TokenTerms(t) => Ok(*t),
+            _ => Err("unexpected reply".into()),
+        }
+    }
+    fn tokens(&mut self, req: &TokenRequest) -> Result<TokenGrant, String> {
+        match self.ask(Wire::Tokens(Box::new(req.clone())))? {
+            Wire::Granted(g) => Ok(*g),
+            _ => Err("unexpected reply".into()),
+        }
+    }
+    fn post(&mut self, sub: &Submission) -> Result<Record, String> {
+        match self.ask(Wire::Post(Box::new(sub.clone())))? {
+            Wire::Posted(r) => Ok(*r),
+            _ => Err("unexpected reply".into()),
+        }
+    }
+}
+
+/// Sync with a board server: send every draft (getting post tokens from
+/// the mint first if need be), then fetch what this node lacks of each of
+/// the town's boards. Posts go directly to the server, as to any website;
+/// nothing about them passes through other wallets.
+pub fn sync_boards(node: &Arc<Mutex<Node>>, addr: &str) -> std::io::Result<BoardSync> {
+    let mut s = connect(node, addr)?;
+    let synced = node.lock().unwrap().send_drafts(&mut NetHost(&mut s));
+    let mut out = BoardSync { sent: synced.sent, refused: synced.refused, received: 0 };
     let evidence = node.lock().unwrap().evidence_out.clone();
     for e in evidence {
         write_msg(&mut s, &Wire::Evidence(Box::new(e.clone())))?;

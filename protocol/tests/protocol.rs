@@ -85,7 +85,7 @@ impl World {
     fn ticket(&mut self, p: &P, seq: Hash, group: u32) {
         let epoch = head(&self.site.view, &seq).unwrap().number;
         let clerk = self.clerk(seq);
-        let t = SignedTicket::issue(&DevScheme, &clerk.key, &clerk.cred, Ticket { credential: p.cred.clone(), sequence: seq, epoch, group, max_spend: None });
+        let t = SignedTicket::issue(&DevScheme, &clerk.key, &clerk.cred, Ticket { credential: p.cred.clone(), sequence: seq, epoch, group, max_spend: None, tag: None });
         assert!(self.site.know.add_ticket(&DevScheme, t));
     }
     fn mint_to(&mut self, p: &P, amount: u64) -> Hash {
@@ -262,7 +262,7 @@ fn tickets_must_come_from_a_trusted_clerk() {
     let (a, rogue) = (person(), person());
     let coin = w.mint_to(&a, 10);
     assert_eq!(check(&w.site.view, &w.site.know, &coin, &a.cred, &w.policy()), Err(Refusal::NoTicket(a.cred.clone())));
-    let t = SignedTicket::issue(&DevScheme, &rogue.key, &rogue.cred, Ticket { credential: a.cred.clone(), sequence: w.seq_x, epoch: 0, group: 1, max_spend: None });
+    let t = SignedTicket::issue(&DevScheme, &rogue.key, &rogue.cred, Ticket { credential: a.cred.clone(), sequence: w.seq_x, epoch: 0, group: 1, max_spend: None, tag: None });
     w.site.know.add_ticket(&DevScheme, t.clone());
     assert_eq!(check(&w.site.view, &w.site.know, &coin, &a.cred, &w.policy()), Err(Refusal::UntrustedClerk(rogue.cred.clone())));
     let mut tampered = SignedTicket::issue(&DevScheme, &w.clerk_x.key, &w.clerk_x.cred, t.ticket.clone());
@@ -439,7 +439,7 @@ fn ticket_caps_are_honored() {
     w.ticket(&m, w.seq_x, 1);
     w.ticket(&a, w.seq_x, 1);
     let epoch = head(&w.site.view, &w.seq_x).unwrap().number;
-    let t = SignedTicket::issue(&DevScheme, &w.clerk_x.key, &w.clerk_x.cred, Ticket { credential: small.cred.clone(), sequence: w.seq_x, epoch, group: 2, max_spend: Some(50) });
+    let t = SignedTicket::issue(&DevScheme, &w.clerk_x.key, &w.clerk_x.cred, Ticket { credential: small.cred.clone(), sequence: w.seq_x, epoch, group: 2, max_spend: Some(50), tag: None });
     assert!(w.site.know.add_ticket(&DevScheme, t));
     let big = w.mint_to(&m, 80);
     let ok = w.mint_to(&m, 40);

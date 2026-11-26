@@ -61,9 +61,9 @@ Each pattern: what it is for, what it is built from, and who uses it today.
 
 | Pattern | For | Built from | Used by |
 |---|---|---|---|
-| **Board** | Content with an audience: posts, listings, reports | A scope. A post is a `Send` whose body is a small binding (kind, thread) and whose receipt is the content hash; the content stays with whoever hosts the board. The host's acceptance anchors the post in time. Copies serve posts with their acceptances; readers check both | Job board, reports, disputes |
-| **Counting people** | One count per person, without names | A basename signature by an access credential, the basename chosen for the scope of linkage: per thread (one count per issue), per counterparty (a record with one party), per board (one record everywhere) | Reports, vouches, dispute records |
-| **Ruling someone out** | Stopping a pseudonym from counting again without unmasking it | Standing against a list of pseudonyms a profile publishes | Reports, disputes (example) |
+| **Board** | Content with an audience: posts, listings, reports | A clerk. A board mint (a capability to issue a post-token schema, derived from the root) tickets and mints tokens on anonymous requests, like refills. A post is the token's `Transfer` to a board server, its receipt the hash of the binding (board, kind, thread, content hash, prior post, the server's epoch and clock); the server takes it by `Retire`. Ordinary wallets don't accept the schema and servers do, so one mint serves many boards and servers. The content stays with the server; copies serve posts with their records and readers check them | Job board, reports, disputes |
+| **Counting people** | One count per person, without names | A token request also signed by the access credential with the purpose as basename; the mint puts the pseudonym in the tickets' tag. The purpose sets the scope of linkage: per thread (one count per issue), per counterparty (a record with one party) | Reports, vouches, dispute records |
+| **Ruling someone out** | Stopping a pseudonym from counting again without unmasking it | Its tag on the mint's list, against which every token request needs access-credential standing; its ticket group revoked at the next roll | Reports |
 | **Identity tiers** | Choosing how identifiable to be | A stable credential shared with chosen people; signing a binding with it. A wallet keeps one per tier (close, contacts, public); none is anonymous | Any post |
 | **Records** | Reputation from what happened | Counting pseudonyms over posts and outcomes | Vouches, dispute records, arbiter scores |
 
@@ -77,11 +77,12 @@ Each pattern: what it is for, what it is built from, and who uses it today.
 
 ## Bringing up an application
 
-To bring up an application, pick a board scope for what people say, a schema for anything held one at a time, and the patterns above for paying, counting, proving and settling.
+To bring up an application, pick a board for what people say, a schema for anything held one at a time, and the patterns above for paying, counting, proving and settling.
 
 ## Where the code doesn't match yet
 
-- **Boards aren't on tickets yet.** `board/src/bulletin.rs` has its own host acceptance (`PostReceipt`), endorsements and ruled lists. A board should be a clerk: access credentials refill board tickets, a post spends a post token with a ticketed transfer credential, and the spend's receipt commits to the content hash, a prior post, the epoch and the board's proposed wall clock. Rulings revoke ticket groups.
+- **One mint, one server.** The design has a board mint and any number of servers; the prototype's town runs both, and its mint's list takes rulings only from the reports board.
+- **Tags are a ticket field.** `Ticket::tag` is a protocol addition: the clerk's word for a per-purpose pseudonym, trusted as tickets are.
 - **Generic patterns live inside profiles.** Escrow and counterparty terms are in `board/src/dispute.rs`; commit and reveal is split across `parcel.rs` and `evidence.rs`; sealed material and parcel-specific evidence kinds share `evidence.rs`.
 - **Escrow's holder is the town.** That is a trusted holder, stated as such; code-bound identity is not built.
 - **Tickets are signed protocol objects**, not kernel records.
