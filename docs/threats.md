@@ -429,6 +429,26 @@ Where pave can do better once this is built:
 
 ---
 
+## 19. Elections (example)
+
+`board/src/election.rs`; [spec/elections.md](../spec/elections.md)
+
+**Attack surface:** the voter rolls; vote requests and the mint; the election's ticks; booths; published ballots and the tally. Briolette has no counterpart, so its column is omitted.
+
+| # | Attack | Prevent | React | Status |
+|---|---|---|---|---|
+| EL1 | A voter collects two live coins | The request's basename is the election, so the mint sees the same pseudonym; a new coin revokes the old one's group on the election's ticks | Booths refuse the revoked coin | Built (mutations `no_revoke`, `booth_check`) |
+| EL2 | A voter votes twice | A coin is spent once; with voting again off, a voter who voted gets no new coin; the tally counts each pseudonym once, from its newest ticket | Double spend evidence | Built (mutations `revote_rule`, `tally_revoked`, `tally_newest`) |
+| EL3 | Someone off the rolls votes | A request must verify under a district's roll | n/a | Built (mutation `roll_check`) |
+| EL4 | A vote counted in the wrong district | Tickets are tagged with the district the roll showed; a booth takes only its district's | n/a | Built (mutation `booth_district`) |
+| EL5 | Votes outside the legal window | The mint and the booth check the window when they act; the authority moves it only as the law does | n/a | Built (mutations `mint_window`, `booth_window`) |
+| EL6 | A captured request replayed to revoke a voter's coin | Requests carry a time; the mint takes only newer ones, within ten minutes | n/a | Built (mutation `replay`) |
+| EL7 | A voter is pressed to vote a certain way and show it | With voting again on, a later private vote replaces it | n/a | Partial: the booth's retire is a receipt; an election's choice |
+| EL8 | The authority links a ballot to a voter | The roll credential's pseudonym is unlinkable to the voter; the mint and booths see only the pseudonym and district | n/a | Built; Gap: the connection a request arrives on (as H5) |
+| EL9 | A rogue registrar stuffs a roll | Not preventable in pave | Roll sizes are public per group and can be audited against registrations | Gap |
+
+---
+
 ## Where pave is ahead of Briolette
 
 - **Offline detection.** Two holders who meet find a double spend on their own, with a portable 770-byte proof (K3).

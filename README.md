@@ -12,7 +12,7 @@ A pavé setting is many small stones set close together to make one surface. Her
 |---|---|---|
 | Kernel | Axioms only: three objects (scope, capability, message), holding, schemas, receipts, five operations and six invariants. No time, no roles, no code. | [spec/kernel.md](spec/kernel.md) |
 | Protocol | Corollaries, standard schemas (epochs, expiry, tickets, value, time, votes, certification, recovery), core mechanisms (evidence, revocation, receipts, proof of means, two-tier gossip), role guarantees and profiles. | [spec/protocol.md](spec/protocol.md) |
-| Profiles | Cash (Briolette), offline mesh, boards (the job board and civic reports), parcels, disputes. | end of the protocol; [spec/boards.md](spec/boards.md), [spec/parcels.md](spec/parcels.md), [spec/disputes.md](spec/disputes.md) |
+| Profiles | Cash (Briolette), offline mesh, boards (the job board and civic reports), parcels, disputes, and an example election. | end of the protocol; [spec/boards.md](spec/boards.md), [spec/parcels.md](spec/parcels.md), [spec/disputes.md](spec/disputes.md), [spec/elections.md](spec/elections.md) |
 
 The values behind it are in [docs/principles.md](docs/principles.md), and the reasoning behind each decision is in [docs/design-log.md](docs/design-log.md). Every component's attack surface, the attacks on it and how each is prevented or answered are in [docs/threats.md](docs/threats.md).
 

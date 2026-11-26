@@ -394,6 +394,11 @@ impl Copy {
         self.order.last().copied()
     }
 
+    /// The signer's ticket for a post, if it came with it and checks out.
+    pub fn ticket(&self, post: &Hash) -> Option<&SignedTicket> {
+        self.subs.get(post)?.ticket.as_ref()
+    }
+
     /// The ticket group of a post's signer, if its ticket came with it.
     pub fn group(&self, post: &Hash) -> Option<u32> {
         self.subs.get(post)?.ticket.as_ref().map(|t| t.ticket.group)

@@ -8,6 +8,8 @@
 //! - [`net`]: the peer link (meet, two-tier gossip) over TCP
 //! - [`report`]: the civic reports board
 //! - [`dispute`]: disputes as jobs, with appeals and arbiter reputation
+//! - [`election`]: a municipal election: a mint whose basename is the
+//!   election and whose clock is its own
 //! - [`evidence`]: evidence for dispute panels, held by the host and shown only to the panel
 //! - [`media`]: image metadata: which kinds a picture carries, and a copy without them
 //! - [`nac`]: the network access gate every exposed service asks for
@@ -19,6 +21,7 @@
 pub mod board;
 pub mod bulletin;
 pub mod dispute;
+pub mod election;
 pub mod evidence;
 pub mod media;
 pub mod nac;

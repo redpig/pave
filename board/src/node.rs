@@ -87,6 +87,9 @@ pub struct Operator {
     /// Ticket requests this epoch, by request pseudonym, for the rate limit.
     pub asked: BTreeMap<Vec<u8>, usize>,
     pub asked_epoch: u32,
+    /// Elections this operator runs. See [`crate::election`].
+    #[serde(default)]
+    pub elections: BTreeMap<Hash, crate::election::Authority>,
     /// Post token requests this epoch, by request pseudonym.
     #[serde(default)]
     pub tokens_asked: BTreeMap<Vec<u8>, usize>,
@@ -399,6 +402,7 @@ impl Node {
             asked_epoch: 0,
             tokens_asked: BTreeMap::new(),
             tokens_epoch: 0,
+            elections: BTreeMap::new(),
             held: vec![],
             root,
             root_cred: rc,
