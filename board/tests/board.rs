@@ -63,12 +63,24 @@ fn the_whole_story_on_ecdaa() {
     alice.sync_with(&mut town);
     let worker = alice.jobs()[&job].replies[0].0.clone();
     // Only the poster's key can accept: Bob accepting himself is ignored.
-    let msg = pave_board::board::BoardMsg::Accept { job, worker: worker.clone() };
+    let msg = pave_board::board::BoardMsg::Accept { job, worker: worker.clone(), assignment: None };
     let bobs = bob.receive().unwrap();
     bob.compose(&bob.town.jobs.scope.clone(), &bobs, msg.kind(), msg.job(), msg.encode(), None).unwrap();
     bob.sync_with(&mut town);
     assert_eq!(bob.jobs()[&job].status, Status::Open);
-    alice.accept(job, worker).unwrap();
+    // An accept must carry the poster's transfer of the job's state.
+    let bare = pave_board::board::BoardMsg::Accept { job, worker: worker.clone(), assignment: None };
+    let poster = alice.jobs()[&job].poster.clone();
+    alice.compose(&alice.town.jobs.scope.clone(), &poster, bare.kind(), bare.job(), bare.encode(), None).unwrap();
+    alice.sync_with(&mut town);
+    assert_eq!(alice.jobs()[&job].status, Status::Open);
+    let s = alice.view.scheme().clone();
+    let wrong = pave_kernel::sign(&s, &alice.key, &poster, pave_kernel::Op::Transfer { state: pave_kernel::hash::Hash([1; 32]), to: worker.clone(), receipt: pave_board::board::accept_receipt(&job, &worker) });
+    let forged = pave_board::board::BoardMsg::Accept { job, worker: worker.clone(), assignment: Some(wrong) };
+    alice.compose(&alice.town.jobs.scope.clone(), &poster, forged.kind(), forged.job(), forged.encode(), None).unwrap();
+    alice.sync_with(&mut town);
+    assert_eq!(alice.jobs()[&job].status, Status::Open, "an assignment of another state");
+    alice.accept(job, worker.clone()).unwrap();
     assert!(alice.pay(job).is_err(), "can't pay before the work is done");
     alice.sync_with(&mut town);
     bob.sync_with(&mut town);
@@ -76,6 +88,24 @@ fn the_whole_story_on_ecdaa() {
     bob.done(job).unwrap();
     bob.sync_with(&mut town);
     alice.sync_with(&mut town);
+    assert!(bob.jobs()[&job].assignment.is_some(), "Bob holds the assignment record");
+    // A poster can't give one job twice: a second assignment is a second
+    // transfer of the job's state, and readers mark the job contested.
+    let job2 = alice.post("Paint the shed", 10).unwrap();
+    alice.sync_with(&mut town);
+    let (w1, w2) = (bob.receive().unwrap(), bob.receive().unwrap());
+    alice.accept(job2, w1).unwrap();
+    assert!(alice.accept(job2, w2.clone()).is_err(), "the wallet won't sign it twice");
+    let j2 = alice.jobs()[&job2].clone();
+    let s = alice.view.scheme().clone();
+    let state = pave_board::board::job_state(&j2.means);
+    let twice = pave_kernel::sign(&s, &alice.key, &j2.poster, pave_kernel::Op::Transfer { state, to: w2.clone(), receipt: pave_board::board::accept_receipt(&job2, &w2) });
+    let msg = pave_board::board::BoardMsg::Accept { job: job2, worker: w2, assignment: Some(twice) };
+    alice.compose(&alice.town.jobs.scope.clone(), &j2.poster, msg.kind(), msg.job(), msg.encode(), None).unwrap();
+    alice.sync_with(&mut town);
+    bob.sync_with(&mut town);
+    assert_eq!(bob.jobs()[&job2].status, Status::Contested);
+
     // Payment is a coin: it moves wallet to wallet, offline if need be.
     let payment = alice.pay(job).unwrap();
     meet(&mut alice, &mut bob);

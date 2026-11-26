@@ -77,6 +77,7 @@ Kinds: `job`, `reply`, `accept`, `done`, `paid`, with the job as thread.
 
 - A job post carries a **proof of means**: a zero-value split of the poster's coin that commits to the terms. The split is a value record and travels like one.
 - Only the poster's key can accept a worker or mark the job paid, and only the accepted worker's key can mark it done.
+- **Accepting gives the job.** The poster transfers the job's state (the zero-value second output of its proof of means) to the worker, with a receipt naming the job and worker, and posts that record. An accept without it is ignored. A job can be given once: a second transfer of its state is a second use of one state, and readers mark the job contested. The worker holds the record.
 - **Payment is not a post.** It is an ordinary transfer whose receipt commits to the job, and it moves wallet to wallet like any coin, offline if need be. The board shows the poster's claim that it paid; the coin is the proof.
 
 ### Vouches

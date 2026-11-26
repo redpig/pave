@@ -58,7 +58,7 @@ pub const MAX_EVIDENCE: usize = 256 * 1024;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Evidence {
     /// A parcel's manifest and the records of its custody chain.
-    Custody { manifest: Manifest, records: Vec<Record> },
+    Custody { manifest: Box<Manifest>, records: Vec<Record> },
     /// The code a code delivery was shipped with.
     Code { code: String },
     /// A drop's photo as shown, and the commitment to its original.
@@ -372,7 +372,7 @@ impl Node {
     pub fn submit_parcel_evidence(&mut self, m: &Manifest, statement: Option<&str>) -> Result<Vec<Hash>, String> {
         let parties = self.parties(m);
         let as_cred = parties.iter().find(|c| self.mine.contains(*c)).cloned();
-        let mut items = vec![Evidence::Custody { manifest: m.clone(), records: self.custody_records(m) }];
+        let mut items = vec![Evidence::Custody { manifest: Box::new(m.clone()), records: self.custody_records(m) }];
         if let Some(code) = self.codes.get(&m.parcel) {
             items.push(Evidence::Code { code: code.clone() });
         }
@@ -402,7 +402,7 @@ impl Node {
                 for r in records {
                     let _ = apply_ok(&mut self.view, r);
                 }
-                manifest.get_or_insert_with(|| m.clone());
+                manifest.get_or_insert_with(|| (**m).clone());
             }
         }
         let mut ex = Examination { subject: *subject, mode: None, custody: vec![], delivery: None, code_matches: Check::Unknown, photo_matches: Check::Unknown, cell_matches: Check::Unknown, pictures: vec![], exhibits: vec![] };

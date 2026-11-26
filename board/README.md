@@ -22,7 +22,8 @@ The same node runs the [civic reports profile](../spec/reports.md): public repor
 
 - **Posting spends a post token.** A board is a clerk: the town's board mint answers anonymous token requests the way the clerk answers refills, tickets each key the wallet wants to post as and mints it a token. A post is that token's transfer to the board server, committing to the content hash, a prior post and the epoch and clock the server proposed; the server takes it by retiring the token. Ordinary wallets don't accept post tokens and board servers do, so one mint can serve many boards and servers. See [spec/boards.md](../spec/boards.md).
 - **A job** is a post on the job board. It carries a proof of means: a zero-value split of the poster's coin that commits to the terms.
-- **Replies, accepting and marking done** are posts too. Only the poster can accept or mark a job paid, and only the accepted worker can mark it done; anything else is ignored.
+- **Replies, accepting and marking done** are posts too. Only the poster can accept or mark a job paid, and only the accepted worker can mark it done; anything else is ignored. Accepting gives the job: the poster transfers the job's state (the zero-value second output of its proof of means) to the worker, so one job can't be given twice.
+- **Dispatch** ([`src/dispatch.rs`](src/dispatch.rs)). A co-op's members get shift keys for carrying its parcels, capped per member per day by a (dispatch, day) pseudonym; bans outlast the day by standing; a parcel on a lost phone is reminted to whoever has the package and label code, layered on a lineage coin so reminting twice is a double spend.
 - **Payment** is an ordinary transfer whose receipt commits to the job.
 
 Test credit only; it has no cash value.

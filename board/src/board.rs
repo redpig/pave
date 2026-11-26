@@ -52,7 +52,15 @@ pub enum BoardMsg {
     Post { title: String, pay: u64, means: Hash, terms: Hash },
     /// `trade` is set when the replier wants vouches for this job.
     Reply { job: Hash, note: String, trade: Option<Trade> },
-    Accept { job: Hash, worker: Credential },
+    /// `assignment` is the poster's transfer of the job's zero-value state
+    /// (the second output of its proof of means) to the worker: a job can
+    /// be given once, and the worker holds the record.
+    Accept {
+        job: Hash,
+        worker: Credential,
+        #[serde(default)]
+        assignment: Option<pave_kernel::Record>,
+    },
     Done { job: Hash },
     Paid { job: Hash, payment: Hash },
     /// A dispute: see [`crate::dispute`].
@@ -80,6 +88,10 @@ pub enum BoardMsg {
     Dropped { parcel: Hash, cell: String, photo: Hash },
     /// A courier's note that it took a parcel, signed with an identity.
     Took { parcel: Hash, hop: u32 },
+    /// The shipper reminted a parcel to whoever has the package and its
+    /// label code: the old token is void.
+    /// `roll` is the shipper's move of the parcel's lineage coin.
+    Replaced { parcel: Hash, with: Hash, roll: pave_kernel::Record },
     /// Evidence was submitted about a subject: its kind and hash. The
     /// evidence itself goes only to the host, for the panel.
     EvidenceNote { subject: Hash, kind: String, hash: Hash },
@@ -113,6 +125,7 @@ impl BoardMsg {
             BoardMsg::Ruling { .. } => "ruling",
             BoardMsg::Dropped { .. } => "dropped",
             BoardMsg::Took { .. } => "took",
+            BoardMsg::Replaced { .. } => "replaced",
             BoardMsg::Fund { .. } => "fund",
             BoardMsg::EvidenceNote { .. } => "evidence",
             BoardMsg::Terms { .. } => "terms",
@@ -124,7 +137,7 @@ impl BoardMsg {
             BoardMsg::Post { .. } => None,
             BoardMsg::Dispute { against, .. } => *against,
             BoardMsg::Ruling { dispute, .. } => Some(*dispute),
-            BoardMsg::Dropped { parcel, .. } | BoardMsg::Took { parcel, .. } => Some(*parcel),
+            BoardMsg::Dropped { parcel, .. } | BoardMsg::Took { parcel, .. } | BoardMsg::Replaced { parcel, .. } => Some(*parcel),
             BoardMsg::Fund { dispute, .. } => Some(*dispute),
             BoardMsg::EvidenceNote { subject, .. } => Some(*subject),
             BoardMsg::Terms { trade, .. } => Some(contractor(&trade.key)),
@@ -149,6 +162,26 @@ pub enum Status {
     Accepted,
     Done,
     Paid,
+    /// The poster gave the job to two workers: two transfers of one state.
+    Contested,
+}
+
+/// The job's assignment state: the zero-value second output of its proof of means.
+pub fn job_state(means: &Hash) -> Hash {
+    pave_kernel::hash::hash_of("pave/output", &(means, 1u32))
+}
+
+/// What a job's assignment commits to.
+pub fn accept_receipt(job: &Hash, worker: &Credential) -> Hash {
+    pave_kernel::hash::hash_of("pave/job/accept", &(job, worker))
+}
+
+/// Whether `rec` is the poster's transfer of the job's state to `worker`.
+fn assigns(copy: &Copy, job: &Job, worker: &Credential, rec: &pave_kernel::Record) -> bool {
+    let state = job_state(&job.means);
+    rec.signer == job.poster
+        && rec.op == pave_kernel::Op::Transfer { state, to: worker.clone(), receipt: accept_receipt(&job.id, worker) }
+        && rec.sigs.first().is_some_and(|sig| copy.scheme().verify(&rec.signer, &rec.op.signing_bytes(), Some(state.as_bytes()), sig))
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -162,6 +195,8 @@ pub struct Job {
     /// Repliers who opted into vouches, and the contractor each named.
     pub contractors: BTreeMap<Credential, Hash>,
     pub worker: Option<Credential>,
+    /// The poster's transfer of the job's state to the worker.
+    pub assignment: Option<Hash>,
     pub status: Status,
     pub payment: Option<Hash>,
 }
@@ -188,6 +223,7 @@ pub fn jobs(copy: &Copy) -> BTreeMap<Hash, Job> {
                     replies: vec![],
                     contractors: BTreeMap::new(),
                     worker: None,
+                    assignment: None,
                     status: Status::Open,
                     payment: None,
                 });
@@ -202,11 +238,17 @@ pub fn jobs(copy: &Copy) -> BTreeMap<Hash, Job> {
                     }
                 }
             }
-            BoardMsg::Accept { job, worker } => {
+            BoardMsg::Accept { job, worker, assignment } => {
                 if let Some(j) = jobs.get_mut(&job) {
-                    if &j.poster == signer && j.status == Status::Open {
+                    let Some(rec) = assignment.filter(|r| &j.poster == signer && assigns(copy, j, &worker, r)) else { continue };
+                    if j.status == Status::Open {
                         j.worker = Some(worker);
+                        j.assignment = Some(rec.id());
                         j.status = Status::Accepted;
+                    } else if j.assignment.is_some_and(|a| a != rec.id()) {
+                        // A second transfer of the one state: the poster gave it twice.
+                        j.worker = None;
+                        j.status = Status::Contested;
                     }
                 }
             }
@@ -217,7 +259,7 @@ pub fn jobs(copy: &Copy) -> BTreeMap<Hash, Job> {
                     }
                 }
             }
-            BoardMsg::Vouch { .. } | BoardMsg::Dispute { .. } | BoardMsg::Ruling { .. } | BoardMsg::Dropped { .. } | BoardMsg::Took { .. } | BoardMsg::Fund { .. } | BoardMsg::Terms { .. } | BoardMsg::EvidenceNote { .. } => {}
+            BoardMsg::Vouch { .. } | BoardMsg::Dispute { .. } | BoardMsg::Ruling { .. } | BoardMsg::Dropped { .. } | BoardMsg::Took { .. } | BoardMsg::Replaced { .. } | BoardMsg::Fund { .. } | BoardMsg::Terms { .. } | BoardMsg::EvidenceNote { .. } => {}
             BoardMsg::Paid { job, payment } => {
                 if let Some(j) = jobs.get_mut(&job) {
                     if &j.poster == signer && j.status == Status::Done {

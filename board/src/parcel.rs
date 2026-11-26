@@ -30,6 +30,25 @@
 //! - **Provider.** A shipper may name a shipping provider, such as a co-op,
 //!   before the first handoff. Then the shipper pays the provider once it
 //!   is delivered, and the provider pays its couriers.
+//! - **A dispatch.** A provider's co-op may run a dispatch (see
+//!   [`crate::dispatch`]), named in the manifest before the first handoff.
+//!   Then the parcel is handed only to keys with that dispatch's shift
+//!   ticket, taken under one, checked with the dispatch's clerk trusted, and
+//!   its couriers are paid only at such keys. A courier the dispatch ruled
+//!   out has its keys revoked, so nobody takes a parcel from it.
+//! - **A lost phone.** The parcel's token was on the phone; the package
+//!   wasn't. Its label carries a code the shipper keeps. Whoever has the
+//!   package and the code can ask the shipper to remint it to a new key.
+//! - **Remints are layered on a lineage coin.** Shipping mints two parcel
+//!   coins: the token that travels, and a lineage coin the shipper keeps.
+//!   The manifest names the lineage and the token's generation. A remint
+//!   moves the lineage coin to the shipper's own fresh key, its receipt
+//!   committing to the old and new parcel, and mints a token for the next
+//!   generation. So reminting twice is one lineage state used twice: kernel
+//!   evidence against the shipper. A token whose generation is behind its
+//!   lineage is void, and takers refuse it as they refuse a stale epoch.
+//!   The shipper posts the lineage record on the job board so takers hear
+//!   of it, and pays the old token's couriers up to the remint, never after.
 //! - **Who holds it.** A courier may post a note on the job board when it
 //!   takes a parcel, signed with one of its identities: whoever was given
 //!   that identity (the co-op's dispatch) sees which member holds it.
@@ -78,6 +97,20 @@ pub struct Manifest {
     /// the couriers: the credential it is paid at.
     #[serde(default)]
     pub provider: Option<Credential>,
+    /// The hash of the code on the parcel's label.
+    #[serde(default)]
+    pub label: Option<Hash>,
+    /// The dispatch whose couriers carry it, if any.
+    #[serde(default)]
+    pub dispatch: Option<Box<crate::dispatch::Dispatch>>,
+    /// The parcel this one replaces, after a remint.
+    #[serde(default)]
+    pub replaces: Option<Hash>,
+    /// The lineage coin the shipper keeps, and this token's generation in it.
+    #[serde(default)]
+    pub lineage: Option<Hash>,
+    #[serde(default)]
+    pub generation: u32,
 }
 
 impl Manifest {
@@ -102,6 +135,14 @@ pub fn code_receipt(manifest: &Hash, hop: u32, code: &str) -> Hash {
 
 pub fn drop_receipt(manifest: &Hash, hop: u32, cell: &str, photo: &Hash) -> Hash {
     hash_of("pave/parcel/drop", &(manifest, hop, cell, photo))
+}
+
+pub fn remint_receipt(old: &Hash, new: &Hash) -> Hash {
+    hash_of("pave/parcel/remint", &(old, new))
+}
+
+pub fn label_hash(parcel: &Hash, code: &str) -> Hash {
+    hash_of("pave/parcel/label", &(parcel, code))
 }
 
 pub fn shipping_receipt(parcel: &Hash) -> Hash {
@@ -142,6 +183,9 @@ pub enum Delivery {
     NotDelivered,
     /// Referred to an outside authority.
     Referred(String),
+    /// Reminted: this token is void, and the parcel goes on as this one,
+    /// if this wallet knows it.
+    Replaced(Option<Hash>),
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -176,22 +220,27 @@ impl Node {
     /// Ship with a delivery mode. For [`Mode::Code`], returns the code to
     /// give the recipient; the shipper keeps it to check the courier's.
     pub fn ship_with(&mut self, what: &str, from_cell: &str, to_cell: &str, addressee: Credential, pay_per_hop: u64, mode: Mode) -> Result<(Manifest, Option<String>), String> {
-        let budget = self.parcel_budget().ok_or("no parcel budget: ask the town for one")?;
-        let (me, change) = (self.fresh()?, self.fresh()?);
-        let rec = self.signed(&budget.holder, Op::Mint { budget: budget.state, amount: 1, to: me, change_to: change })?;
-        apply_ok(&mut self.view, &rec)?;
-        let m = Manifest { parcel: rec.output(0), what: what.into(), from_cell: from_cell.into(), to_cell: to_cell.into(), addressee, pay_per_hop, mode, provider: None };
-        let code = (m.mode == Mode::Code).then(|| {
-            let mut b = [0u8; 4];
-            rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut b);
-            format!("{:06}", u32::from_le_bytes(b) % 1_000_000)
-        });
+        let (parcel, lineage) = (self.mint_parcel()?, self.mint_parcel()?);
+        let label = random_code(8);
+        let m = Manifest { parcel, what: what.into(), from_cell: from_cell.into(), to_cell: to_cell.into(), addressee, pay_per_hop, mode, provider: None, label: Some(label_hash(&parcel, &label)), dispatch: None, replaces: None, lineage: Some(lineage), generation: 0 };
+        self.labels.insert(parcel, label);
+        let code = (m.mode == Mode::Code).then(|| random_code(6));
         if let Some(c) = &code {
             self.codes.insert(m.parcel, c.clone());
         }
         self.parcels.insert(m.parcel, m.clone());
         self.save()?;
         Ok((m, code))
+    }
+
+    /// Mint one parcel coin to a fresh key from this wallet's budget.
+    fn mint_parcel(&mut self) -> Result<Hash, String> {
+        let budget = self.parcel_budget().ok_or("no parcel budget: ask the town for one")?;
+        // The change stays with the budget's key: it links nothing new.
+        let me = self.fresh()?;
+        let rec = self.signed(&budget.holder, Op::Mint { budget: budget.state, amount: 1, to: me, change_to: budget.holder.clone() })?;
+        apply_ok(&mut self.view, &rec)?;
+        Ok(rec.output(0))
     }
 
     fn close(&mut self, m: &Manifest, receipt: impl FnOnce(u32) -> Hash) -> Result<(Credential, Hash), String> {
@@ -246,6 +295,9 @@ impl Node {
     /// Where a parcel's delivery stands.
     pub fn delivery(&self, m: &Manifest) -> Delivery {
         use crate::dispute::{final_outcome, open_dispute, Answer};
+        if let Some(n) = self.replaced_by(m) {
+            return Delivery::Replaced(n);
+        }
         let c = self.custody(m);
         if c.delivered {
             return Delivery::Delivered("signed");
@@ -314,6 +366,9 @@ impl Node {
     pub fn hand_off(&mut self, parcel: &Hash, to: Credential) -> Result<Hash, String> {
         let m = self.parcels.get(parcel).ok_or("no manifest for that parcel")?.clone();
         let coin = self.held(parcel)?;
+        if to != m.addressee && !self.dispatched(&m, &to) {
+            return Err("the next courier has no shift ticket from this parcel's dispatch".into());
+        }
         let rec = self.signed(&coin.holder, Op::Transfer { state: coin.state, to, receipt: handoff_receipt(&m.hash(), coin.hops + 1) })?;
         apply_ok(&mut self.view, &rec)?;
         self.save()?;
@@ -337,8 +392,18 @@ impl Node {
             Op::Transfer { receipt, .. } if *receipt == handoff_receipt(&m.hash(), coin.hops) => {}
             _ => return Err("that handoff doesn't match the manifest".into()),
         }
-        self.check(&coin.state).map_err(|r| format!("{r:?}"))?;
-        let me = self.fresh()?;
+        if self.replaced_by(m).is_some() {
+            return Err("this token is void: its shipper reminted the parcel".into());
+        }
+        if self.reminted_twice(m) {
+            return Err("its shipper reminted it twice".into());
+        }
+        let trusted: Vec<(Credential, Hash)> = m.dispatch.iter().map(|d| (d.clerk.clone(), d.sequence())).collect();
+        self.check_trusting(&coin.state, &trusted).map_err(|r| format!("{r:?}"))?;
+        let me = match &m.dispatch {
+            Some(d) => self.shift_key(d).ok_or("no shift key: ask dispatch for one")?,
+            None => self.fresh()?,
+        };
         let rec = self.signed(&coin.holder, Op::Transfer { state: coin.state, to: me, receipt: take_receipt(&m.hash(), coin.hops + 1) })?;
         apply_ok(&mut self.view, &rec)?;
         self.parcels.insert(m.parcel, m.clone());
@@ -349,6 +414,116 @@ impl Node {
         }
         self.save()?;
         Ok(rec.output(0))
+    }
+
+    /// Shipper: the code printed on a parcel's label.
+    pub fn label_code(&self, parcel: &Hash) -> Option<&String> {
+        self.labels.get(parcel)
+    }
+
+    /// Shipper: name the dispatch whose couriers carry it, before the first
+    /// handoff.
+    pub fn name_dispatch(&mut self, parcel: &Hash, d: crate::dispatch::Dispatch) -> Result<Manifest, String> {
+        let coin = self.held(parcel)?;
+        if coin.hops > 0 {
+            return Err("the dispatch is named before the first handoff".into());
+        }
+        for r in &d.records {
+            apply_ok(&mut self.view, r)?;
+        }
+        let m = self.parcels.get_mut(parcel).ok_or("no manifest for that parcel")?;
+        m.dispatch = Some(Box::new(d));
+        let m = m.clone();
+        self.save()?;
+        Ok(m)
+    }
+
+    /// Whether `key` holds a shift ticket from the parcel's dispatch, if it
+    /// names one.
+    fn dispatched(&self, m: &Manifest, key: &Credential) -> bool {
+        match &m.dispatch {
+            None => true,
+            Some(d) => self.know.tickets.get(key).is_some_and(|t| d.shift_of(self.view.scheme(), t).is_some()),
+        }
+    }
+
+    /// Whether this token is void: its lineage has moved past its
+    /// generation, as this wallet's view has it. Returns the next
+    /// generation's parcel, if the lineage record names one this wallet knows.
+    pub fn replaced_by(&self, m: &Manifest) -> Option<Option<Hash>> {
+        let lineage = m.lineage?;
+        let h = pave_protocol::head(&self.view, &lineage)?;
+        if h.number <= m.generation {
+            return None;
+        }
+        // The record that moved the lineage past this generation.
+        let mut state = lineage;
+        for _ in 0..m.generation {
+            state = self.view.spender(&state)?.output(0);
+        }
+        let rec = self.view.spender(&state)?;
+        Some(self.parcels.values().find(|n| n.replaces == Some(m.parcel) && matches!(&rec.op, Op::Transfer { receipt, .. } if *receipt == remint_receipt(&m.parcel, &n.parcel))).map(|n| n.parcel))
+    }
+
+    /// Whether one of the parcel's lineage states was used twice: its shipper
+    /// reminted one generation twice.
+    pub fn reminted_twice(&self, m: &Manifest) -> bool {
+        let Some(mut state) = m.lineage else { return false };
+        let used: std::collections::BTreeSet<Hash> = self.view.evidence().map(|e| e.basename).collect();
+        for _ in 0..=MAX_HOPS {
+            if used.contains(&state) {
+                return true;
+            }
+            match self.view.spender(&state) {
+                Some(r) => state = r.output(0),
+                None => return false,
+            }
+        }
+        false
+    }
+
+    /// Take the lineage records the shipper posted on the job board into
+    /// this wallet's view. Returns how many were new.
+    pub fn hear_remints(&mut self) -> usize {
+        let Ok(copy) = self.copy(&self.town.jobs.scope) else { return 0 };
+        let recs: Vec<pave_kernel::Record> = copy.items().into_iter().filter_map(|i| match crate::board::BoardMsg::decode(i.content) {
+            Some(crate::board::BoardMsg::Replaced { roll, .. }) => Some(roll),
+            _ => None,
+        }).collect();
+        recs.iter().filter(|r| matches!(self.view.apply(r), Ok(pave_kernel::Applied::Accepted))).count()
+    }
+
+    /// Shipper: remint a parcel to `to`, for whoever has the package and
+    /// shows its label code. The replacement keeps the manifest's terms,
+    /// names the old parcel, and is handed to `to`; the old token is void.
+    pub fn remint_parcel(&mut self, old: &Manifest, code: &str, to: Credential) -> Result<Manifest, String> {
+        if old.label != Some(label_hash(&old.parcel, code)) {
+            return Err("that isn't the code on the parcel's label".into());
+        }
+        let shipper = self.custody(old).steps.iter().find_map(|s| if let Step::Handoff { from, .. } = s { Some(from.clone()) } else { None }).ok_or("this parcel hasn't left its shipper")?;
+        let lineage = self.view.unspent().find(|c| Some(c.origin) == old.lineage && self.mine.contains(&c.holder)).cloned().ok_or("only the shipper, holding the lineage, remints")?;
+        if lineage.hops != old.generation {
+            return Err("already reminted".into());
+        }
+        let parcel = self.mint_parcel()?;
+        let label = random_code(8);
+        let m = Manifest { parcel, label: Some(label_hash(&parcel, &label)), replaces: Some(old.parcel), generation: old.generation + 1, ..old.clone() };
+        self.labels.insert(parcel, label);
+        if let Some(c) = self.codes.get(&old.parcel).cloned() {
+            self.codes.insert(parcel, c);
+        }
+        // The layer underneath: moving the lineage is what voids the old
+        // token, and it can be done once per generation.
+        let next = self.fresh()?;
+        let roll = self.signed(&lineage.holder, Op::Transfer { state: lineage.state, to: next, receipt: remint_receipt(&old.parcel, &parcel) })?;
+        apply_ok(&mut self.view, &roll)?;
+        self.parcels.insert(parcel, m.clone());
+        self.hand_off(&parcel, to)?;
+        let msg = crate::board::BoardMsg::Replaced { parcel: old.parcel, with: parcel, roll };
+        let scope = self.town.jobs.scope;
+        self.compose(&scope, &shipper, msg.kind(), msg.job(), msg.encode(), None)?;
+        self.save()?;
+        Ok(m)
     }
 
     /// Shipper: name the provider, before the first handoff.
@@ -451,18 +626,24 @@ impl Node {
         // caught handing one parcel to two people.
         let last_closing = c.steps.iter().rev().find_map(|s| if let Step::Closed { by, .. } = s { Some(by.clone()) } else { None });
         let closer = self.closer(m).map(|(by, _)| by).or(last_closing);
-        let couriers: Vec<Credential> = c
-            .steps
-            .iter()
-            .filter_map(|s| if let Step::Handoff { from, .. } = s { Some(from.clone()) } else { None })
+        let handoffs = |c: &Custody| -> Vec<Credential> {
             // The first handoff is the shipper's own.
-            .skip(1)
-            .chain(closer)
-            .filter(|from| !self.mine.contains(from) && !self.view.flagged().contains(from))
+            c.steps.iter().filter_map(|s| if let Step::Handoff { from, .. } = s { Some(from.clone()) } else { None }).skip(1).collect()
+        };
+        // After a remint, the old token's couriers up to the remint too, at
+        // the old parcel's receipts.
+        let before: Vec<(Hash, Credential)> = match m.replaces.and_then(|p| self.parcels.get(&p)) {
+            Some(old) => handoffs(&self.custody(old)).into_iter().map(|c| (old.parcel, c)).collect(),
+            None => vec![],
+        };
+        let couriers: Vec<(Hash, Credential)> = before
+            .into_iter()
+            .chain(handoffs(&c).into_iter().chain(closer).map(|c| (m.parcel, c)))
+            .filter(|(_, from)| !self.mine.contains(from) && !self.view.flagged().contains(from) && self.dispatched(m, from))
             .collect();
         let mut out = vec![];
-        for courier in couriers {
-            let receipt = pay_receipt(&m.parcel, &courier);
+        for (parcel, courier) in couriers {
+            let receipt = pay_receipt(&parcel, &courier);
             let paid = self.view.records().iter().any(|r| matches!(&r.op, Op::Transfer { receipt: x, .. } | Op::Split { receipt: x, .. } if *x == receipt));
             if paid {
                 continue;
@@ -484,4 +665,10 @@ impl Node {
         apply_ok(&mut self.view, &rec)?;
         Ok(rec.output(0))
     }
+}
+
+fn random_code(digits: u32) -> String {
+    let mut b = [0u8; 8];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut b);
+    format!("{:0width$}", u64::from_le_bytes(b) % 10u64.pow(digits), width = digits as usize)
 }

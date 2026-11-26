@@ -7,13 +7,42 @@ The prototype is [`board/src/parcel.rs`](../board/src/parcel.rs), with a test in
 ## Objects
 
 - **The parcel schema.** One unit, not divisible, never expiring, at most 32 transfers.
-- **A parcel budget.** The town issues one to a shipper, as a budget of so many parcels. Shipping mints one parcel to the shipper; the parcel's id is its origin state.
+- **A parcel budget.** The town issues one to a shipper, as a budget of so many parcels. Shipping mints two parcel coins: the token that travels, whose origin state is the parcel's id, and a lineage coin the shipper keeps (see Lost phones).
+- **The label.** A code printed on the package. The manifest commits to its hash; the shipper keeps the code.
 - **The manifest.** What it is, the cell it's from and the cell it's going to, the addressee's credential and the pay per hop. It travels with the parcel. Every handoff's receipt commits to its hash and the hop number, so a courier can check the manifest it was shown against the parcel it was given.
 
 ## Provider, and who holds it
 
 - **Provider.** A shipper may name a shipping provider, such as a co-op, in the manifest before the first handoff. Then the shipper pays the provider once the parcel is delivered (once, with a receipt naming the parcel), and only the provider pays the couriers. The first handoff is the shipper's own and is never paid.
 - **Who holds it.** A courier may take a parcel under one of its identities: it posts a note on the job board, signed by the credential that signed the take and by the identity. Whoever was given that identity, such as the co-op's dispatch, sees which member holds the parcel; anyone else sees an identity it can't name. A note from anyone who didn't take the parcel is ignored.
+
+## Dispatch
+
+A co-op that carries parcels can run a dispatch ([`board/src/dispatch.rs`](../board/src/dispatch.rs)), named in the manifest before the first handoff. It is a mint of tickets, like the town's clerk, with three choices of its own:
+
+- **Members are an issuer group.** Joining is a join on a key the member's device made.
+- **The basename is (dispatch, day).** A courier asks for shift keys with a fresh randomization of its member credential under that basename. The pseudonym is the same for a member all day and unrelated across days, so dispatch caps keys per member per day and counts distinct couriers without learning who anyone is. Shift tickets carry the pseudonym and day as a tag.
+- **Its own ticks.** Dispatch signs shift tickets on its own tick sequence, and revokes on it.
+
+Membership is enforced where custody moves:
+
+| Where | Check |
+|---|---|
+| Hand off | The next key (other than the addressee's) holds this dispatch's shift ticket. The courier shows it with the key: meets carry tickets only for keys their records name |
+| Take | The usual coin checks with the dispatch's clerk also trusted, which refuses a revoked key; the take goes to one of the courier's shift keys |
+| Pay | Only couriers at shift keys are paid |
+
+**Bans outlast the day.** A day pseudonym can't carry a ban to the next day, so a ruling puts the courier's (basename, pseudonym) on dispatch's ruled list. Every later shift request needs standing of the member credential against it, which the ruled courier can't produce. The ruling also revokes that day's groups on dispatch's ticks, so nobody takes a parcel from those keys and they take nothing.
+
+## Lost phones
+
+The token was on the phone; the package wasn't. Whoever has the package and its label code can ask the shipper to remint it to a new key.
+
+- **A remint is layered on the lineage coin.** The shipper moves the lineage coin to a fresh key of its own, with a receipt committing to (old parcel, new parcel), mints a token for the next generation, and hands it to the new key. The new manifest names the old parcel and the next generation.
+- **Once per generation.** Reminting one generation twice is one lineage state used twice: kernel evidence against the shipper. A taker who knows of it refuses the parcel.
+- **The old token is void** for anyone whose view has the lineage past its generation, as a stale epoch is. A taker refuses it. The shipper posts the lineage record on the job board so takers hear of it soon.
+- **Pay** follows the package: the old token's couriers up to the remint, then the new token's. Nobody is paid for the old token's later hops.
+- **A double token shows up.** A courier who remints and keeps moving the old token is seen by anyone holding both records: the old token moves after its lineage did.
 
 ## Delivery modes
 
@@ -48,5 +77,6 @@ A party (the addressee, the shipper, a courier in its custody) can dispute deliv
 
 ## Not built yet
 
-- Dispatch: offering parcels as jobs on the job board, and routing.
+- Routing, and offering parcels as jobs on the job board.
+- Dispatch as a separate service from the town operator, with network messages.
 - Proof of where a handoff happened.

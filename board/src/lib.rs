@@ -7,6 +7,8 @@
 //! - [`node`]: a wallet's view, knowledge and keys, saved as a record log
 //! - [`net`]: the peer link (meet, two-tier gossip) over TCP
 //! - [`report`]: the civic reports board
+//! - [`dispatch`]: a co-op's dispatch: members, daily caps and bans by a
+//!   per-day pseudonym
 //! - [`dispute`]: disputes as jobs, with appeals and arbiter reputation
 //! - [`election`]: a municipal election: a mint whose basename is the
 //!   election and whose clock is its own
@@ -20,6 +22,7 @@
 
 pub mod board;
 pub mod bulletin;
+pub mod dispatch;
 pub mod dispute;
 pub mod election;
 pub mod evidence;

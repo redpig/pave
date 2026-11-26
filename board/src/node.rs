@@ -87,6 +87,9 @@ pub struct Operator {
     /// Ticket requests this epoch, by request pseudonym, for the rate limit.
     pub asked: BTreeMap<Vec<u8>, usize>,
     pub asked_epoch: u32,
+    /// Dispatches this operator runs. See [`crate::dispatch`].
+    #[serde(default)]
+    pub dispatches: BTreeMap<Hash, crate::dispatch::Book>,
     /// Elections this operator runs. See [`crate::election`].
     #[serde(default)]
     pub elections: BTreeMap<Hash, crate::election::Authority>,
@@ -204,6 +207,10 @@ pub struct Saved {
     #[serde(default)]
     pub codes: Vec<(Hash, String)>,
     #[serde(default)]
+    pub labels: Vec<(Hash, String)>,
+    #[serde(default)]
+    pub shift_keys: Vec<Credential>,
+    #[serde(default)]
     pub originals: Vec<(Hash, Hash, serde_bytes::ByteBuf, serde_bytes::ByteBuf)>,
     #[serde(default)]
     pub drop_photos: Vec<(Hash, Hash)>,
@@ -280,6 +287,10 @@ pub struct Node {
     pub parcels: BTreeMap<Hash, crate::parcel::Manifest>,
     /// Delivery codes for parcels this wallet shipped by code.
     pub codes: BTreeMap<Hash, String>,
+    /// Label codes printed on parcels this wallet shipped.
+    pub labels: BTreeMap<Hash, String>,
+    /// Shift keys from a dispatch, not yet used. See [`crate::dispatch`].
+    pub shift_keys: Vec<Credential>,
     /// Originals this wallet committed to, by commitment: subject, salt, original.
     pub originals: BTreeMap<Hash, (Hash, Vec<u8>, Vec<u8>)>,
     /// The commitment of each parcel this wallet dropped.
@@ -403,6 +414,7 @@ impl Node {
             tokens_asked: BTreeMap::new(),
             tokens_epoch: 0,
             elections: BTreeMap::new(),
+            dispatches: BTreeMap::new(),
             held: vec![],
             root,
             root_cred: rc,
@@ -438,6 +450,8 @@ impl Node {
             contacts: BTreeMap::new(),
             parcels: BTreeMap::new(),
             codes: BTreeMap::new(),
+            labels: BTreeMap::new(),
+            shift_keys: vec![],
             originals: BTreeMap::new(),
             drop_photos: BTreeMap::new(),
             evidence_out: vec![],
@@ -573,6 +587,8 @@ impl Node {
             contacts: BTreeMap::new(),
             parcels: BTreeMap::new(),
             codes: BTreeMap::new(),
+            labels: BTreeMap::new(),
+            shift_keys: vec![],
             originals: BTreeMap::new(),
             drop_photos: BTreeMap::new(),
             evidence_out: vec![],
@@ -637,6 +653,8 @@ impl Node {
             contacts: saved.contacts.into_iter().collect(),
             parcels: saved.parcels.into_iter().map(|m| (m.parcel, m)).collect(),
             codes: saved.codes.into_iter().collect(),
+            labels: saved.labels.into_iter().collect(),
+            shift_keys: saved.shift_keys,
             originals: saved.originals.into_iter().map(|(c, sub, s, b)| (c, (sub, s.into_vec(), b.into_vec()))).collect(),
             drop_photos: saved.drop_photos.into_iter().collect(),
             evidence_out: saved.evidence_out,
@@ -698,6 +716,8 @@ impl Node {
             contacts: self.contacts.iter().map(|(n, c)| (n.clone(), c.clone())).collect(),
             parcels: self.parcels.values().cloned().collect(),
             codes: self.codes.iter().map(|(p, c)| (*p, c.clone())).collect(),
+            labels: self.labels.iter().map(|(p, c)| (*p, c.clone())).collect(),
+            shift_keys: self.shift_keys.clone(),
             originals: self.originals.iter().map(|(c, (sub, s, b))| (*c, *sub, serde_bytes::ByteBuf::from(s.clone()), serde_bytes::ByteBuf::from(b.clone()))).collect(),
             drop_photos: self.drop_photos.iter().map(|(p, c)| (*p, *c)).collect(),
             evidence_out: self.evidence_out.clone(),
@@ -1063,11 +1083,16 @@ impl Node {
     }
 
     pub fn accept(&mut self, job: Hash, worker: Credential) -> Result<Hash, String> {
-        let poster = self.job(&job)?.poster;
-        if !self.mine.contains(&poster) {
+        let j = self.job(&job)?;
+        if !self.mine.contains(&j.poster) {
             return Err("only the poster accepts".into());
         }
-        self.send_as(&poster, BoardMsg::Accept { job, worker })
+        // Give the job by transferring its state: a second accept would be a
+        // second use of it.
+        let state = board::job_state(&j.means);
+        let rec = self.signed(&j.poster, Op::Transfer { state, to: worker.clone(), receipt: board::accept_receipt(&job, &worker) })?;
+        let _ = self.view.apply(&rec);
+        self.send_as(&j.poster, BoardMsg::Accept { job, worker, assignment: Some(rec) })
     }
 
     pub fn done(&mut self, job: Hash) -> Result<Hash, String> {
@@ -1192,6 +1217,16 @@ impl Node {
     }
 
     /// Would this wallet accept the coin at `state`?
+    /// As [`Node::check`], also trusting `extra` clerks, each with its sequence.
+    pub fn check_trusting(&self, state: &Hash, extra: &[(Credential, Hash)]) -> Result<(), Refusal> {
+        let coin = self.view.coin(state).ok_or(Refusal::UnknownState)?;
+        let n = coin.history.len();
+        let sender = if n >= 2 { coin.history[n - 2].clone() } else { coin.holder.clone() };
+        let mut policy = Policy { require_standing: !self.mine.contains(&sender), ..self.policy() };
+        policy.trusted_clerks.extend(extra.iter().cloned());
+        check(&self.view, &self.know, state, &sender, &policy)
+    }
+
     pub fn check(&self, state: &Hash) -> Result<(), Refusal> {
         let coin = self.view.coin(state).ok_or(Refusal::UnknownState)?;
         let n = coin.history.len();

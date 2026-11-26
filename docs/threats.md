@@ -295,6 +295,7 @@ Specified as a holder-created capability (spec C9), not yet built
 | B2 | Accept or mark paid on someone else's job | Only the poster's key can accept or mark paid; only the accepted worker's key can mark done | Ignored | n/a | Built (mutation `anyaccept`) |
 | B3 | A false "done", or a poster who doesn't pay | n/a | A dispute about the job, posted as a job (section 18) | n/a | Partial: disputes take any subject; nothing yet ties a job's payment to a ruling |
 | B4 | Spam posts | Every post spends a token from the mint, which gives an access pseudonym at most 32 requests of 16 tokens per epoch | Rule the author out; revoke its group | n/a | Partial (mutation `token_rate`); Gap: per-class budgets, and Sybils get their own budgets (R1) |
+| B5 | A poster gives one job to two workers | Accepting transfers the job's state to the worker; a second transfer is a second use of it | Readers mark the job contested | Built (mutations `assigns`, `contested`) |
 | B5 | Sybil reputation | A vouch rides on a real payment from the job's poster, and counts each enrolled person once per job type; only the poster can vouch, and only for a worker who named the contractor with its trade key | Rulings against false vouches | n/a | Built (mutations `vouchanyone`, `vouchanytype`, `notradesig`, `vouchperjob`, `vouchunnamed`); Gap: rulings. Self-dealing still costs a second enrollment, not money: the pay goes back to oneself |
 | B6 | Link a worker across jobs | A fresh credential per role | n/a | n/a | Built |
 | B7 | Claim a payment that doesn't match the job | The payment receipt commits to the job | n/a | n/a | Built |
@@ -391,6 +392,11 @@ Where pave can do better once this is built:
 | PC9 | A courier backdates a drop note to settle its window at once | As H8: the binding commits to the server's epoch and clock, and readers take a post from any copy only with the server's retire | n/a | Built (mutations `epoch`, `retire_state`) |
 | PC10 | A stranger disputes deliveries to hold them | Only a party's disputes, and their appeals, count for a parcel | n/a | Built (mutation `anyonedisputes`) |
 | PC8 | A shipper ships more than it was allowed | Parcels are minted from a budget the town issued | Budgets are capabilities (M1, M3) | Built |
+| PC12 | A non-member carries a co-op's parcels | A dispatched parcel goes only to keys with the dispatch's shift ticket, and is paid only there | n/a | Built (mutations `handoff_gate`, `pay_gate`, `take_shiftkey`) |
+| PC13 | A banned courier comes back the next day | Dispatch's ruled list: shift requests need member-credential standing against it; the ruling revokes that day's keys | n/a | Built (mutations `ruled`, `rule_list`, `rule_revoke`) |
+| PC14 | A courier takes more shifts than the day allows | Shift keys capped per (dispatch, day) pseudonym | n/a | Built (mutation `cap`); Gap: a member with two cards gets two caps (R1) |
+| PC15 | A found phone passes on a parcel's token | Whoever has the package and label code gets the token reminted; the old token is void once a taker's view has the lineage past it | The shipper pays the old token's hops only up to the remint | Built (mutations `void_take`, `label`, `pay_before`); Gap: a taker who hasn't heard of the remint accepts the old token, and it shows up when the records meet |
+| PC16 | A shipper remints one parcel twice | Each remint moves the lineage coin, so a second is a double spend | Kernel evidence; takers refuse the parcel | Built (mutations `remint_once`, `twice_take`) |
 
 ---
 
