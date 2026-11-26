@@ -53,6 +53,8 @@ Each pattern: what it is for, what it is built from, and who uses it today.
 | **Payment** | Paying for something specific | `Transfer` or `Split` whose receipt commits to what it pays for (a job, a parcel hop, a panelist) | Job board, parcels, disputes |
 | **Proof of means** | Showing you hold enough, without paying | A zero-value `Split` part to yourself, its receipt committing to the terms | Job board |
 | **Custody token** | Something one party holds at a time and hands on, offline | A schema (indivisible, a transfer limit) minted from a budget; handing on is `Transfer`, acknowledging is a `Transfer` to yourself, finishing is `Retire`. Handing it to two people is a conflict | Parcels |
+| **Assignment** | Giving something to exactly one party | A `Transfer` of a zero-value state (such as the one a proof of means creates) to that party, its receipt naming them; a second assignment is a second use of the state | Job board |
+| **Layered remint** | Replacing a token lost with a device, safely | Beside the token that travels, the issuer mints a lineage coin it keeps; a remint moves the lineage (committing to old and new) and mints the next generation. A second remint of one generation is a double spend; a token behind its lineage is void | Parcels |
 | **Vouch** | A reputational commitment that rides on real payment | A zero-value `Split` part to the paid party, the payment's receipt committing to the statement | Job board |
 | **Escrow** | Holding value until something is decided | A coin transferred to a holder's credential, the receipt committing to the terms; the holder retires it and pays out. The holder is trusted; see code-bound identity for the stronger form | Disputes |
 | **Code-bound identity** *(not built)* | Escrow, a swapper or any program whose behavior is fixed in advance | A shared capability, derived by an attestor to a credential, whose right names a code version. Paying a coin to that credential with the capability presented binds the payment to the code. Trust moves to the attestor, explicitly | Escrow, the swapper |
@@ -78,7 +80,7 @@ Each pattern: what it is for, what it is built from, and who uses it today.
 
 ## Bringing up an application
 
-To bring up an application, pick a board for what people say, a schema for anything held one at a time, and the patterns above for paying, counting, proving and settling.
+To bring up an application, pick a board for what people say, a schema for anything held one at a time, and the patterns above for paying, counting, proving and settling. [docs/building.md](../docs/building.md) is the manual: the decisions in order, how to choose basenames and clocks, where checks go, and two worked examples.
 
 ## Where the code doesn't match yet
 
