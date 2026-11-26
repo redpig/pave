@@ -15,6 +15,8 @@
 //! - [`evidence`]: evidence for dispute panels, held by the host and shown only to the panel
 //! - [`media`]: image metadata: which kinds a picture carries, and a copy without them
 //! - [`nac`]: the network access gate every exposed service asks for
+//! - [`slots`]: slotted basenames: unlinkable requests up to a budget, then
+//!   linked ones
 //! - [`parcel`]: packages, with custody as a coin from shipper to addressee
 //! - [`pay`]: the payment handshake, sending only what a payment needs
 //! - [`swap`]: old coins in, fresh coins out
@@ -33,5 +35,6 @@ pub mod node;
 pub mod parcel;
 pub mod pay;
 pub mod report;
+pub mod slots;
 pub mod swap;
 pub mod vault;

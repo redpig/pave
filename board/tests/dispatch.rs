@@ -3,7 +3,7 @@
 //! a lost phone is reminted, layered on a lineage coin so reminting twice
 //! is a double spend.
 
-use pave_board::dispatch::{Dispatch, MemberCard};
+use pave_board::dispatch::{DayCard, Dispatch, MemberCard, SHIFT_SLOTS};
 use pave_board::node::{Node, PendingJoin};
 use pave_board::parcel::{Delivery, Manifest};
 use pave_kernel::Scheme;
@@ -34,9 +34,23 @@ fn member(town: &mut Node, d: &Dispatch) -> MemberCard {
     MemberCard::finish(d, pending, &reply).unwrap()
 }
 
-fn shift(town: &mut Node, n: &mut Node, d: &Dispatch, card: &MemberCard, k: usize) -> Result<(), String> {
+/// Check in for today and keep the day credential.
+fn check_in(town: &mut Node, n: &Node, d: &Dispatch, card: &MemberCard) -> Result<DayCard, String> {
     let terms = town.shift_terms(&d.id)?;
-    let req = n.shift_request(d, card, &terms, k)?;
+    let (pending, req) = n.check_in(d, card, &terms)?;
+    let c = town.answer_check_in(&req)?;
+    Node::day_card(d, terms.0, pending, &c)
+}
+
+/// Check in and get `k` shift keys.
+fn shift(town: &mut Node, n: &mut Node, d: &Dispatch, card: &MemberCard, k: usize) -> Result<(), String> {
+    let day = check_in(town, n, d, card)?;
+    shift_with(town, n, d, card, &day, k)
+}
+
+fn shift_with(town: &mut Node, n: &mut Node, d: &Dispatch, card: &MemberCard, day: &DayCard, k: usize) -> Result<(), String> {
+    let terms = town.shift_terms(&d.id)?;
+    let req = n.shift_request(d, card, day, &terms, k)?;
     let t = town.answer_shift(&req)?;
     n.take_shift(d, t)
 }
@@ -69,16 +83,43 @@ fn dispatch() {
     }
     meet(&mut shop, &mut town);
 
-    // The co-op runs a dispatch: eleven shift keys per member per day.
-    let d = town.open_dispatch("Pine Co-op", 11).unwrap();
+    // The co-op runs a dispatch. Checking in is the count: one pseudonym per
+    // member per day, so a second check-in (a new phone) counts once.
+    let d = town.open_dispatch("Pine Co-op").unwrap();
     let (ca, cb) = (member(&mut town, &d), member(&mut town, &d));
-    shift(&mut town, &mut ana, &d, &ca, 4).unwrap();
+    let today = pave_board::dispatch::today();
+    let ana_day = check_in(&mut town, &ana, &d, &ca).unwrap();
+    assert_eq!(town.couriers(&d.id, today).unwrap(), 1);
     shift(&mut town, &mut ben, &d, &cb, 4).unwrap();
-    // The day pseudonym caps keys per member per day.
-    assert!(shift(&mut town, &mut ana, &d, &ca, 8).unwrap_err().contains("at most 11"));
-    shift(&mut town, &mut ana, &d, &ca, 2).unwrap();
+    assert_eq!(town.couriers(&d.id, today).unwrap(), 2);
+    check_in(&mut town, &ana, &d, &ca).unwrap();
+    assert_eq!(town.couriers(&d.id, today).unwrap(), 2, "Ana again: linked, counted once");
+
+    // Shift requests use slots: a courier's first few a day can't be linked
+    // to each other; past them they're served, and linked to an earlier one.
+    let linked = |t: &Node| t.operator.as_ref().unwrap().dispatches[&d.id].requests.linked();
+    let before = linked(&town);
+    for _ in 0..SHIFT_SLOTS {
+        shift_with(&mut town, &mut ana, &d, &ca, &ana_day, 2).unwrap();
+    }
+    assert_eq!(linked(&town), before, "within the slots: unlinked");
+    shift_with(&mut town, &mut ana, &d, &ca, &ana_day, 2).unwrap();
+    assert_eq!(linked(&town), before + 1, "past them: served, and linked");
+    let terms = town.shift_terms(&d.id).unwrap();
+    let mut bad = ana.shift_request(&d, &ca, &ana_day, &terms, 1).unwrap();
+    bad.slot = SHIFT_SLOTS;
+    assert!(town.answer_shift(&bad).unwrap_err().contains("slots"));
+
+    // A member who didn't check in today gets no shift keys: a day
+    // credential from another dispatch doesn't verify here.
+    let other = town.open_dispatch("Other Co-op").unwrap();
+    let mut dee = join(&mut town, "dee", &dir, &[]);
+    let cd = member(&mut town, &d);
+    let cd_other = member(&mut town, &other);
+    let wrong_day = check_in(&mut town, &dee, &other, &cd_other).unwrap();
+    assert!(shift_with(&mut town, &mut dee, &d, &cd, &wrong_day, 1).unwrap_err().contains("check in"));
+
     // Cat isn't a member: a card for another dispatch's roll doesn't verify.
-    let other = town.open_dispatch("Other Co-op", 6).unwrap();
     let cc = member(&mut town, &other);
     let forged = MemberCard { dispatch: d.id, key: cc.key.clone() };
     assert!(shift(&mut town, &mut cat, &d, &forged, 1).unwrap_err().contains("member"));
@@ -103,13 +144,17 @@ fn dispatch() {
     // later shift requests need standing against it, and his issued keys
     // are revoked on the dispatch's own ticks, so nobody takes from him and
     // he takes nothing.
+    let ben_day = check_in(&mut town, &ben, &d, &cb).unwrap();
     let bens_key = shop.custody(&m).steps.iter().filter_map(|s| if let pave_board::parcel::Step::Take { by } = s { Some(by.clone()) } else { None }).nth(1).unwrap();
     town.rule_courier(&d.id, &bens_key).unwrap();
     assert!(shift(&mut town, &mut ben, &d, &cb, 1).unwrap_err().contains("ruled"));
-    // Asking on the terms from before the ruling doesn't help.
-    let stale = (pave_board::dispatch::today(), vec![]);
-    let req = ben.shift_request(&d, &cb, &stale, 1).unwrap();
+    // Asking on the terms from before the ruling doesn't help, for shift
+    // keys on the day credential he already has or for checking in again.
+    let stale = (today, vec![]);
+    let req = ben.shift_request(&d, &cb, &ben_day, &stale, 1).unwrap();
     assert!(town.answer_shift(&req).unwrap_err().contains("ruled"));
+    let (_, again) = ben.check_in(&d, &cb, &stale).unwrap();
+    assert!(town.answer_check_in(&again).unwrap_err().contains("ruled"));
     meet(&mut ben, &mut town);
     let m2 = shop.ship("books", "dn5bpsb", "dn5bpth", zoe.receive().unwrap(), 3).unwrap();
     let m2 = shop.name_dispatch(&m2.parcel, d.clone()).unwrap();
@@ -142,8 +187,6 @@ fn dispatch() {
     let zoe_at = zoe.receive().unwrap();
     let m3 = shop.ship("flowers", "dn5bpsb", "dn5bpth", zoe_at.clone(), 3).unwrap();
     let m3 = shop.name_dispatch(&m3.parcel, d.clone()).unwrap();
-    let mut dee = join(&mut town, "dee", &dir, &[]);
-    let cd = member(&mut town, &d);
     shift(&mut town, &mut dee, &d, &cd, 4).unwrap();
     carry(&mut shop, &mut dee, &d, &m3).unwrap();
     carry(&mut dee, &mut ana, &d, &m3).unwrap();

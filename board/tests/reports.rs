@@ -295,17 +295,28 @@ fn reports() {
     dave.sync_with(&mut town);
     assert_eq!(town.issues()[&third.id()].reporters, 1);
 
-    // The mint limits token requests per access pseudonym per epoch.
+    // Token requests aren't refused for a count. A wallet's first
+    // TOKEN_SLOTS requests in an epoch can't be linked to each other; each
+    // one after reuses a slot, so the mint sees it is the same holder as an
+    // earlier request, still without knowing who.
+    let mut fay = join(&mut town, "fay", "hardware", &dir);
     let terms = town.token_terms().unwrap();
-    let limited: Vec<bool> = (0..=pave_board::bulletin::TOKEN_REQUESTS_PER_EPOCH)
-        .map(|_| {
-            let c = erin_key(&dave);
-            town.answer_tokens(&dave.token_request(&terms, &[c], None).unwrap()).is_ok()
-        })
-        .collect();
-    // Dave has made some this epoch already: the rest succeed, then none.
-    let first_refused = limited.iter().position(|ok| !ok).expect("the limit is reached");
-    assert!(first_refused > 0 && limited[first_refused..].iter().all(|ok| !ok));
+    let linked = |t: &Node| t.operator.as_ref().unwrap().tokens.linked();
+    let before = linked(&town);
+    for _ in 0..pave_board::bulletin::TOKEN_SLOTS {
+        let c = erin_key(&fay);
+        let req = fay.token_request(&terms, &[c], None).unwrap();
+        town.answer_tokens(&req).unwrap();
+    }
+    assert_eq!(linked(&town), before, "within the slots: unlinked");
+    let c = erin_key(&fay);
+    let req = fay.token_request(&terms, &[c], None).unwrap();
+    assert_eq!(req.slot, 0);
+    town.answer_tokens(&req).unwrap();
+    assert_eq!(linked(&town), before + 1, "past them: served, and linked");
+    let mut bad = fay.token_request(&terms, &[erin_key(&fay)], None).unwrap();
+    bad.slot = pave_board::bulletin::TOKEN_SLOTS;
+    assert!(town.answer_tokens(&bad).unwrap_err().contains("slots"));
 
     // Posts and post tokens never travel between wallets: meeting carries
     // value, epochs and evidence. Alice's bundle leaves out her tokens, and

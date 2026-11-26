@@ -82,21 +82,43 @@ The basename is the smallest scope that covers question 2, named so it can't ove
 | Basename | Linkable within | Enforces | Used in |
 |---|---|---|---|
 | (service, epoch) | One service, one epoch | Connections per client, barring for the epoch | Network access ([`nac.rs`](../board/src/nac.rs)) |
-| (sequence, epoch) | One mint, one epoch | Requests per period | Ticket refills, post-token requests |
+| (sequence, epoch, slot) | One slot, one epoch | A budget of unlinkable requests per period; past it, requests are linked, not refused | Ticket refills, post-token requests ([`slots.rs`](../board/src/slots.rs)) |
 | (board, kind, thread) | One topic | One count per person per topic | Reports and clearings ([`report.rs`](../board/src/report.rs)) |
 | (board, "vouch", contractor) | One counterparty | One vouch count per person per contractor | Vouches |
 | (board, "dispute", counterparty) | One counterparty | A filer's record with that party | Disputes |
 | election | One election | One live vote coin per voter; recognizing a voter who comes back | [Elections](../spec/elections.md) |
-| (dispatch, day) | One co-op, one day | Shift keys per courier per day; counting distinct couriers | [Dispatch](../spec/parcels.md) |
+| (dispatch, day) | One co-op, one day | A daily check-in: counting distinct couriers; a second check-in is linked | [Dispatch](../spec/parcels.md) |
+| (dispatch, day, slot) | One slot, one day | Shift-key requests: a budget unlinkable to each other | Dispatch |
+
+### Budgets, not caps: slots
+
+When you want to limit how often someone asks, don't refuse past a count. Give them a **budget of unlinkable requests** instead: sign with (domain, scope, period, slot) and accept only slots 0 to N−1. This is Briolette's ticket-request pattern.
+
+- Each slot's first use in a period gives a fresh pseudonym, so a holder's first N requests can't be linked to each other.
+- Request N+1 has to reuse a slot, so it carries that slot's pseudonym: the mint serves it, and knows it's the same holder as an earlier request, without knowing who.
+- The mint applies its policy to linked requests (serve, throttle, charge, review). Nothing fails because a phone was lost or a day ran long.
+
+The wallet picks slots in order and wraps around, so linking happens only past the budget.
+
+### Counting people is its own goal
+
+A slotted basename can't count people: one person shows up under several pseudonyms. If you need a count (how many couriers worked today, how many people reported an issue), design a request for it whose basename has no slot, and have the other requests intersect with it without linking:
+
+- **Check in.** A member joins the period's own issuer group with a join signed under (mint, period). Distinct pseudonyms are the count, and a second check-in is linked, so it counts once.
+- **Show the period credential.** Later requests are also signed by the credential the check-in gave, with no basename. That proves "counted this period" and links nothing.
+- **Keep bans on the long-lived credential.** Sign check-ins and requests with the roll credential too, under their own basenames, so standing against a ruled list works across periods. A period credential is a fresh key each period, so a ban on it would end with the period.
+
+This is the town's own layering (class, access credential, refills) applied one level down. Dispatch's daily courier credential is the example.
 
 ### Rules of thumb
 
+- **Prefer a budget to a cap.** Slots give unlinkable requests up to the budget and linked ones after; a hard refusal past a count turns every edge case (a lost phone, a long day) into a failure.
 - **The span you enforce is the span that's linkable.** Longer spans enforce more and reveal more. An election-long pseudonym can recognize a voter who lost a phone, but it also links that voter's requests all election. Choose deliberately.
 - **Bans must outlive the basename.** A day pseudonym can't stop a banned courier tomorrow. Put the ruled (basename, pseudonym) on a list, and require **standing** against the list with every request. The ruled holder can't produce it, nobody else is affected, and nobody learns who was ruled. Boards and dispatch both do this.
 - **The authority fixes the basename, not the requester.** If a requester can pick the basename, they pick a fresh one to dodge a limit. So the day must be today; the thread must be the issue's id, derived from the issue's content; the election is the one being run. Check that at the mint.
 - **Name the deployment in it.** Put the mint's or election's id in the basename (`("pave/election/v1", election_id)`), so two elections, two co-ops or two towns never share a pseudonym.
 - **Give it a domain string and a version.** `"pave/dispatch/v1"`, so a basename can't be confused with one from another protocol, and you can change it later.
-- **Put a period in it only if the period is the enforcement window.** An epoch in a refill basename makes the rate limit per epoch. Legal windows (polling hours, a filing deadline) are wall-clock checks at the mint and the recipient, not basenames.
+- **Put a period in it only if the period is the enforcement window.** An epoch in a refill basename makes the budget per epoch. Legal windows (polling hours, a filing deadline) are wall-clock checks at the mint and the recipient, not basenames.
 - **Two basenames, one holder.** A request signed twice by the same credential randomization, once per basename, shows that both pseudonyms belong to one holder. That's how a token request is both rate-limited per epoch and counted per purpose.
 - **Assume a tagged pseudonym is public.** When a mint puts a pseudonym in a ticket's tag, readers see it next to what the token was spent on. Choose a scope where that's fine: a per-issue pseudonym on a report is; an election pseudonym on a ballot is too, since it's unlinkable to the voter.
 - **Never put anything identifying in a basename.** No names, no addresses, no stable device ids.
@@ -108,6 +130,8 @@ The basename is the smallest scope that covers question 2, named so it can't ove
 | A constant basename | One pseudonym per holder forever, across everything: a tracking id |
 | A basename the requester chooses freely | Limits can be dodged by picking a new one |
 | One basename for two purposes | Counting in one purpose links the holder in the other |
+| A hard cap on requests per period | Turns a lost phone or a busy day into a refusal; use slots, and link past the budget |
+| Counting people with a slotted basename | One person appears under several pseudonyms; count with a check-in of its own |
 | A basename for the person's lifetime, "to be safe" | Links everything they ever do with that mint; use the shortest span that enforces what you need, and standing for bans |
 | Deriving the basename from the content of a free-text field | Two people describing one thing differently become two topics; derive it from structured fields (a category and a cell, as reports do) |
 
@@ -174,6 +198,7 @@ Before writing code:
 - [ ] Every noun is held, said or shown, and every held thing has a meaningful double use.
 - [ ] Every mint names its capability, schema and budget per request.
 - [ ] Every request basename has a stated span, a deployment id, a domain string and a version, and the mint fixes it.
+- [ ] Every limit is a slot budget with linking past it, not a refusal; every count is a check-in of its own.
 - [ ] Every ban outlives its basename through standing.
 - [ ] Every tick sequence names who rolls it and when; every legal window is a wall-clock check.
 - [ ] Every point where something moves has its checks listed, at the server as well as the client.
@@ -199,8 +224,8 @@ Members borrow tools; a tool goes back to the library or straight to the next bo
 | Held | A **tool token** per tool: indivisible, no expiry, a transfer limit. Lending is a handoff with a receipt committing to the loan terms; the borrower's take acknowledges. Returning is a handoff back. Lending one tool to two people is a double spend |
 | Shown | **Library membership**: a roll |
 | Mint | The library holds a budget of tool tokens, one per tool it owns |
-| Basename | **(library, week)** for borrow requests: caps loans per member per week, and counts distinct borrowers per tool without names |
-| Bans | A member who keeps tools goes on the ruled list; standing keeps them out after the week ends |
+| Basename | **(library, week, slot)** for borrow requests: a member's first few borrows a week can't be linked to each other; more are served and linked, so the library sees heavy borrowing without knowing who. If the library wants to count distinct borrowers, a weekly check-in under (library, week) does it |
+| Bans | A member who keeps tools goes on the ruled list; standing of the member credential keeps them out in any week, under any slot |
 | Clock | The library's own ticks for revocation; due dates are wall-clock terms in the loan's receipt |
 | Checks | The library hands a tool only to a key with a membership ticket for this week; a borrower takes after the usual coin checks |
 | Loss | A lost phone with a tool token on it: the member brings the tool back and the library remints, layered on a lineage coin per tool. A lost tool is a dispute, with the custody chain as evidence |
@@ -215,7 +240,7 @@ Workers at a co-op kitchen trade shifts.
 | Held | A **shift token** per scheduled shift: indivisible, good until the shift starts (a wall-clock check by whoever takes or pays it, not a schema expiry). Swapping is a transfer to the other worker with a receipt naming the shift. Giving one shift to two people is a double spend |
 | Shown | **Staff membership**: a roll |
 | Mint | The scheduler mints the week's shift tokens to workers' keys |
-| Basename | **(kitchen, week)** for swap-board requests: caps how many shifts one worker can take on per week (a labor rule), without the board learning who |
+| Basename | **(kitchen, week, slot)** for taking swapped shifts: a worker's first few swaps a week are unlinkable; more are linked, so a labor rule (no one takes on too many) is a review of linked requests, not a refusal. A weekly check-in under (kitchen, week) counts who worked |
 | Clock | The kitchen's own ticks; a shift's start is a wall-clock check |
 | Checks | A worker takes a swapped shift only from a key with a staff ticket; payroll pays the key that holds the shift token at its start, and never a key with evidence against it |
 | Loss | A lost phone: the scheduler remints the shift, layered on a lineage coin per shift; proof is the staff roll credential, under the (kitchen, week) pseudonym |

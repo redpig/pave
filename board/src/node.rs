@@ -34,8 +34,9 @@ pub const PREFETCH: usize = 8;
 pub const GROUPS: u32 = 4096;
 /// Most credentials one ticket request may name.
 pub const MAX_BATCH: usize = 16;
-/// Most ticket requests one wallet may make per epoch.
-pub const BATCHES_PER_EPOCH: usize = 2;
+/// Ticket requests one wallet makes per epoch that can't be linked to each
+/// other. More are served, each linked to an earlier one (see [`crate::slots`]).
+pub const REFILL_SLOTS: u32 = 4;
 
 /// A class of wallet: a kind of device or level of assurance. Each class has
 /// its own network-access issuer, so a wallet's requests show its class and
@@ -84,20 +85,18 @@ pub struct Operator {
     /// Every group revoked so far, with the epoch it was revoked in;
     /// revocation is cumulative.
     pub revoked: BTreeMap<u32, u32>,
-    /// Ticket requests this epoch, by request pseudonym, for the rate limit.
-    pub asked: BTreeMap<Vec<u8>, usize>,
-    pub asked_epoch: u32,
+    /// Ticket request pseudonyms this epoch, to see which are linked.
+    #[serde(default)]
+    pub refills: crate::slots::Seen,
     /// Dispatches this operator runs. See [`crate::dispatch`].
     #[serde(default)]
     pub dispatches: BTreeMap<Hash, crate::dispatch::Book>,
     /// Elections this operator runs. See [`crate::election`].
     #[serde(default)]
     pub elections: BTreeMap<Hash, crate::election::Authority>,
-    /// Post token requests this epoch, by request pseudonym.
+    /// Post token request pseudonyms this epoch, to see which are linked.
     #[serde(default)]
-    pub tokens_asked: BTreeMap<Vec<u8>, usize>,
-    #[serde(default)]
-    pub tokens_epoch: u32,
+    pub tokens: crate::slots::Seen,
     /// Swaps waiting out their hold.
     pub held: Vec<crate::swap::Held>,
     pub root: HolderKey,
@@ -146,6 +145,7 @@ pub struct RefillTerms {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RefillRequest {
     pub epoch: u32,
+    pub slot: u32,
     pub creds: Vec<Credential>,
     pub standing: Vec<Standing>,
     pub access: Credential,
@@ -210,6 +210,8 @@ pub struct Saved {
     pub labels: Vec<(Hash, String)>,
     #[serde(default)]
     pub shift_keys: Vec<Credential>,
+    #[serde(default)]
+    pub slots: crate::slots::Slots,
     #[serde(default)]
     pub originals: Vec<(Hash, Hash, serde_bytes::ByteBuf, serde_bytes::ByteBuf)>,
     #[serde(default)]
@@ -291,6 +293,8 @@ pub struct Node {
     pub labels: BTreeMap<Hash, String>,
     /// Shift keys from a dispatch, not yet used. See [`crate::dispatch`].
     pub shift_keys: Vec<Credential>,
+    /// The next request slot per mint and period. See [`crate::slots`].
+    pub slots: crate::slots::Slots,
     /// Originals this wallet committed to, by commitment: subject, salt, original.
     pub originals: BTreeMap<Hash, (Hash, Vec<u8>, Vec<u8>)>,
     /// The commitment of each parcel this wallet dropped.
@@ -335,9 +339,9 @@ pub(crate) fn op_recipients(op: &Op) -> Vec<&Credential> {
     }
 }
 
-/// The basename a ticket request is signed with: one per clerk epoch.
-pub fn refill_basename(sequence: &Hash, epoch: u32) -> Vec<u8> {
-    pave_kernel::hash::encode(&("pave/ticket-request/v0", sequence, epoch))
+/// The basename a ticket request is signed with: one per slot per clerk epoch.
+pub fn refill_basename(sequence: &Hash, epoch: u32, slot: u32) -> Vec<u8> {
+    crate::slots::basename("pave/ticket-request/v1", sequence, epoch as u64, slot)
 }
 
 /// The bytes a ticket request signs.
@@ -409,10 +413,8 @@ impl Node {
             closed: BTreeSet::new(),
             groups: BTreeMap::new(),
             revoked: BTreeMap::new(),
-            asked: BTreeMap::new(),
-            asked_epoch: 0,
-            tokens_asked: BTreeMap::new(),
-            tokens_epoch: 0,
+            refills: Default::default(),
+            tokens: Default::default(),
             elections: BTreeMap::new(),
             dispatches: BTreeMap::new(),
             held: vec![],
@@ -452,6 +454,7 @@ impl Node {
             codes: BTreeMap::new(),
             labels: BTreeMap::new(),
             shift_keys: vec![],
+            slots: Default::default(),
             originals: BTreeMap::new(),
             drop_photos: BTreeMap::new(),
             evidence_out: vec![],
@@ -589,6 +592,7 @@ impl Node {
             codes: BTreeMap::new(),
             labels: BTreeMap::new(),
             shift_keys: vec![],
+            slots: Default::default(),
             originals: BTreeMap::new(),
             drop_photos: BTreeMap::new(),
             evidence_out: vec![],
@@ -655,6 +659,7 @@ impl Node {
             codes: saved.codes.into_iter().collect(),
             labels: saved.labels.into_iter().collect(),
             shift_keys: saved.shift_keys,
+            slots: saved.slots,
             originals: saved.originals.into_iter().map(|(c, sub, s, b)| (c, (sub, s.into_vec(), b.into_vec()))).collect(),
             drop_photos: saved.drop_photos.into_iter().collect(),
             evidence_out: saved.evidence_out,
@@ -718,6 +723,7 @@ impl Node {
             codes: self.codes.iter().map(|(p, c)| (*p, c.clone())).collect(),
             labels: self.labels.iter().map(|(p, c)| (*p, c.clone())).collect(),
             shift_keys: self.shift_keys.clone(),
+            slots: self.slots.clone(),
             originals: self.originals.iter().map(|(c, (sub, s, b))| (*c, *sub, serde_bytes::ByteBuf::from(s.clone()), serde_bytes::ByteBuf::from(b.clone()))).collect(),
             drop_photos: self.drop_photos.iter().map(|(p, c)| (*p, *c)).collect(),
             evidence_out: self.evidence_out.clone(),
@@ -892,7 +898,8 @@ impl Node {
     /// Ask for `count` more tickets, anonymously: fresh credentials, each
     /// with standing against every cheat the clerk knows of, signed with a
     /// fresh randomization of this wallet's access credential.
-    pub fn refill_request(&self, terms: &RefillTerms, count: usize) -> Result<RefillRequest, String> {
+    pub fn refill_request(&mut self, terms: &RefillTerms, count: usize) -> Result<RefillRequest, String> {
+        let slot = self.slots.take(&self.town.sequence, terms.epoch as u64, REFILL_SLOTS);
         let s = self.scheme();
         let creds: Vec<Credential> = (0..count).map(|_| s.credential(&self.key)).collect();
         let standing = creds
@@ -901,14 +908,16 @@ impl Node {
             .collect::<Result<Vec<_>, _>>()?;
         let a = BrioletteV1 { group_public_key: self.town.classes[&self.class].group_public_key.clone() };
         let access = a.credential(&self.access);
-        let bsn = refill_basename(&self.town.sequence, terms.epoch);
+        let bsn = refill_basename(&self.town.sequence, terms.epoch, slot);
         let sig = a.sign(&self.access, &access, &refill_bytes(terms.epoch, &creds, &standing), Some(&bsn));
-        Ok(RefillRequest { epoch: terms.epoch, creds, standing, access, sig })
+        Ok(RefillRequest { epoch: terms.epoch, slot, creds, standing, access, sig })
     }
 
     /// Operator: answer an anonymous ticket request. The access signature
-    /// shows the class; its pseudonym, fixed per epoch, counts requests;
-    /// standing keeps known cheats out; each batch gets a fresh random group.
+    /// shows the class; its pseudonym is fresh for each of a wallet's first
+    /// [`REFILL_SLOTS`] requests an epoch, and links any later one to an
+    /// earlier; standing keeps known cheats out; each batch gets a fresh
+    /// random group.
     pub fn answer_refill(&mut self, req: &RefillRequest) -> Result<Vec<SignedTicket>, String> {
         let terms = self.refill_terms()?;
         if req.epoch != terms.epoch {
@@ -917,8 +926,11 @@ impl Node {
         if req.creds.is_empty() || req.creds.len() > MAX_BATCH || req.standing.len() != req.creds.len() {
             return Err(format!("ask for 1 to {MAX_BATCH} tickets, each with standing"));
         }
+        if req.slot >= REFILL_SLOTS {
+            return Err(format!("slots are 0 to {}", REFILL_SLOTS - 1));
+        }
         let msg = refill_bytes(req.epoch, &req.creds, &req.standing);
-        let bsn = refill_basename(&self.town.sequence, req.epoch);
+        let bsn = refill_basename(&self.town.sequence, req.epoch, req.slot);
         let class = self
             .town
             .classes
@@ -937,15 +949,7 @@ impl Node {
         if op.closed.contains(&class) {
             return Err(format!("class {class} is closed: update the wallet and enroll again"));
         }
-        if op.asked_epoch != req.epoch {
-            op.asked.clear();
-            op.asked_epoch = req.epoch;
-        }
-        let n = op.asked.entry(nym).or_default();
-        if *n >= BATCHES_PER_EPOCH {
-            return Err(format!("at most {BATCHES_PER_EPOCH} ticket requests per epoch"));
-        }
-        *n += 1;
+        op.refills.note(req.epoch as u64, nym);
         Ok(self.issue_tickets(&req.creds, &class)?.1)
     }
 

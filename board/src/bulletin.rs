@@ -8,8 +8,10 @@
 //! - **A board mint is a clerk.** It holds a capability to issue post
 //!   tokens, derived from the town's root. A wallet asks it for tokens the
 //!   way it asks for tickets: anonymously, signed with a fresh randomization
-//!   of its access credential, with (sequence, epoch) as basename, so the
-//!   mint can rate-limit it and learns nothing else. The mint issues a ticket
+//!   of its access credential, with (sequence, epoch, slot) as basename, so
+//!   a wallet's first few requests an epoch can't be linked to each other
+//!   and later ones are linked to earlier ones (see [`crate::slots`]); the
+//!   mint learns nothing else. The mint issues a ticket
 //!   for each credential and mints one token to it.
 //! - **A post spends a token.** It is a `Transfer` of the token to a board
 //!   server, signed by the credential holding it, whose receipt is the hash
@@ -70,8 +72,9 @@ pub type Cheat = (Vec<u8>, Vec<u8>);
 pub const MAX_CONTENT: usize = 64 * 1024;
 /// Most credentials in one token request.
 pub const MAX_TOKENS: usize = 16;
-/// Token requests one access pseudonym may make per epoch.
-pub const TOKEN_REQUESTS_PER_EPOCH: usize = 32;
+/// Token requests a wallet makes per epoch that can't be linked to each
+/// other. More are served, each linked to an earlier one (see [`crate::slots`]).
+pub const TOKEN_SLOTS: u32 = 8;
 /// How far a post's clock may be from the server's when it arrives, in
 /// seconds: the clock is the one the server proposed for it.
 pub const CLOCK_SLACK: u64 = 600;
@@ -163,9 +166,9 @@ pub fn count_basename(purpose: &Hash) -> Vec<u8> {
     encode(&("pave/board/count/v1", purpose))
 }
 
-/// The basename a token request is signed with: one per mint epoch.
-pub fn token_basename(sequence: &Hash, epoch: u32) -> Vec<u8> {
-    encode(&("pave/board/tokens/v1", sequence, epoch))
+/// The basename a token request is signed with: one per slot per mint epoch.
+pub fn token_basename(sequence: &Hash, epoch: u32, slot: u32) -> Vec<u8> {
+    crate::slots::basename("pave/board/tokens/v2", sequence, epoch as u64, slot)
 }
 
 fn token_bytes(epoch: u32, creds: &[Credential], standing: &[Standing], purpose: &Option<Hash>, access_standing: &Standing) -> Vec<u8> {
@@ -242,6 +245,7 @@ pub struct TokenTerms {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TokenRequest {
     pub epoch: u32,
+    pub slot: u32,
     /// The credentials to post as, one token each (repeat one for more).
     pub creds: Vec<Credential>,
     pub standing: Vec<Standing>,
@@ -542,7 +546,8 @@ impl Node {
 
     /// Ask for a token for each of `creds`, anonymously, counted for
     /// `purpose` if given.
-    pub fn token_request(&self, terms: &TokenTerms, creds: &[Credential], purpose: Option<Hash>) -> Result<TokenRequest, String> {
+    pub fn token_request(&mut self, terms: &TokenTerms, creds: &[Credential], purpose: Option<Hash>) -> Result<TokenRequest, String> {
+        let slot = self.slots.take(&self.town.post_mint.output(0), terms.epoch as u64, TOKEN_SLOTS);
         let s = self.view.scheme();
         let standing = creds
             .iter()
@@ -552,13 +557,14 @@ impl Node {
         let access = a.credential(&self.access);
         let access_standing = Standing::prove(&a, &self.access, &access, &terms.ruled).ok_or("a board ruled this wallet out")?;
         let msg = token_bytes(terms.epoch, creds, &standing, &purpose, &access_standing);
-        let sig = a.sign(&self.access, &access, &msg, Some(&token_basename(&self.town.sequence, terms.epoch)));
+        let sig = a.sign(&self.access, &access, &msg, Some(&token_basename(&self.town.sequence, terms.epoch, slot)));
         let count_sig = purpose.map(|p| a.sign(&self.access, &access, &msg, Some(&count_basename(&p))));
-        Ok(TokenRequest { epoch: terms.epoch, creds: creds.to_vec(), standing, purpose, access, access_standing, sig, count_sig })
+        Ok(TokenRequest { epoch: terms.epoch, slot, creds: creds.to_vec(), standing, purpose, access, access_standing, sig, count_sig })
     }
 
     /// Mint: answer an anonymous token request. The access signature shows
-    /// the class; its pseudonym, fixed per epoch, counts requests; standing
+    /// the class; its pseudonym is fresh per slot, and links a request past
+    /// the slots to an earlier one; standing
     /// keeps double spenders' credentials and ruled authors out; a purpose
     /// signature gives the tickets a tag.
     pub fn answer_tokens(&mut self, req: &TokenRequest) -> Result<TokenGrant, String> {
@@ -569,8 +575,11 @@ impl Node {
         if req.creds.is_empty() || req.creds.len() > MAX_TOKENS || req.standing.len() != req.creds.len() {
             return Err(format!("ask for 1 to {MAX_TOKENS} tokens, each with standing"));
         }
+        if req.slot >= TOKEN_SLOTS {
+            return Err(format!("slots are 0 to {}", TOKEN_SLOTS - 1));
+        }
         let msg = token_bytes(req.epoch, &req.creds, &req.standing, &req.purpose, &req.access_standing);
-        let bsn = token_basename(&self.town.sequence, req.epoch);
+        let bsn = token_basename(&self.town.sequence, req.epoch, req.slot);
         let (class, a) = self
             .town
             .classes
@@ -598,15 +607,7 @@ impl Node {
         if op.closed.contains(&class) {
             return Err(format!("class {class} is closed: update the wallet and enroll again"));
         }
-        if op.tokens_epoch != req.epoch {
-            op.tokens_asked.clear();
-            op.tokens_epoch = req.epoch;
-        }
-        let n = op.tokens_asked.entry(nym).or_default();
-        if *n >= TOKEN_REQUESTS_PER_EPOCH {
-            return Err(format!("at most {TOKEN_REQUESTS_PER_EPOCH} token requests per epoch"));
-        }
-        *n += 1;
+        op.tokens.note(req.epoch as u64, nym);
         self.mint_tokens(&req.creds, &class, tag)
     }
 

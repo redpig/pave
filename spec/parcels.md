@@ -18,10 +18,11 @@ The prototype is [`board/src/parcel.rs`](../board/src/parcel.rs), with a test in
 
 ## Dispatch
 
-A co-op that carries parcels can run a dispatch ([`board/src/dispatch.rs`](../board/src/dispatch.rs)), named in the manifest before the first handoff. It is a mint of tickets, like the town's clerk, with three choices of its own:
+A co-op that carries parcels can run a dispatch ([`board/src/dispatch.rs`](../board/src/dispatch.rs)), named in the manifest before the first handoff. It is the town's own layering one level down: a roll like a class, a daily credential like an access credential, and shift-key requests like refills.
 
 - **Members are an issuer group.** Joining is a join on a key the member's device made.
-- **The basename is (dispatch, day).** A courier asks for shift keys with a fresh randomization of its member credential under that basename. The pseudonym is the same for a member all day and unrelated across days, so dispatch caps keys per member per day and counts distinct couriers without learning who anyone is. Shift tickets carry the pseudonym and day as a tag.
+- **Checking in is the count.** Each day dispatch runs a fresh issuer group. A member checks in by joining it, the join signed by its member credential with (dispatch, day) as basename. That pseudonym is the same for a member all day and unrelated across days, so dispatch counts distinct couriers without learning who anyone is, and a second check-in the same day (a new phone) is linked and counted once. The day credential is the courier's daily credential.
+- **Shift keys are slotted refills.** A courier asks for tickets for the keys it will take parcels under, signed twice: by its member credential with (dispatch, day, slot) as basename, and by its day credential with no basename. A courier's first 4 requests a day can't be linked to each other; each later one is served and linked to an earlier one. The day signature shows the courier checked in today and links nothing. Shift tickets carry the request's pseudonym and the day as a tag.
 - **Its own ticks.** Dispatch signs shift tickets on its own tick sequence, and revokes on it.
 
 Membership is enforced where custody moves:
@@ -32,7 +33,7 @@ Membership is enforced where custody moves:
 | Take | The usual coin checks with the dispatch's clerk also trusted, which refuses a revoked key; the take goes to one of the courier's shift keys |
 | Pay | Only couriers at shift keys are paid |
 
-**Bans outlast the day.** A day pseudonym can't carry a ban to the next day, so a ruling puts the courier's (basename, pseudonym) on dispatch's ruled list. Every later shift request needs standing of the member credential against it, which the ruled courier can't produce. The ruling also revokes that day's groups on dispatch's ticks, so nobody takes a parcel from those keys and they take nothing.
+**Bans outlast the day.** A ruling puts the (basename, pseudonym) of the request the courier's key came from on dispatch's ruled list. Both check-ins and shift requests are signed by the member credential, so every later one needs its standing against the list, on any day and under any slot, which the ruled courier can't produce. The ruling also revokes that request's group on dispatch's ticks, so nobody takes a parcel from those keys and they take nothing. Keys from the courier's other requests that day are unlinkable to the ruled one and keep working until they're used.
 
 ## Lost phones
 

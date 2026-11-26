@@ -159,16 +159,25 @@ fn the_whole_story_on_ecdaa() {
     let no_standing = Policy { require_standing: false, ..alice.policy() };
     assert!(matches!(check(&alice.view, &alice.know, &paid_alice, &carol_cred, &no_standing), Err(Refusal::Revoked { group, .. }) if group == carol.group));
 
-    // Refills are anonymous and rate-limited per epoch by the request's
-    // pseudonym; each batch gets a fresh random group.
+    // Refills are anonymous, each batch in a fresh random group. A wallet's
+    // first REFILL_SLOTS requests an epoch can't be linked to each other;
+    // later ones are served and linked to an earlier one, never refused for
+    // a count.
     let terms = town.refill_terms().unwrap();
+    let linked = |t: &Node| t.operator.as_ref().unwrap().refills.linked();
+    let before = linked(&town);
     let req = bob.refill_request(&terms, 4).unwrap();
     let t = town.answer_refill(&req).unwrap();
     assert_eq!(bob.take_tickets(t), 4);
+    for _ in 1..pave_board::node::REFILL_SLOTS {
+        assert!(town.answer_refill(&bob.refill_request(&terms, 4).unwrap()).is_ok());
+    }
+    assert_eq!(linked(&town), before, "within the slots: unlinked");
     assert!(town.answer_refill(&bob.refill_request(&terms, 4).unwrap()).is_ok());
-    let third = town.answer_refill(&bob.refill_request(&terms, 4).unwrap());
-    assert!(third.unwrap_err().contains("per epoch"), "the third this epoch is refused");
-    assert!(town.answer_refill(&req).is_err(), "a replay counts too");
+    assert_eq!(linked(&town), before + 1, "past them: served, and linked");
+    let mut bad = bob.refill_request(&terms, 1).unwrap();
+    bad.slot = pave_board::node::REFILL_SLOTS;
+    assert!(town.answer_refill(&bad).unwrap_err().contains("slots"));
     assert!(town.answer_refill(&alice.refill_request(&terms, 4).unwrap()).is_ok(), "others aren't affected");
 
     // The cheat can't get tickets: no standing against the clerk's evidence.
