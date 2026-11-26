@@ -10,6 +10,7 @@
 //! - [`dispute`]: disputes as jobs, with appeals and arbiter reputation
 //! - [`evidence`]: evidence for dispute panels, held by the host and shown only to the panel
 //! - [`media`]: image metadata: which kinds a picture carries, and a copy without them
+//! - [`nac`]: the network access gate every exposed service asks for
 //! - [`parcel`]: packages, with custody as a coin from shipper to addressee
 //! - [`pay`]: the payment handshake, sending only what a payment needs
 //! - [`swap`]: old coins in, fresh coins out
@@ -20,6 +21,7 @@ pub mod bulletin;
 pub mod dispute;
 pub mod evidence;
 pub mod media;
+pub mod nac;
 pub mod net;
 pub mod node;
 pub mod parcel;

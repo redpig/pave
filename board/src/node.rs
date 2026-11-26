@@ -275,6 +275,11 @@ pub struct Node {
     pub evidence_out: Vec<crate::evidence::Sealed>,
     /// Host: evidence held for panels, by subject.
     pub held_evidence: BTreeMap<Hash, Vec<crate::evidence::Sealed>>,
+    /// The network access gate: connections per (epoch, pseudonym), barred
+    /// pseudonyms, and the limit. Not saved.
+    pub nac_seen: BTreeMap<(u32, Vec<u8>), u32>,
+    pub nac_barred: BTreeSet<(u32, Vec<u8>)>,
+    pub nac_limit: u32,
 }
 
 fn cash_schema() -> Schema {
@@ -416,6 +421,9 @@ impl Node {
             drop_photos: BTreeMap::new(),
             evidence_out: vec![],
             held_evidence: BTreeMap::new(),
+            nac_seen: BTreeMap::new(),
+            nac_barred: BTreeSet::new(),
+            nac_limit: crate::nac::NAC_LIMIT,
             vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(path)?)),
         };
         node.open_boards()?;
@@ -543,6 +551,9 @@ impl Node {
             drop_photos: BTreeMap::new(),
             evidence_out: vec![],
             held_evidence: BTreeMap::new(),
+            nac_seen: BTreeMap::new(),
+            nac_barred: BTreeSet::new(),
+            nac_limit: crate::nac::NAC_LIMIT,
             vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(out)?)),
         };
         for c in &e.creds {
@@ -607,6 +618,9 @@ impl Node {
                 m.entry(e.subject).or_insert_with(Vec::new).push(e);
                 m
             }),
+            nac_seen: BTreeMap::new(),
+            nac_barred: BTreeSet::new(),
+            nac_limit: crate::nac::NAC_LIMIT,
             vault: std::sync::Mutex::new(vault),
         };
         node.absorb_bundle(&Bundle {

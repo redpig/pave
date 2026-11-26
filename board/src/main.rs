@@ -462,10 +462,12 @@ fn run(state: PathBuf, listen: String) {
         std::process::exit(1)
     });
     let srv = node.clone();
+    // Clients name this service by the address they dial.
+    let service = listen.clone();
     std::thread::spawn(move || {
         for conn in listener.incoming().flatten() {
-            let n = srv.clone();
-            std::thread::spawn(move || net::serve_peer(n, conn));
+            let (n, service) = (srv.clone(), service.clone());
+            std::thread::spawn(move || net::serve_peer(n, conn, &service));
         }
     });
     let (name, group) = {

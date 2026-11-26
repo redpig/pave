@@ -231,7 +231,7 @@ We do not assume that any role behaves well (principle 10), that devices are tam
 | P1 | An eavesdropper links IP addresses to people's activity | An encrypted channel with no long-term identity (Noise NN), so unlinkability holds | n/a | Server-authenticated TLS, not mutual TLS (audit C-1) | Gap: plaintext TCP |
 | P2 | Someone in the middle alters messages | Everything that matters is signed | They can still drop or delay | Same | Built; Gap: channel integrity |
 | P3 | Malformed frames | 64 MiB cap; typed decode | n/a | Rate limits | Partial; Gap: smaller caps and a per-message-type limit |
-| P4 | Resource exhaustion of a node | Connection and rate limits | n/a | IP token bucket (audit M-6) | Gap |
+| P4 | Resource exhaustion of a node | Every exposed service asks for a network access credential first: a basename signature with (service, epoch), counted per pseudonym per epoch | Bar a pseudonym from a service for the epoch; revoke a class | IP token bucket (audit M-6) | Built (`board/src/nac.rs`: every connection, 4096 per pseudonym per service per epoch). Gap: work before the gate (the TCP accept and one frame) is unbounded, enrolled Sybils each get their own limit (R1), and a server can hold a client that's behind at an invented future epoch until the challenge carries the signed epoch head |
 | P5 | A peer learns a wallet's whole history | Payments send only the paid coin's provenance; enrollment sends a new member only its own coins' provenance, the epoch sequence and the board | n/a | Tokens carry only their own history | Built for payments and enrollment. A `meet` is still a full sync, for peers a holder chooses (its own devices, the town); incremental, but not private |
 
 ---

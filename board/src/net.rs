@@ -56,11 +56,28 @@ pub enum Wire {
     Posted(Box<PostReceipt>),
     Fetch { scope: Hash, have: std::collections::BTreeSet<Prefix> },
     Posts(Vec<Submission>),
+    /// The network access gate: the server's challenge and the client's answer.
+    Challenge(crate::nac::Challenge),
+    Nac(Box<crate::nac::NacProof>),
     /// Evidence for the host to hold, and a panelist asking for it.
     Evidence(Box<crate::evidence::Sealed>),
     Kept,
     AskEvidence(Box<crate::evidence::Ask>),
     EvidenceList(Vec<crate::evidence::Sealed>),
+}
+
+/// Dial a service at `addr` and pass its network access gate, naming the
+/// service by the address dialed.
+pub fn connect(node: &Arc<Mutex<Node>>, addr: &str) -> std::io::Result<TcpStream> {
+    let mut s = TcpStream::connect(addr)?;
+    match read_msg(&mut s)?.0 {
+        Wire::Challenge(c) => {
+            let p = node.lock().unwrap().nac_prove(addr, &c).map_err(std::io::Error::other)?;
+            write_msg(&mut s, &Wire::Nac(Box::new(p)))?;
+            Ok(s)
+        }
+        _ => Err(std::io::Error::other("the service didn't open with a challenge")),
+    }
 }
 
 pub fn write_msg(s: &mut TcpStream, m: &Wire) -> std::io::Result<usize> {
@@ -84,7 +101,19 @@ pub fn read_msg(s: &mut TcpStream) -> std::io::Result<(Wire, usize)> {
 }
 
 /// Serve one peer connection.
-pub fn serve_peer(node: Arc<Mutex<Node>>, mut s: TcpStream) -> std::io::Result<()> {
+/// Serve one connection to this node's `service` (the name clients dial),
+/// starting with the network access gate (see [`crate::nac`]).
+pub fn serve_peer(node: Arc<Mutex<Node>>, mut s: TcpStream, service: &str) -> std::io::Result<()> {
+    let c = node.lock().unwrap().nac_challenge();
+    write_msg(&mut s, &Wire::Challenge(c.clone()))?;
+    let admitted = match read_msg(&mut s)?.0 {
+        Wire::Nac(p) => node.lock().unwrap().nac_admit(service, &c, &p),
+        _ => Err("a network access credential first".into()),
+    };
+    if let Err(e) = admitted {
+        write_msg(&mut s, &Wire::Refused(e))?;
+        return Ok(());
+    }
     let mut peer_have: Option<Have> = None;
     loop {
         let (msg, _) = match read_msg(&mut s) {
@@ -162,7 +191,7 @@ pub fn serve_peer(node: Arc<Mutex<Node>>, mut s: TcpStream) -> std::io::Result<(
                     Ok(list) => Wire::EvidenceList(list),
                     Err(e) => Wire::Refused(e),
                 },
-                Wire::RefillTerms(_) | Wire::Tickets(_) | Wire::Refused(_) | Wire::Quote(_) | Wire::Swapped(_) | Wire::Invoice(_) | Wire::Lacks(_) | Wire::Verdict(_) | Wire::Ack(_) | Wire::Posted(_) | Wire::Posts(_) | Wire::Kept | Wire::EvidenceList(_) => {
+                Wire::RefillTerms(_) | Wire::Tickets(_) | Wire::Refused(_) | Wire::Quote(_) | Wire::Swapped(_) | Wire::Invoice(_) | Wire::Lacks(_) | Wire::Verdict(_) | Wire::Ack(_) | Wire::Posted(_) | Wire::Posts(_) | Wire::Kept | Wire::EvidenceList(_) | Wire::Challenge(_) | Wire::Nac(_) => {
                     Wire::Refused("unexpected".into())
                 }
                 Wire::Standing(v) => {
@@ -179,7 +208,7 @@ pub fn serve_peer(node: Arc<Mutex<Node>>, mut s: TcpStream) -> std::io::Result<(
 
 /// Meet a peer: swap bundles. Returns states with new evidence here.
 pub fn meet(node: &Arc<Mutex<Node>>, addr: &str) -> std::io::Result<(Vec<pave_kernel::Hash>, usize)> {
-    let mut s = TcpStream::connect(addr)?;
+    let mut s = connect(node, addr)?;
     // Summaries first, then only what each side lacks.
     let have = node.lock().unwrap().have();
     let sent0 = write_msg(&mut s, &Wire::Have(Box::new(have)))?;
@@ -211,7 +240,7 @@ pub fn meet(node: &Arc<Mutex<Node>>, addr: &str) -> std::io::Result<(Vec<pave_ke
 
 /// Two-tier gossip with a peer. Returns (compressed bytes each way, extended bytes received, wants sent).
 pub fn gossip_with(node: &Arc<Mutex<Node>>, addr: &str) -> std::io::Result<(usize, usize, usize)> {
-    let mut s = TcpStream::connect(addr)?;
+    let mut s = connect(node, addr)?;
     let my_hints = {
         let n = node.lock().unwrap();
         gossip::hints(&n.view, &n.know, &n.carries())
@@ -246,7 +275,7 @@ pub fn gossip_with(node: &Arc<Mutex<Node>>, addr: &str) -> std::io::Result<(usiz
 /// Refill this wallet's ticket pool from the town, anonymously. Returns
 /// tickets received.
 pub fn refill(node: &Arc<Mutex<Node>>, addr: &str, count: usize) -> std::io::Result<usize> {
-    let mut s = TcpStream::connect(addr)?;
+    let mut s = connect(node, addr)?;
     write_msg(&mut s, &Wire::RefillAsk)?;
     let terms = match read_msg(&mut s)?.0 {
         Wire::RefillTerms(t) => t,
@@ -282,7 +311,7 @@ fn ask(s: &mut TcpStream, m: &Wire) -> std::io::Result<Wire> {
 
 /// Swap the coin at `state` with the town: a quote first, then the transfer.
 pub fn swap(node: &Arc<Mutex<Node>>, addr: &str, state: Hash) -> std::io::Result<SwapResult> {
-    let mut s = TcpStream::connect(addr)?;
+    let mut s = connect(node, addr)?;
     let mut cheats = pave_protocol::cheat_list(&node.lock().unwrap().view);
     let quote = loop {
         let req = node.lock().unwrap().quote_request(state, &cheats).map_err(std::io::Error::other)?;
@@ -300,7 +329,7 @@ pub fn swap(node: &Arc<Mutex<Node>>, addr: &str, state: Hash) -> std::io::Result
 
 /// Collect every swap this wallet is owed whose hold is over.
 pub fn collect(node: &Arc<Mutex<Node>>, addr: &str) -> std::io::Result<Vec<SwapResult>> {
-    let mut s = TcpStream::connect(addr)?;
+    let mut s = connect(node, addr)?;
     let owed = node.lock().unwrap().swaps_held.clone();
     let mut out = vec![];
     for to in owed {
@@ -350,7 +379,7 @@ pub fn pay(node: &Arc<Mutex<Node>>, addr: &str, amount: u64, memo: &str) -> std:
     // Agree on epochs first: two-tier gossip, usually one packet each way.
     let (c, e, _) = gossip_with(node, addr)?;
     r.steps.push(("gossip", 2 * c + e));
-    let mut s = TcpStream::connect(addr)?;
+    let mut s = connect(node, addr)?;
     let refuse = |r: &mut PayReport, why: String| {
         r.refused = Some(why);
     };
@@ -401,7 +430,7 @@ pub fn pay(node: &Arc<Mutex<Node>>, addr: &str, amount: u64, memo: &str) -> std:
 /// Resend every payment still waiting for its acknowledgment.
 pub fn resume(node: &Arc<Mutex<Node>>, addr: &str) -> std::io::Result<usize> {
     let pending = node.lock().unwrap().pending.clone();
-    let mut s = TcpStream::connect(addr)?;
+    let mut s = connect(node, addr)?;
     let mut done = 0;
     for rec in pending {
         if let Wire::Ack(a) = ask(&mut s, &Wire::Payment(Box::new(rec.clone())))? {
@@ -425,7 +454,7 @@ pub struct BoardSync {
 /// node lacks of each of the town's boards. Posts go directly to the host,
 /// as to any website; nothing about them passes through other wallets.
 pub fn sync_boards(node: &Arc<Mutex<Node>>, addr: &str) -> std::io::Result<BoardSync> {
-    let mut s = TcpStream::connect(addr)?;
+    let mut s = connect(node, addr)?;
     let mut out = BoardSync::default();
     let queued = node.lock().unwrap().outgoing.clone();
     for sub in queued {
@@ -471,7 +500,7 @@ pub fn sync_boards(node: &Arc<Mutex<Node>>, addr: &str) -> std::io::Result<Board
 /// Panelist: fetch a subject's evidence from the board's host.
 pub fn fetch_evidence(node: &Arc<Mutex<Node>>, addr: &str, subject: &Hash) -> std::io::Result<Vec<crate::evidence::Sealed>> {
     let ask = node.lock().unwrap().ask_evidence(subject).map_err(std::io::Error::other)?;
-    let mut s = TcpStream::connect(addr)?;
+    let mut s = connect(node, addr)?;
     write_msg(&mut s, &Wire::AskEvidence(Box::new(ask)))?;
     match read_msg(&mut s)?.0 {
         Wire::EvidenceList(list) => Ok(list),
