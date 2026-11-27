@@ -81,6 +81,14 @@
           "param": "address"
         }
       ]
+    },
+    "refund": {
+      "domain": "pave/order/refund/v1",
+      "parts": [
+        {
+          "param": "order"
+        }
+      ]
     }
   },
   "actions": {},

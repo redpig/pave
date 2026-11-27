@@ -166,3 +166,61 @@ fn lifeguards_are_known_before_the_job() {
     assert!(pool.accept_shown(job4, w4, ana.show_known(job4).unwrap()).unwrap_err().contains("revoked"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Post `msg` as `signer` without the wallet's own checks.
+fn raw(n: &mut Node, signer: &pave_kernel::Credential, msg: BoardMsg) {
+    let scope = n.town.jobs.scope;
+    n.compose(&scope, signer, msg.kind(), msg.job(), msg.encode(), None).unwrap();
+}
+
+#[test]
+fn a_no_show_is_released_only_after_due() {
+    let dir = std::env::temp_dir().join(format!("pave-release-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut town = Node::init_town(&dir.join("town"), "test").unwrap();
+    let mut pool = join(&mut town, "pool", &dir, &[100]);
+    let mut bea = join(&mut town, "bea", &dir, &[]);
+    let now = pave_board::bulletin::now();
+
+    // A job due in an hour: the pool can't release Bea before then, and
+    // readers ignore a release posted anyway.
+    let later = pool.post_about("Lifeguard, tomorrow", 40, None, None, Some(now + 3600)).unwrap();
+    // A job that was due a minute ago, which Bea didn't finish; and another
+    // she did.
+    let missed = pool.post_about("Lifeguard, this morning", 40, None, None, Some(now - 60)).unwrap();
+    let finished = pool.post_about("Lifeguard, early shift", 40, None, None, Some(now - 60)).unwrap();
+    sync(&mut town, &mut [&mut pool, &mut bea]);
+    for j in [later, missed, finished] {
+        bea.reply(j, "yes").unwrap();
+    }
+    sync(&mut town, &mut [&mut pool, &mut bea]);
+    for j in [later, missed, finished] {
+        let w = repliers(&pool, &j)[0].clone();
+        pool.accept(j, w).unwrap();
+    }
+    sync(&mut town, &mut [&mut pool, &mut bea]);
+    bea.done(finished).unwrap();
+    sync(&mut town, &mut [&mut pool, &mut bea]);
+
+    assert!(pool.release(later).unwrap_err().contains("not yet past due"));
+    assert!(pool.release(finished).unwrap_err().contains("not Accepted"));
+    let poster = pool.jobs()[&later].poster.clone();
+    raw(&mut pool, &poster, BoardMsg::Release { job: later });
+    let poster = pool.jobs()[&finished].poster.clone();
+    raw(&mut pool, &poster, BoardMsg::Release { job: finished });
+    // Only the poster releases: Bea's own release of the missed job is noise.
+    let w = pool.jobs()[&missed].worker.clone().unwrap();
+    raw(&mut bea, &w, BoardMsg::Release { job: missed });
+    sync(&mut town, &mut [&mut pool, &mut bea]);
+    let status = |n: &Node, j: &Hash| n.jobs()[j].status.clone();
+    assert_eq!((status(&bea, &later), status(&bea, &finished), status(&bea, &missed)), (Status::Accepted, Status::Done, Status::Accepted));
+
+    pool.release(missed).unwrap();
+    sync(&mut town, &mut [&mut pool, &mut bea]);
+    assert_eq!(status(&bea, &missed), Status::Released);
+    // A done after the release doesn't revive it.
+    raw(&mut bea, &w, BoardMsg::Done { job: missed });
+    sync(&mut town, &mut [&mut pool, &mut bea]);
+    assert_eq!(status(&pool, &missed), Status::Released);
+    let _ = std::fs::remove_dir_all(&dir);
+}

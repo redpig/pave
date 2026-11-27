@@ -83,6 +83,7 @@ Kinds: `job`, `reply`, `accept`, `done`, `paid`, with the job as thread.
   - **A badge** (`Badge`): a roster's ticket on that stable key, certifying who is behind it ([food.md](food.md#badges)). A roster is any issuer the poster chooses to rely on: a co-op vetting couriers, a lifeguard certifier, a trade guild, a licensing office. The badge adds what a pseudonym can't: someone answers for the person, so a bad record follows them, and the roster can revoke it. Issued on the worker's existing trade key, it keeps the reputation the key already had.
   
   Whether to ask for either is the poster's call, per job. Pave doesn't decide what is regulated or who may do what; a town with a guild and one without both run on it.
+- **Due time and release.** A job can carry a due time, in board-clock seconds. If the accepted worker hasn't marked it done by then, the poster may post a release; readers honour it only from the poster, only of an accepted job, and only if the board's clock on the release is past due. A job without a due time can't be released, only disputed.
 - **Payment is not a post.** It is an ordinary transfer whose receipt commits to the job, and it moves wallet to wallet like any coin, offline if need be. The board shows the poster's claim that it paid; the coin is the proof.
 
 ### Vouches

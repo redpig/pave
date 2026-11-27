@@ -53,7 +53,13 @@ Each parcel counts once, and each person once however many bags they vouch for. 
 
 A reader also needs the shipper's budget history to check a bag's mint. It travels like any record; a reader without it doesn't count the vouch yet.
 
+## No-shows and refunds
+
+- **No-show.** A delivery job carries a pickup deadline (`due`). If the courier the co-op accepted hasn't taken the bag by then, the co-op releases the job and offers the bag again. Readers honour a release only from the poster, only of an accepted job, and only if the board's clock on the release is past due, so a courier keeps the job until then. A done posted after the release doesn't revive it.
+- **Took it, didn't deliver.** Then the bag is on the courier's badge key, and the co-op's wallet refuses to release: it's a dispute, with the custody chain as evidence, against a courier the co-op can name.
+- **Refund.** The restaurant pays the customer back with the order profile's `refund` receipt, a hash of the order binding. The customer's wallet adds up what it received against it. When to refund (a broken seal, a late bag, one that never came) is the restaurant's call, or a ruling's.
+
 ## Still to build
 
 - **Badge renewal.** A badge lasts until revoked. A co-op would re-issue after re-vetting, on a period of its choosing.
-- **Re-offering after a no-show**: today a second offer leaves the bag unassigned; closing the first job is not built. **Refunds**; **a real adapter**; **the host app**: as in [orders.md](orders.md).
+- **A real adapter** and **the host app**: as in [orders.md](orders.md).

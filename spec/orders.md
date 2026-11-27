@@ -32,6 +32,6 @@ Nothing new in the kernel, and the order profile itself is one layout and two re
 
 - **Offering the delivery.** Built as a job for badged couriers: see [food.md](food.md#the-flow).
 - **The address, only to the courier carrying it.** Built as a commitment: the binding carries a salted hash, and the restaurant gives the badged courier the address and salt at pickup. Sending it sealed to the badge key instead, as evidence is sealed to a panel, is not built.
-- **Refunds and no-shows.** Payment goes to the restaurant up front. If the order is never delivered, the refund is the restaurant's payment back, or a dispute. A courier who takes a parcel and doesn't deliver is a dispute with the custody chain as evidence.
+- **Refunds and no-shows.** Built ([food.md](food.md#no-shows-and-refunds)): a courier who doesn't pick up by the deadline is released and the bag offered again; one who took it and didn't deliver is a dispute with the custody chain as evidence; the restaurant refunds with the profile's `refund` receipt.
 - **A real adapter.** The test's adapter maps custody to "READY", "PICKED_UP" and "DELIVERED". A real one polls the restaurant's system and writes those statuses back.
 - **The customer's side.** A host app that confirms delivery by NFC or QR at the door ([web.md](web.md)).

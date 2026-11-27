@@ -1009,23 +1009,24 @@ impl Node {
     /// Post a job under a fresh credential, with a zero-value split of a coin
     /// covering the pay as proof of means, committing to the terms.
     pub fn post(&mut self, title: &str, pay: u64) -> Result<Hash, String> {
-        self.post_about(title, pay, None, None)
+        self.post_about(title, pay, None, None, None)
     }
 
     /// As [`Node::post`], for a job whose worker must be known as `known`
     /// says. Replies stay anonymous; the one accepted shows its key.
     pub fn post_known(&mut self, title: &str, pay: u64, known: board::Known) -> Result<Hash, String> {
-        self.post_about(title, pay, Some(known), None)
+        self.post_about(title, pay, Some(known), None, None)
     }
 
-    /// Post a job, saying how its worker must be known and what it is about.
-    pub fn post_about(&mut self, title: &str, pay: u64, known: Option<board::Known>, about: Option<Hash>) -> Result<Hash, String> {
+    /// Post a job, saying how its worker must be known, what it is about,
+    /// and by when (board-clock seconds) the worker must finish.
+    pub fn post_about(&mut self, title: &str, pay: u64, known: Option<board::Known>, about: Option<Hash>, due: Option<u64>) -> Result<Hash, String> {
         let poster = self.fresh()?;
-        self.post_as(poster, title, pay, known, about)
+        self.post_as(poster, title, pay, known, about, due)
     }
 
     /// Post a job under `poster`, a key of this wallet's.
-    pub(crate) fn post_as(&mut self, poster: Credential, title: &str, pay: u64, known: Option<board::Known>, about: Option<Hash>) -> Result<Hash, String> {
+    pub(crate) fn post_as(&mut self, poster: Credential, title: &str, pay: u64, known: Option<board::Known>, about: Option<Hash>, due: Option<u64>) -> Result<Hash, String> {
         let coin = self.my_coins().into_iter().find(|c| c.amount >= pay).ok_or("no single coin covers the pay")?;
         let terms = Receipt::Node(vec![
             ("public".into(), Receipt::leaf(format!("{title} | pay {pay}").into_bytes())),
@@ -1033,7 +1034,7 @@ impl Node {
         ]);
         let proof = self.signed(&coin.holder, Op::Split { state: coin.state, parts: vec![(coin.amount, poster.clone()), (0, poster.clone())], receipt: terms.root() })?;
         apply_ok(&mut self.view, &proof)?;
-        self.send_as(&poster, BoardMsg::Post { title: title.into(), pay, means: proof.id(), terms: terms.root(), known: known.map(Box::new), about })
+        self.send_as(&poster, BoardMsg::Post { title: title.into(), pay, means: proof.id(), terms: terms.root(), known: known.map(Box::new), about, due })
     }
 
     /// Reply under a fresh credential; that credential is who gets accepted and paid.
@@ -1091,6 +1092,24 @@ impl Node {
             return Err("this job's worker must be known: accept what the worker shows".into());
         }
         self.assign(job, worker, None)
+    }
+
+    /// Poster: release an accepted job its worker didn't finish by its due
+    /// time. Readers honour it only if the board's clock on the release is
+    /// past due; before that, a worker who didn't show is a dispute.
+    pub fn release(&mut self, job: Hash) -> Result<Hash, String> {
+        let j = self.job(&job)?;
+        if !self.mine.contains(&j.poster) {
+            return Err("only the poster releases".into());
+        }
+        if j.status != board::Status::Accepted {
+            return Err(format!("job is {:?}, not Accepted", j.status));
+        }
+        let due = j.due.ok_or("this job has no due time to release it after")?;
+        if crate::bulletin::now() <= due {
+            return Err("not yet past due".into());
+        }
+        self.send_as(&j.poster, BoardMsg::Release { job })
     }
 
     /// Whether `sequence`'s latest tick, as this wallet has it, revokes `group`.

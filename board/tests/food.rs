@@ -159,9 +159,10 @@ fn food_by_an_accountable_courier() {
     // The co-op offers the delivery as a job for badged couriers, under the
     // provider key the manifest names. A job about this bag from anyone
     // else, even one some stranger accepts, assigns nobody.
-    let stray = cust.post_about("Deliver a parcel", 400, Some(Known::Badge(d.clone())), Some(m.parcel)).unwrap();
-    assert!(cust.offer_delivery(&m, 400).unwrap_err().contains("provider"));
-    let gig = coop.offer_delivery(&m, 400).unwrap();
+    let pickup_by = pave_board::bulletin::now() + 15 * 60;
+    let stray = cust.post_about("Deliver a parcel", 400, Some(Known::Badge(d.clone())), Some(m.parcel), None).unwrap();
+    assert!(cust.offer_delivery(&m, 400, pickup_by).unwrap_err().contains("provider"));
+    let gig = coop.offer_delivery(&m, 400, pickup_by).unwrap();
     for n in [&mut coop, &mut cust, &mut ana, &mut cafe] {
         n.sync_with(&mut town);
     }
@@ -249,7 +250,7 @@ fn food_by_an_accountable_courier() {
     let (rep, vouches) = bea.reputation(&contractor(&ana_id));
     assert_eq!((rep.get("delivery"), vouches[0].known_by.is_none()), (Some(&1), true));
     // A second offer of the same bag from the co-op leaves it unassigned.
-    coop.offer_delivery(&m, 400).unwrap();
+    coop.offer_delivery(&m, 400, pickup_by).unwrap();
     coop.sync_with(&mut town);
     cafe.sync_with(&mut town);
     assert!(cafe.delivery_job(&m).is_none());
@@ -333,6 +334,63 @@ fn food_by_an_accountable_courier() {
     // a bag's mint: Bea hears it from the cafe.
     meet(&mut bea, &mut cafe);
     assert_eq!(bea.delivery_vouches(&who).1.len(), 2);
+
+    // A no-show. The co-op offers a bag, accepts Ana, and she doesn't come
+    // by the pickup deadline (here, already past). The co-op releases the
+    // job and offers the bag again; Bea, now badged too, takes the job.
+    let bea_badge_key = bea.trade_key().unwrap();
+    let b = town.issue_badge(&d.id, "courier-52", &bea_badge_key).unwrap();
+    bea.take_badge(&d, b).unwrap();
+    let m5 = cafe.ship("order", "dn5bpsb", "dn5bpth", deliver_to.clone(), 400).unwrap();
+    cafe.name_provider(&m5.parcel, provider.clone()).unwrap();
+    let m5 = cafe.name_dispatch(&m5.parcel, d.clone()).unwrap();
+    let past = pave_board::bulletin::now() - 60;
+    let gig5 = coop.offer_delivery(&m5, 400, past).unwrap();
+    for n in [&mut coop, &mut ana, &mut bea, &mut cafe] {
+        n.sync_with(&mut town);
+    }
+    ana.reply(gig5, "on my way").unwrap();
+    ana.sync_with(&mut town);
+    coop.sync_with(&mut town);
+    let w = coop.jobs()[&gig5].replies[0].0.clone();
+    coop.accept_shown(gig5, w, ana.show_known(gig5).unwrap()).unwrap();
+    coop.sync_with(&mut town);
+    cafe.sync_with(&mut town);
+    assert_eq!(cafe.assigned_courier(&m5), Some(ana_id.clone()));
+    coop.release_delivery(&m5).unwrap();
+    coop.sync_with(&mut town);
+    cafe.sync_with(&mut town);
+    assert_eq!(cafe.assigned_courier(&m5), None);
+    let again = coop.offer_delivery(&m5, 400, past).unwrap();
+    for n in [&mut coop, &mut bea, &mut cafe] {
+        n.sync_with(&mut town);
+    }
+    bea.reply(again, "close by").unwrap();
+    bea.sync_with(&mut town);
+    coop.sync_with(&mut town);
+    let w = coop.jobs()[&again].replies[0].0.clone();
+    coop.accept_shown(again, w, bea.show_known(again).unwrap()).unwrap();
+    coop.sync_with(&mut town);
+    cafe.sync_with(&mut town);
+    assert_eq!(cafe.assigned_courier(&m5), Some(bea_badge_key.clone()));
+
+    // Bea takes the bag and goes quiet. It's on her badge key, so releasing
+    // her is refused: that's a dispute, and the co-op knows who she is. The
+    // cafe refunds the customer meanwhile.
+    cafe.learn_ticket(bea.present(&bea_badge_key).unwrap()).unwrap();
+    let mut p5 = kv(&[("manifest", value(&m5))]);
+    p5.insert("to".into(), value(&bea_badge_key));
+    cafe.act(&food, "hand_off", &p5).unwrap();
+    meet(&mut cafe, &mut bea);
+    bea.act(&food, "take", &kv(&[("manifest", value(&m5))])).unwrap();
+    meet(&mut bea, &mut coop);
+    assert!(coop.release_delivery(&m5).unwrap_err().contains("dispute"));
+    let order5 = pave_kernel::hash::Hash([5; 32]);
+    let refund = orders.receipt_of("refund", &kv(&[("order", value(&order5))])).unwrap();
+    assert_eq!(cust.received(&refund), 0);
+    cafe.refund(&m5, 900, refund).unwrap();
+    meet(&mut cafe, &mut cust);
+    assert_eq!(cust.received(&refund), 900);
 
     // The co-op revokes Ana's badge: the cafe won't hand her another order,
     // and a bag she still held couldn't be taken under it.

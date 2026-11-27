@@ -26,6 +26,14 @@
 //!   the bag only to the key that accept shows. Once custody shows that key
 //!   handed it to the customer and the courier marks the job done, the
 //!   co-op pays the job with a vouch: a coin the courier holds.
+//! - **No-shows.** The offer carries a pickup deadline. If the accepted
+//!   courier hasn't taken the bag by then, the co-op releases the job (the
+//!   board's clock must be past due) and offers the bag again. If the
+//!   courier did take it, it's not a no-show: the bag is on their badge key,
+//!   and that's a dispute.
+//! - **Refunds.** The restaurant pays the customer back with the order
+//!   profile's `refund` receipt for the order; the customer's wallet adds
+//!   up what it received against that receipt.
 
 use crate::board::{contractor, Known};
 use pave_kernel::Credential;
@@ -145,11 +153,36 @@ impl crate::node::Node {
 
     /// Provider: offer the delivery of `m` as a job paying `pay`, under the
     /// provider key the manifest names, for couriers with its dispatch's
-    /// badge.
-    pub fn offer_delivery(&mut self, m: &Manifest, pay: u64) -> Result<Hash, String> {
+    /// badge, to be picked up by `pickup_by` (board-clock seconds).
+    pub fn offer_delivery(&mut self, m: &Manifest, pay: u64, pickup_by: u64) -> Result<Hash, String> {
         let provider = m.provider.clone().filter(|p| self.mine.contains(p)).ok_or("only the parcel's provider offers it")?;
         let d = m.dispatch.as_deref().ok_or("this parcel names no dispatch")?;
-        self.post_as(provider, "Deliver a parcel", pay, Some(Known::Badge(d.clone())), Some(m.parcel))
+        self.post_as(provider, "Deliver a parcel", pay, Some(Known::Badge(d.clone())), Some(m.parcel), Some(pickup_by))
+    }
+
+    /// Provider: release the delivery job for `m` when its courier didn't
+    /// pick the bag up by the deadline, so it can be offered again. Refused
+    /// if the courier took it: then the bag is on their key, a dispute.
+    pub fn release_delivery(&mut self, m: &Manifest) -> Result<Hash, String> {
+        let (job, key) = self.delivery_job(m).ok_or("no delivery job for this parcel")?;
+        let key = key.ok_or("no courier accepted")?;
+        let c = self.custody(m);
+        if c.holder.as_ref() == Some(&key) || c.steps.iter().any(|s| matches!(s, Step::Take { by } if *by == key)) {
+            return Err("the courier took the bag: that's a dispute, not a no-show".into());
+        }
+        self.release(job)
+    }
+
+    /// Restaurant: pay `amount` back to the customer `m` went to, with the
+    /// order profile's `refund` receipt for the order.
+    pub fn refund(&mut self, m: &Manifest, amount: u64, receipt: Hash) -> Result<Hash, String> {
+        self.pay_to(m.addressee.clone(), amount, receipt)
+    }
+
+    /// Customer: what this wallet holds that was paid with `receipt`.
+    pub fn received(&self, receipt: &Hash) -> u64 {
+        let paid = |r: &Record| matches!(&r.op, pave_kernel::Op::Transfer { receipt: x, .. } | pave_kernel::Op::Split { receipt: x, .. } if x == receipt);
+        self.my_coins().iter().filter(|c| self.view.creator(&c.state).is_some_and(paid)).map(|c| c.amount).sum()
     }
 
     /// The delivery job for `m`: the one job about it posted under the
@@ -158,7 +191,7 @@ impl crate::node::Node {
     /// settled. (The profile's own gate still takes only badged keys.)
     pub fn delivery_job(&self, m: &Manifest) -> Option<(Hash, Option<Credential>)> {
         let provider = m.provider.as_ref()?;
-        let mut offers = self.jobs().into_values().filter(|j| j.about == Some(m.parcel) && j.poster == *provider);
+        let mut offers = self.jobs().into_values().filter(|j| j.about == Some(m.parcel) && j.poster == *provider && j.status != crate::board::Status::Released);
         let j = offers.next()?;
         offers.next().is_none().then_some((j.id, j.known_key))
     }

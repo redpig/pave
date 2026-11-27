@@ -92,6 +92,10 @@ pub enum BoardMsg {
         /// What the job is about, such as a parcel to deliver.
         #[serde(default)]
         about: Option<Hash>,
+        /// By when, in board-clock seconds, the accepted worker must mark it
+        /// done; after that the poster may release it.
+        #[serde(default)]
+        due: Option<u64>,
     },
     /// `trade` is set when the replier wants vouches for this job.
     Reply { job: Hash, note: String, trade: Option<Trade> },
@@ -108,6 +112,8 @@ pub enum BoardMsg {
         badge: Option<Box<Shown>>,
     },
     Done { job: Hash },
+    /// The poster closes an accepted job its worker didn't finish by `due`.
+    Release { job: Hash },
     Paid { job: Hash, payment: Hash },
     /// A dispute: see [`crate::dispute`].
     Dispute {
@@ -165,6 +171,7 @@ impl BoardMsg {
             BoardMsg::Reply { .. } => "reply",
             BoardMsg::Accept { .. } => "accept",
             BoardMsg::Done { .. } => "done",
+            BoardMsg::Release { .. } => "release",
             BoardMsg::Paid { .. } => "paid",
             BoardMsg::Vouch { .. } => "vouch",
             BoardMsg::Dispute { .. } => "dispute",
@@ -187,7 +194,7 @@ impl BoardMsg {
             BoardMsg::Fund { dispute, .. } => Some(*dispute),
             BoardMsg::EvidenceNote { subject, .. } => Some(*subject),
             BoardMsg::Terms { trade, .. } => Some(contractor(&trade.key)),
-            BoardMsg::Reply { job, .. } | BoardMsg::Accept { job, .. } | BoardMsg::Done { job } | BoardMsg::Paid { job, .. } | BoardMsg::Vouch { job, .. } => Some(*job),
+            BoardMsg::Reply { job, .. } | BoardMsg::Accept { job, .. } | BoardMsg::Done { job } | BoardMsg::Release { job } | BoardMsg::Paid { job, .. } | BoardMsg::Vouch { job, .. } => Some(*job),
         }
     }
 }
@@ -210,6 +217,8 @@ pub enum Status {
     Paid,
     /// The poster gave the job to two workers: two transfers of one state.
     Contested,
+    /// The poster released it: the worker didn't finish by its due time.
+    Released,
 }
 
 /// The job's assignment state: the zero-value second output of its proof of means.
@@ -241,6 +250,8 @@ pub struct Job {
     pub known: Option<Known>,
     /// What the job is about.
     pub about: Option<Hash>,
+    /// By when the worker must mark it done.
+    pub due: Option<u64>,
     /// The stable key the accepted worker showed.
     pub known_key: Option<Credential>,
     /// The worker's id on its badge, once accepted.
@@ -267,7 +278,7 @@ pub fn jobs(copy: &Copy) -> BTreeMap<Hash, Job> {
         }
         let (id, signer) = (item.id, item.signer);
         match msg {
-            BoardMsg::Post { title, pay, means, known, about, .. } => {
+            BoardMsg::Post { title, pay, means, known, about, due, .. } => {
                 jobs.insert(id, Job {
                     id,
                     title,
@@ -276,6 +287,7 @@ pub fn jobs(copy: &Copy) -> BTreeMap<Hash, Job> {
                     means,
                     known: known.map(|k| *k),
                     about,
+                    due,
                     known_key: None,
                     known_as: None,
                     replies: vec![],
@@ -327,6 +339,15 @@ pub fn jobs(copy: &Copy) -> BTreeMap<Hash, Job> {
                 if let Some(j) = jobs.get_mut(&job) {
                     if j.worker.as_ref() == Some(signer) && j.status == Status::Accepted {
                         j.status = Status::Done;
+                    }
+                }
+            }
+            BoardMsg::Release { job } => {
+                if let Some(j) = jobs.get_mut(&job) {
+                    // Only past the job's due time, by the board's clock on
+                    // the release: the worker had until then.
+                    if &j.poster == signer && j.status == Status::Accepted && j.due.is_some_and(|d| item.post.clock > d) {
+                        j.status = Status::Released;
                     }
                 }
             }
