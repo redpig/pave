@@ -19,7 +19,7 @@ A restaurant that keeps its own ordering system (Toast, say) delivers through a 
 5. **Carry.** A courier who checked in with the co-op today takes it under a shift key, and hands it to the customer's key. The customer confirms by retiring it.
 6. **Pay out.** The restaurant pays the co-op its delivery fee, once, against the parcel's shipping receipt. The co-op pays its couriers.
 
-In the test the customer pays 2400; the cafe keeps 1900; the co-op keeps 100 of its 500 fee; the courier earns 400. Nobody else takes a cut.
+In the test, in cents of test credit: the customer pays $24.00 ($19 of food and a $5 delivery fee); the cafe keeps $19; the co-op keeps $1 of its $5; the courier earns $4. Nobody else takes a cut. The split is illustrative, not a proposal.
 
 ## What fitting it needed
 

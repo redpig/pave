@@ -94,6 +94,7 @@ fn an_order_end_to_end() {
     ana.take_shift(&d, t).unwrap();
     let provider = coop.receive().unwrap();
 
+    // Amounts are cents of test credit.
     // 1. The customer orders on the cafe's own site. Its system keeps the
     //    order; pave sees only its hash.
     let toast_order = br#"{"guid":"7d1c","items":[{"name":"pho","qty":2}],"total":2400,"deliveryFee":500,"address":"12 Elm St"}"#;
@@ -166,8 +167,9 @@ fn an_order_end_to_end() {
     assert_eq!(coop.pay_couriers(&m).unwrap().len(), 1);
     meet(&mut coop, &mut ana);
 
-    // Where the money went: the customer paid 2400; the cafe kept 1900; the
-    // co-op kept 100 of its 500; Ana earned 400. Nobody else took a cut.
+    // Where the money went, in cents of test credit: the customer paid $24.00
+    // ($19 of food and a $5 delivery fee); the cafe kept $19; the co-op kept
+    // $1 of its $5; Ana earned $4. Nobody else took a cut.
     assert_eq!(balance(&cust), 600);
     assert_eq!(balance(&cafe), 1900);
     assert_eq!(balance(&coop), 100);
