@@ -3,15 +3,15 @@
 //! offering and paying the delivery as a job, outcomes, vouches, no-shows
 //! and refunds. Binary values travel as hex of their CBOR.
 
-use pave_board::food::Outcome;
-use pave_board::node::Node;
-use pave_board::parcel::{Manifest, Step};
-use pave_board::profile::{value, Params, Profile};
+use crate::food::Outcome;
+use crate::node::Node;
+use crate::parcel::{Manifest, Step};
+use crate::profile::{value, Params, Profile};
 use pave_kernel::{Credential, Hash};
 use serde_json::{json, Value};
 
-const FOOD: &str = include_str!("../../profiles/food.json");
-const ORDERS: &str = include_str!("../../profiles/orders.json");
+const FOOD: &str = include_str!("../../../profiles/food.json");
+const ORDERS: &str = include_str!("../../../profiles/orders.json");
 
 pub const HELP: &[&str] = &[
     "open_dispatch {label} (town: a co-op's roster)",
@@ -80,7 +80,7 @@ fn step(s: &Step) -> Value {
     }
 }
 fn now() -> u64 {
-    pave_board::bulletin::now()
+    crate::bulletin::now()
 }
 
 /// Run `cmd` if it is one of these; None if it isn't.
@@ -100,7 +100,7 @@ pub fn command(n: &mut Node, cmd: &str, v: &Value) -> Option<Result<Value, Strin
         "learn_ticket" => (|| {
             let t: pave_protocol::SignedTicket = dec(v, "ticket")?;
             let badge = match v.get("dispatch") {
-                Some(_) => dec::<pave_board::dispatch::Dispatch>(v, "dispatch")?.badge_of(n.view.scheme(), &t),
+                Some(_) => dec::<crate::dispatch::Dispatch>(v, "dispatch")?.badge_of(n.view.scheme(), &t),
                 None => None,
             };
             n.learn_ticket(t)?;
@@ -116,7 +116,7 @@ pub fn command(n: &mut Node, cmd: &str, v: &Value) -> Option<Result<Value, Strin
             let address = text(v, "address")?;
             let commit = orders.receipt_of("address", &kv(&[("salt", salt.clone()), ("address", value(&address))]))?;
             let due = now() + v["due_in"].as_u64().unwrap_or(45 * 60);
-            let order = pave_board::bulletin::content_hash(text(v, "order")?.as_bytes());
+            let order = crate::bulletin::content_hash(text(v, "order")?.as_bytes());
             let provider = match v.get("provider") {
                 Some(_) => Some(cred(v, "provider")?),
                 None => None,
@@ -193,7 +193,7 @@ pub fn command(n: &mut Node, cmd: &str, v: &Value) -> Option<Result<Value, Strin
         })(),
         "vouch_delivery" => (|| Ok(json!({ "message": hx(&n.vouch_delivery(&manifest(v)?, v["note"].as_str().unwrap_or(""))?) })))(),
         "delivery_vouches" => (|| {
-            let who = pave_board::board::contractor(&cred(v, "courier")?);
+            let who = crate::board::contractor(&cred(v, "courier")?);
             let (people, vouches) = n.delivery_vouches(&who);
             Ok(json!({ "contractor": hx(&who), "people": people, "vouches": vouches.iter().map(|x| json!({ "parcel": hx(&x.parcel), "note": x.note })).collect::<Vec<_>>() }))
         })(),

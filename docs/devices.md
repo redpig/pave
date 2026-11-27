@@ -86,7 +86,16 @@ So the realistic first app:
 
 The session key travels in the code, so there is no key agreement: only who scanned it can read or inject on the radio. Someone who films the screen holds the key too; what crosses is signed and checked anyway, and the invite expires in minutes. Wi-Fi Aware's and Bluetooth's own pairing can add link-layer encryption under it.
 
+## The app side
+
+The wallet for apps is [`mobile/`](../mobile/): one library behind a C interface, `pave.h`. An app sends it the JSON commands `pave-node` takes, and passes its platform keystore as callbacks. [`demo/phone_demo.py`](../demo/phone_demo.py) drives three wallets through that interface:
+
+- **At the counter,** a QR invite (a version 7 code) opens the link. Badge, meets and manifest go over a socket standing in for Wi-Fi Aware: about 10 KB in all.
+- **At the door,** with no radio, the handoff and confirmation go as 22 QR frames.
+
+Kotlin and Swift wrappers are there, not yet built on a device.
+
 ## Next
 
-- Run the measurements on an Android and an iPhone: the Rust core through FFI, timed on device.
-- Carry the link over a real radio: Wi-Fi Aware or Bluetooth LE, Android to iPhone, through the Rust core.
+- Build the Kotlin and Swift wrappers in real apps; run the measurements on an Android and an iPhone.
+- Carry the link over Wi-Fi Aware and Bluetooth LE, Android to iPhone.

@@ -269,6 +269,9 @@ pub struct Node {
     pub signed_log: BTreeMap<Hash, Record>,
     /// Seals the saved state; see [`crate::vault`].
     pub vault: std::sync::Mutex<Box<dyn Keystore>>,
+    /// In-person links open now, by token. Not saved: a link lasts while
+    /// the app is open.
+    pub links: BTreeMap<String, crate::link::Session>,
     /// Payee: open invoices, by receiving credential: (amount, memo).
     pub invoices: BTreeMap<Credential, (u64, Hash)>,
     /// Payee: payments taken, by record id, so a resend is acknowledged again.
@@ -417,6 +420,7 @@ impl Node {
             cash_budget: cash.output(0),
         };
         let mut node = Node {
+            links: BTreeMap::new(),
             path: path.into(),
             name: "town".into(),
             key: me,
@@ -550,11 +554,18 @@ impl Node {
     /// Wallet: finish enrolling with the town's answer to this wallet's join
     /// request, checking that both credentials are bound to its own keys.
     pub fn finish_enrollment(pending: PendingJoin, e: &Enrollment, name: &str, out: &Path) -> Result<Node, String> {
+        Self::finish_enrollment_with(pending, e, name, out, Box::new(SoftwareKeystore::for_state(out)?))
+    }
+
+    /// As [`Node::finish_enrollment`], sealing the state under `vault`: on a
+    /// phone, the platform keystore.
+    pub fn finish_enrollment_with(pending: PendingJoin, e: &Enrollment, name: &str, out: &Path, vault: Box<dyn Keystore>) -> Result<Node, String> {
         let s = BrioletteV1 { group_public_key: e.town.group_public_key.clone() };
         let class = e.town.classes.get(&e.class).ok_or("unknown class")?;
         let key = pending.transfer.finish(&s, &e.transfer)?;
         let access = pending.access.finish(&BrioletteV1 { group_public_key: class.group_public_key.clone() }, &e.access)?;
         let mut person = Node {
+            links: BTreeMap::new(),
             path: out.into(),
             name: name.into(),
             key,
@@ -591,7 +602,7 @@ impl Node {
             nac_seen: BTreeMap::new(),
             nac_barred: BTreeSet::new(),
             nac_limit: crate::nac::NAC_LIMIT,
-            vault: std::sync::Mutex::new(Box::new(SoftwareKeystore::for_state(out)?)),
+            vault: std::sync::Mutex::new(vault),
         };
         for c in &e.creds {
             let sig = s.sign(&person.key, c, b"pave/enroll-check", None);
@@ -622,6 +633,7 @@ impl Node {
         let saved: Saved = ciborium::from_reader(bytes.as_slice()).map_err(|e| e.to_string())?;
         let scheme = BrioletteV1 { group_public_key: saved.town.group_public_key.clone() };
         let mut node = Node {
+            links: BTreeMap::new(),
             path: path.into(),
             name: saved.name,
             key: saved.key,

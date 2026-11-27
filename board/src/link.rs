@@ -134,12 +134,15 @@ impl Link {
     /// Open a message from the other side: its kind and body. Refuses one
     /// sealed by this side, out of order, replayed, or altered.
     pub fn open(&mut self, sealed: &[u8]) -> Result<(String, Vec<u8>), String> {
+        // Everything refused before the seal is checked gets one answer, so
+        // an outsider learns nothing from it.
+        const NOT_OURS: &str = "not from the other side of this link";
         if sealed.len() < HEADER + 1 {
-            return Err("too short".into());
+            return Err(NOT_OURS.into());
         }
         let seq = u64::from_be_bytes(sealed[24..32].try_into().unwrap());
         let klen = sealed[32] as usize;
-        let kind = std::str::from_utf8(sealed.get(33..33 + klen).ok_or("too short")?).map_err(|e| e.to_string())?.to_string();
+        let kind = sealed.get(33..33 + klen).and_then(|k| std::str::from_utf8(k).ok()).ok_or(NOT_OURS)?.to_string();
         let from = match self.side {
             Side::Shower => Side::Scanner,
             Side::Scanner => Side::Shower,
@@ -147,7 +150,7 @@ impl Link {
         let aad = self.aad(from, seq, &kind);
         let plain = XChaCha20Poly1305::new(Key::from_slice(&self.key))
             .decrypt(XNonce::from_slice(&sealed[..24]), Payload { msg: &sealed[33 + klen..], aad: &aad })
-            .map_err(|_| "not from the other side of this link")?;
+            .map_err(|_| NOT_OURS)?;
         // Only now, authenticated: is it the next one?
         if seq != self.next {
             return Err(format!("out of order: expected {}, got {seq}", self.next));
@@ -159,6 +162,12 @@ impl Link {
         self.next += 1;
         Ok((kind, body.into_vec()))
     }
+}
+
+/// An open link and the QR frames collected on it.
+pub struct Session {
+    pub link: Link,
+    pub frames: Frames,
 }
 
 /// One QR frame of a sealed message.

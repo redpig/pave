@@ -624,6 +624,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pave-mobile"
+version = "0.1.0"
+dependencies = [
+ "ciborium",
+ "hex",
+ "pave-board",
+ "pave-kernel",
+ "serde_json",
+]
+
+[[package]]
 name = "pave-protocol"
 version = "0.1.0"
 dependencies = [

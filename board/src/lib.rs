@@ -28,6 +28,7 @@
 
 pub mod board;
 pub mod bulletin;
+pub mod commands;
 pub mod dispatch;
 pub mod dispute;
 pub mod election;

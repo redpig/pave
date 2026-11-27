@@ -107,9 +107,9 @@ We do not assume that any role behaves well (principle 10), that devices are tam
 
 ## 3. Holder wallet and keys
 
-`board/src/node.rs`, the `.pave` state file, and later a secure element
+`board/src/node.rs`, the `.pave` state file, `mobile/` (the library apps call, with the app's keystore), and later a secure element
 
-**Attack surface:** the state file at rest; the process memory; the control channel (stdin JSON); the display a person trusts; backups and restores; the agent or script driving the node.
+**Attack surface:** the state file at rest; the process memory; the control channel (stdin JSON, or `pave_call` in an app); the app's keystore callbacks; the display a person trusts; backups and restores; the agent or script driving the node.
 
 | # | Attack | Prevent | React | Briolette | Status |
 |---|---|---|---|---|---|
@@ -123,6 +123,8 @@ We do not assume that any role behaves well (principle 10), that devices are tam
 | W8 | Reusing a credential, which links holdings | A fresh credential per holding, change and role | n/a | Same | Built |
 | W9 | A lost or destroyed wallet | n/a | Recovery (section 11) | Opt-in recovery binding | Gap |
 | W10 | An interrupted payment: signed but never delivered | The payer keeps the signed record pending until the payee's signed acknowledgment; `resume` resends the same record and the payee acknowledges it again; the signing log refuses any other use of the coin | Evidence if the holder later re-signs | Deferred payments mark tokens `PENDING_SEND` | Built |
+| W11 | An app's keystore keeps old keys, so a stale copy of the state still opens | The app reports whether its keystore is rollback-resistant, and the wallet's class sets its terms ([phone-keys.md](phone-keys.md)); the library seals under a fresh key each save and asks for the old ones to be retired | Evidence, as W2 | n/a | Built (the C check: a stale copy is refused by a keystore that retires keys); Gap: an app's keystore isn't attested |
+| W12 | A malformed command or a bug panics inside an app | Every `pave_call` is caught: a panic becomes an error reply, not a crash across the C boundary | n/a | n/a | Built |
 
 ---
 

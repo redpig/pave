@@ -97,6 +97,10 @@ fn pickup_over_a_link() {
     let mut forger = Link::new(&other, Side::Scanner);
     let forged = forger.seal("hello", b"from eve");
     assert!(lc.open(&forged).unwrap_err().contains("not from the other side"));
+    // Noise gets the same answer as a forgery, however it fails to parse.
+    for junk in [vec![], vec![0xff; 40], vec![0xff; 400]] {
+        assert_eq!(lc.open(&junk).unwrap_err(), "not from the other side of this link");
+    }
     // A replay, a reflection back to Ana, an altered byte: all refused.
     assert_eq!(lc.open(&msg).unwrap().1, b"from ana");
     assert!(lc.open(&msg).unwrap_err().contains("out of order"));

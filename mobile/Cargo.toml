@@ -1,0 +1,17 @@
+[package]
+name = "pave-mobile"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The pave wallet for phone apps: a C interface over the JSON command set"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+pave-board = { path = "../board" }
+pave-kernel = { path = "../kernel" }
+ciborium = "0.2"
+hex = "0.4"
+serde_json = "1"
