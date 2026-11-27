@@ -203,7 +203,11 @@ When something is said rather than held:
 
 Use the toolkit's patterns rather than inventing: **commit and reveal** for anything you'll show later (a code, a photo, an original before redaction); **sealed material** for what only a panel should see; **disputes** as jobs, with panels drawn by hash, rulings as posts, appeals paid into escrow, and records counted per counterparty. Escrow's holder is trusted until code-bound identity is built; say so.
 
-## 10. Check your design
+## 10. Publish it as data
+
+Describe your profile so one app can run it ([spec/profiles.md](../spec/profiles.md)): its schemas and what they mean, the layouts it hashes, its receipts, an action per kernel operation, and walks that read history back. Keep rules that need logic over many records as pure functions, so they can come in later as pinned modules. If an action can't be described as one operation with a receipt and a few predicates, that's a sign the design has hidden logic worth naming.
+
+## 11. Check your design
 
 Before writing code:
 

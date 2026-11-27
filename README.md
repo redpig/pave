@@ -14,6 +14,8 @@ A pavé setting is many small stones set close together to make one surface. Her
 | Protocol | Corollaries, standard schemas (epochs, expiry, tickets, value, time, votes, certification, recovery), core mechanisms (evidence, revocation, receipts, proof of means, two-tier gossip), role guarantees and profiles. | [spec/protocol.md](spec/protocol.md) |
 | Profiles | Cash (Briolette), offline mesh, boards (the job board and civic reports), parcels, disputes, and an example election. | end of the protocol; [spec/boards.md](spec/boards.md), [spec/parcels.md](spec/parcels.md), [spec/disputes.md](spec/disputes.md), [spec/elections.md](spec/elections.md) |
 
+Profiles can be published as data that one app loads and acts on: see [spec/profiles.md](spec/profiles.md) and [profiles/parcels.json](profiles/parcels.json).
+
 To design a system on pave, start with [docs/building.md](docs/building.md): the decisions in order, with how to choose basenames and clocks, where checks go, and worked examples. The patterns it uses are defined in [spec/toolkit.md](spec/toolkit.md).
 
 The values behind it are in [docs/principles.md](docs/principles.md), and the reasoning behind each decision is in [docs/design-log.md](docs/design-log.md). Every component's attack surface, the attacks on it and how each is prevented or answered are in [docs/threats.md](docs/threats.md).

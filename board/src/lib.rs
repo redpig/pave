@@ -15,6 +15,7 @@
 //! - [`evidence`]: evidence for dispute panels, held by the host and shown only to the panel
 //! - [`media`]: image metadata: which kinds a picture carries, and a copy without them
 //! - [`nac`]: the network access gate every exposed service asks for
+//! - [`profile`]: profiles as data, which an app loads and acts on
 //! - [`request`]: one request type for every mint, from a spec that is data
 //! - [`slots`]: slotted basenames: unlinkable requests up to a budget, then
 //!   linked ones
@@ -34,6 +35,7 @@ pub mod nac;
 pub mod net;
 pub mod node;
 pub mod parcel;
+pub mod profile;
 pub mod pay;
 pub mod report;
 pub mod request;

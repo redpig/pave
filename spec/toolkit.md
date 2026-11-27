@@ -82,7 +82,7 @@ Each pattern: what it is for, what it is built from, and who uses it today.
 
 ## Bringing up an application
 
-To bring up an application, pick a board for what people say, a schema for anything held one at a time, and the patterns above for paying, counting, proving and settling. [docs/building.md](../docs/building.md) is the manual: the decisions in order, how to choose basenames and clocks, where checks go, and two worked examples.
+To bring up an application, pick a board for what people say, a schema for anything held one at a time, and the patterns above for paying, counting, proving and settling. A profile can be published as data that apps load ([profiles.md](profiles.md)). [docs/building.md](../docs/building.md) is the manual: the decisions in order, how to choose basenames and clocks, where checks go, and two worked examples.
 
 ## Where the code doesn't match yet
 
