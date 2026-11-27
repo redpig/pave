@@ -40,7 +40,12 @@ Participation is an issuer group. Joining is a **join**: the member's device mak
 - **Town classes** (`hardware`, and so on) are the town's own groups, used for access credentials. Every member has one, and they gate every network service and refill.
 - **A roll of your own** is for when your system has its own membership: a co-op's members ([`dispatch.rs`](../board/src/dispatch.rs)), a district's voters ([`election.rs`](../board/src/election.rs)). Who may join is decided outside pave, by whoever runs the roll, as today.
 
-**Decide who must be known, and to whom.** Unlinkable participation is the default, not a rule. When someone must answer for what they do (a courier at a front door), give them a ticket on one stable key, tagged with who they are to the issuer: a badge ([food.md](../spec/food.md)). The issuer and whoever checks the badge can name them; nobody else learns more than a key. A key holds one ticket, so keep a badge key for the one role.
+**Decide who must be known, and to whom.** Unlinkable participation is the default, not a rule. Most work wants the worker known before it's given: reply anonymously, then disclose step by step. There are two levels:
+
+- **A stable pseudonym** is the worker's own key for a line of work. It carries a reputation, and nobody issues it.
+- **A badge** is an issuer's ticket on that key, saying who is behind it ([food.md](../spec/food.md)). The issuer and whoever checks it can name the person; nobody else learns more than a key. Issue it on the worker's existing key so their record carries over. A key holds one ticket, so a badge key doesn't post.
+
+Which a job needs is its poster's choice, as which rosters to trust is ([boards.md](../spec/boards.md#job-board)). The kernel doesn't decide what is regulated.
 
 One roll per **thing you need to tell apart** at the mint: an election has one roll per district, so the district comes from which group key verifies, and nobody states it.
 

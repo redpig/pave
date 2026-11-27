@@ -63,20 +63,20 @@ fn the_whole_story_on_ecdaa() {
     alice.sync_with(&mut town);
     let worker = alice.jobs()[&job].replies[0].0.clone();
     // Only the poster's key can accept: Bob accepting himself is ignored.
-    let msg = pave_board::board::BoardMsg::Accept { job, worker: worker.clone(), assignment: None };
+    let msg = pave_board::board::BoardMsg::Accept { job, worker: worker.clone(), assignment: None, badge: None };
     let bobs = bob.receive().unwrap();
     bob.compose(&bob.town.jobs.scope.clone(), &bobs, msg.kind(), msg.job(), msg.encode(), None).unwrap();
     bob.sync_with(&mut town);
     assert_eq!(bob.jobs()[&job].status, Status::Open);
     // An accept must carry the poster's transfer of the job's state.
-    let bare = pave_board::board::BoardMsg::Accept { job, worker: worker.clone(), assignment: None };
+    let bare = pave_board::board::BoardMsg::Accept { job, worker: worker.clone(), assignment: None, badge: None };
     let poster = alice.jobs()[&job].poster.clone();
     alice.compose(&alice.town.jobs.scope.clone(), &poster, bare.kind(), bare.job(), bare.encode(), None).unwrap();
     alice.sync_with(&mut town);
     assert_eq!(alice.jobs()[&job].status, Status::Open);
     let s = alice.view.scheme().clone();
     let wrong = pave_kernel::sign(&s, &alice.key, &poster, pave_kernel::Op::Transfer { state: pave_kernel::hash::Hash([1; 32]), to: worker.clone(), receipt: pave_board::board::accept_receipt(&job, &worker) });
-    let forged = pave_board::board::BoardMsg::Accept { job, worker: worker.clone(), assignment: Some(wrong) };
+    let forged = pave_board::board::BoardMsg::Accept { job, worker: worker.clone(), assignment: Some(wrong), badge: None };
     alice.compose(&alice.town.jobs.scope.clone(), &poster, forged.kind(), forged.job(), forged.encode(), None).unwrap();
     alice.sync_with(&mut town);
     assert_eq!(alice.jobs()[&job].status, Status::Open, "an assignment of another state");
@@ -100,7 +100,7 @@ fn the_whole_story_on_ecdaa() {
     let s = alice.view.scheme().clone();
     let state = pave_board::board::job_state(&j2.means);
     let twice = pave_kernel::sign(&s, &alice.key, &j2.poster, pave_kernel::Op::Transfer { state, to: w2.clone(), receipt: pave_board::board::accept_receipt(&job2, &w2) });
-    let msg = pave_board::board::BoardMsg::Accept { job: job2, worker: w2, assignment: Some(twice) };
+    let msg = pave_board::board::BoardMsg::Accept { job: job2, worker: w2, assignment: Some(twice), badge: None };
     alice.compose(&alice.town.jobs.scope.clone(), &j2.poster, msg.kind(), msg.job(), msg.encode(), None).unwrap();
     alice.sync_with(&mut town);
     bob.sync_with(&mut town);

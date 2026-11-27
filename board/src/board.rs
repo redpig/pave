@@ -17,12 +17,26 @@
 //! distinct people per job type without learning who they are, and one
 //! person counts once however many jobs they vouch for.
 //!
+//! **Known before the job.** A job can say its worker must be known
+//! ([`Known`]): by a stable pseudonym the worker keeps for its line of work
+//! (its trade key), or by a badge, a roster's ticket certifying that key
+//! (a co-op's [`crate::dispatch::Dispatch`]). Replies stay anonymous. The
+//! poster picks one; that replier shows the poster its key, and its badge if
+//! the job needs one, signing with the key over the credential it will be
+//! paid at; the accept carries it. Readers count the accept only if it
+//! shows what the job needs, and vouches for the job go to that key's
+//! contractor thread: one reputation, whoever matched the job. A badge adds
+//! what a pseudonym can't: someone vouches for who is behind it, so a bad
+//! record can't be shed by making a new key.
+//!
 //! **Known to your contacts.** Like any post, a vouch may be signed with
 //! one of the voucher's identities (see [`crate::bulletin`]): contacts who
 //! were given it see who vouched; anyone else sees only that one unnamed
 //! person vouched for several jobs. Without one, a vouch is anonymous.
 
 use crate::bulletin::{purpose, Copy};
+use crate::dispatch::Dispatch;
+use pave_protocol::SignedTicket;
 use pave_kernel::hash::{hash_of, Hash};
 use pave_kernel::{Credential, Op, Record, Scheme, Sig};
 use serde::{Deserialize, Serialize};
@@ -40,6 +54,24 @@ pub fn trade_bytes(job: &Hash, worker: &Credential) -> Vec<u8> {
     pave_kernel::hash::encode(&("pave/board/trade/v0", job, worker))
 }
 
+/// How a job's worker must be known before it is given the job.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Known {
+    /// By a stable pseudonym: the job counts toward it.
+    Stable,
+    /// By a stable pseudonym this roster badged.
+    Badge(Dispatch),
+}
+
+/// What a worker shows for a job: its stable key's signature over the job
+/// and the credential to be paid, and the roster's ticket on that key if
+/// the job needs a badge.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Shown {
+    pub ticket: Option<SignedTicket>,
+    pub trade: Trade,
+}
+
 /// The contractor a trade key names: the thread its vouches go in.
 pub fn contractor(key: &Credential) -> Hash {
     hash_of("pave/board/contractor", key)
@@ -49,7 +81,15 @@ pub fn contractor(key: &Credential) -> Hash {
 pub enum BoardMsg {
     /// `means` is the split record proving the poster holds the pay;
     /// `terms` is the receipt root that split commits to.
-    Post { title: String, pay: u64, means: Hash, terms: Hash },
+    /// `known`: how the worker must be known before it is given the job.
+    Post {
+        title: String,
+        pay: u64,
+        means: Hash,
+        terms: Hash,
+        #[serde(default)]
+        known: Option<Box<Known>>,
+    },
     /// `trade` is set when the replier wants vouches for this job.
     Reply { job: Hash, note: String, trade: Option<Trade> },
     /// `assignment` is the poster's transfer of the job's zero-value state
@@ -60,6 +100,9 @@ pub enum BoardMsg {
         worker: Credential,
         #[serde(default)]
         assignment: Option<pave_kernel::Record>,
+        /// For a job whose worker must be known: what it showed.
+        #[serde(default)]
+        badge: Option<Box<Shown>>,
     },
     Done { job: Hash },
     Paid { job: Hash, payment: Hash },
@@ -191,6 +234,10 @@ pub struct Job {
     pub pay: u64,
     pub poster: Credential,
     pub means: Hash,
+    /// How the worker must be known.
+    pub known: Option<Known>,
+    /// The worker's id on its badge, once accepted.
+    pub known_as: Option<String>,
     pub replies: Vec<(Credential, String)>,
     /// Repliers who opted into vouches, and the contractor each named.
     pub contractors: BTreeMap<Credential, Hash>,
@@ -213,13 +260,15 @@ pub fn jobs(copy: &Copy) -> BTreeMap<Hash, Job> {
         }
         let (id, signer) = (item.id, item.signer);
         match msg {
-            BoardMsg::Post { title, pay, means, .. } => {
+            BoardMsg::Post { title, pay, means, known, .. } => {
                 jobs.insert(id, Job {
                     id,
                     title,
                     pay,
                     poster: signer.clone(),
                     means,
+                    known: known.map(|k| *k),
+                    known_as: None,
                     replies: vec![],
                     contractors: BTreeMap::new(),
                     worker: None,
@@ -238,10 +287,22 @@ pub fn jobs(copy: &Copy) -> BTreeMap<Hash, Job> {
                     }
                 }
             }
-            BoardMsg::Accept { job, worker, assignment } => {
+            BoardMsg::Accept { job, worker, assignment, badge } => {
                 if let Some(j) = jobs.get_mut(&job) {
                     let Some(rec) = assignment.filter(|r| &j.poster == signer && assigns(copy, j, &worker, r)) else { continue };
+                    // A job whose worker must be known counts only an accept showing it.
+                    let known = match &j.known {
+                        None => None,
+                        Some(k) => match badge.as_deref().and_then(|b| shown_by(copy.scheme(), k, &job, &worker, b)) {
+                            Some(k) => Some(k),
+                            None => continue,
+                        },
+                    };
                     if j.status == Status::Open {
+                        if let Some((id, key)) = known {
+                            j.known_as = id;
+                            j.contractors.insert(worker.clone(), contractor(&key));
+                        }
                         j.worker = Some(worker);
                         j.assignment = Some(rec.id());
                         j.status = Status::Accepted;
@@ -271,6 +332,22 @@ pub fn jobs(copy: &Copy) -> BTreeMap<Hash, Job> {
         }
     }
     jobs
+}
+
+/// The stable key `b` shows, and its badge id when `known` needs a badge,
+/// if the key signed for `worker` on `job` and carries what `known` needs.
+pub fn shown_by(s: &impl Scheme, known: &Known, job: &Hash, worker: &Credential, b: &Shown) -> Option<(Option<String>, Credential)> {
+    if !s.verify(&b.trade.key, &trade_bytes(job, worker), None, &b.trade.sig) {
+        return None;
+    }
+    let id = match known {
+        Known::Stable => None,
+        Known::Badge(d) => {
+            let t = b.ticket.as_ref().filter(|t| t.ticket.credential == b.trade.key)?;
+            Some(d.badge_of(s, t)?)
+        }
+    };
+    Some((id, b.trade.key.clone()))
 }
 
 /// One vouch that counts.

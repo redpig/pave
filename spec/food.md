@@ -9,6 +9,7 @@ The description is [`profiles/food.json`](../profiles/food.json), with the order
 A badge is a **ticket**, not an access credential. The co-op vets a courier outside pave (who they are, insurance, a trial run) and its dispatch clerk issues a ticket on one stable key of the courier's, tagged with the courier's id and the dispatch's badge purpose, in a group of its own.
 
 - **A ticket, because it names a key.** Custody moves between keys, and the acceptance check already asks whether a key holds a good ticket. An access credential is for proving membership without naming a key, which is exactly what food delivery shouldn't do.
+- **A certification on the courier's pseudonym.** The key is the courier's own stable key for the work, best its trade key, so deliveries and other jobs build one reputation ([boards.md](boards.md#job-board)). The badge is what an issuer adds: someone answers for who is behind it.
 - **One stable key.** The same key takes every bag, so every custody chain the courier was in names that key, and the co-op maps it to the courier. The restaurant sees the courier id on the badge when it's shown.
 - **Revocable on its own.** Each badge has its own group, so revoking one courier is one entry on dispatch's ticks; nobody hands that key a bag, and it takes none, once they've heard.
 - **A key holds one ticket.** A badge key carries custody only. The wallet refuses to post under it, since a post would put a post ticket on the key in the badge's place.

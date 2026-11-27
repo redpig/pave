@@ -58,6 +58,8 @@ Decisions behind the current [kernel](../spec/kernel.md) and [protocol](../spec/
 
 - **Food couriers are known.** Shift keys are anonymous, which suits relays between fixed points but not a stranger at a home address. A food profile hands off only to badged couriers: a dispatch ticket on the courier's stable key, naming them to the co-op and shown to the restaurant. A ticket, not an access credential, because custody names keys. The binding commits to the address and a deadline; the customer's note carries the seal code, timed by the board's clock.
 
+- **Known before the job.** Replies stay anonymous; the accepted worker shows its stable pseudonym (its trade key), and for a job that needs one, a roster's badge on that key. A pseudonym is the worker's own and carries reputation; a badge is a certification on it, so a bad record can't be shed. Which a job needs is the poster's choice: pave carries guilds and their absence alike, and doesn't decide what is regulated.
+
 ## Design notes not yet in the spec
 
 - **Roots of trust.** Enrollment can come from a government mobile ID (zero-knowledge proofs over ISO mdocs, for example Longfellow), a community (threshold issuance by mesh nodes, presence attestations, staked vouching), attested hardware, or a bonded provider account (low assurance). A one-time enrollment records a document-derived nullifier and binds a member secret, from which pseudonyms are derived per scope. Low-entropy document numbers are never hashed directly.

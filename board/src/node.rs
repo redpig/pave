@@ -1009,6 +1009,16 @@ impl Node {
     /// Post a job under a fresh credential, with a zero-value split of a coin
     /// covering the pay as proof of means, committing to the terms.
     pub fn post(&mut self, title: &str, pay: u64) -> Result<Hash, String> {
+        self.post_with(title, pay, None)
+    }
+
+    /// As [`Node::post`], for a job whose worker must be known as `known`
+    /// says. Replies stay anonymous; the one accepted shows its key.
+    pub fn post_known(&mut self, title: &str, pay: u64, known: board::Known) -> Result<Hash, String> {
+        self.post_with(title, pay, Some(known))
+    }
+
+    fn post_with(&mut self, title: &str, pay: u64, known: Option<board::Known>) -> Result<Hash, String> {
         let coin = self.my_coins().into_iter().find(|c| c.amount >= pay).ok_or("no single coin covers the pay")?;
         let poster = self.fresh()?;
         let terms = Receipt::Node(vec![
@@ -1017,7 +1027,7 @@ impl Node {
         ]);
         let proof = self.signed(&coin.holder, Op::Split { state: coin.state, parts: vec![(coin.amount, poster.clone()), (0, poster.clone())], receipt: terms.root() })?;
         apply_ok(&mut self.view, &proof)?;
-        self.send_as(&poster, BoardMsg::Post { title: title.into(), pay, means: proof.id(), terms: terms.root() })
+        self.send_as(&poster, BoardMsg::Post { title: title.into(), pay, means: proof.id(), terms: terms.root(), known: known.map(Box::new) })
     }
 
     /// Reply under a fresh credential; that credential is who gets accepted and paid.
@@ -1071,6 +1081,54 @@ impl Node {
     }
 
     pub fn accept(&mut self, job: Hash, worker: Credential) -> Result<Hash, String> {
+        if self.job(&job)?.known.is_some() {
+            return Err("this job's worker must be known: accept what the worker shows".into());
+        }
+        self.assign(job, worker, None)
+    }
+
+    /// Whether `sequence`'s latest tick, as this wallet has it, revokes `group`.
+    pub fn is_revoked(&self, sequence: &Hash, group: u32) -> bool {
+        pave_protocol::head(&self.view, sequence).and_then(|h| h.data).and_then(|d| self.know.epoch_data.get(&d)).is_some_and(|d| d.revoked.contains_key(&group))
+    }
+
+    /// Worker: show the poster of `job` this wallet's stable key, signed
+    /// over the credential this wallet replied under: its trade key, or for
+    /// a job that needs a badge, the key the job's roster badged (best the
+    /// trade key itself, so one reputation carries over). Only the poster
+    /// need see it before accepting; the accept then publishes it with the
+    /// job, so the work counts toward that key.
+    pub fn show_known(&mut self, job: Hash) -> Result<board::Shown, String> {
+        let j = self.job(&job)?;
+        let known = j.known.as_ref().ok_or("this job's worker needn't be known")?;
+        let worker = j.replies.iter().map(|(c, _)| c).find(|c| self.mine.contains(*c)).ok_or("this wallet hasn't replied")?.clone();
+        let (key, ticket) = match known {
+            board::Known::Stable => (self.trade_key()?, None),
+            board::Known::Badge(d) => {
+                let t = self.know.tickets.values().find(|t| self.mine.contains(&t.ticket.credential) && d.badge_of(self.view.scheme(), t).is_some()).ok_or("no badge from this job's roster")?;
+                (t.ticket.credential.clone(), Some(t.clone()))
+            }
+        };
+        let sig = self.scheme().sign(&self.key, &key, &board::trade_bytes(&job, &worker), None);
+        Ok(board::Shown { ticket, trade: board::Trade { key, sig } })
+    }
+
+    /// Poster: give `job` to `worker` on what it showed, once it checks out
+    /// and any badge isn't revoked as far as this wallet knows. Before
+    /// accepting, the poster can read the shown key's reputation.
+    pub fn accept_shown(&mut self, job: Hash, worker: Credential, shown: board::Shown) -> Result<Hash, String> {
+        let j = self.job(&job)?;
+        let known = j.known.as_ref().ok_or("this job's worker needn't be known")?;
+        let (id, _) = board::shown_by(self.view.scheme(), known, &job, &worker, &shown).ok_or("not what this job needs, or not signed for this worker")?;
+        if let (board::Known::Badge(d), Some(t)) = (known, &shown.ticket) {
+            if self.is_revoked(&d.id, t.ticket.group) {
+                return Err(format!("{}'s badge is revoked", id.unwrap_or_default()));
+            }
+        }
+        self.assign(job, worker, Some(shown))
+    }
+
+    fn assign(&mut self, job: Hash, worker: Credential, badge: Option<board::Shown>) -> Result<Hash, String> {
         let j = self.job(&job)?;
         if !self.mine.contains(&j.poster) {
             return Err("only the poster accepts".into());
@@ -1080,7 +1138,7 @@ impl Node {
         let state = board::job_state(&j.means);
         let rec = self.signed(&j.poster, Op::Transfer { state, to: worker.clone(), receipt: board::accept_receipt(&job, &worker) })?;
         let _ = self.view.apply(&rec);
-        self.send_as(&j.poster, BoardMsg::Accept { job, worker, assignment: Some(rec) })
+        self.send_as(&j.poster, BoardMsg::Accept { job, worker, assignment: Some(rec), badge: badge.map(Box::new) })
     }
 
     pub fn done(&mut self, job: Hash) -> Result<Hash, String> {

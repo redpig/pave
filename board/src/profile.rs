@@ -393,11 +393,8 @@ impl Node {
                     Some(e) => Some(as_hash(&p.eval(e, &cx)?)?),
                     None => None,
                 };
-                let revoked = |g: u32| {
-                    pave_protocol::head(&self.view, &s).and_then(|h| h.data).and_then(|d| self.know.epoch_data.get(&d)).is_some_and(|d| d.revoked.contains_key(&g))
-                };
                 self.know.tickets.get(&k).is_some_and(|t| {
-                    t.clerk == c && t.ticket.sequence == s && t.verify(self.view.scheme()) && !revoked(t.ticket.group) && want.is_none_or(|w| t.ticket.tag.as_ref().is_some_and(|g| g.purpose == w))
+                    t.clerk == c && t.ticket.sequence == s && t.verify(self.view.scheme()) && !self.is_revoked(&s, t.ticket.group) && want.is_none_or(|w| t.ticket.tag.as_ref().is_some_and(|g| g.purpose == w))
                 })
             }
             Pred::LineageCurrent { lineage, generation } => {
