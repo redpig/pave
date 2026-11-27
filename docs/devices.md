@@ -70,11 +70,23 @@ So the realistic first app:
 
 - **Key class.** The key is a software key bound to an attested device. That is the town's lower-assurance class, with tighter limits, as the threat model already expects.
 - **Online first.** Most deliveries have signal, so the board server carries the flow.
-- **In person, a QR code opens the channel.** It carries a session key and a Wi-Fi Aware or Bluetooth address, and the exchange runs over the radio. That covers the counter pickup and the door handoff, iPhone to Android included. A QR-only fallback is about 600 B a frame read reliably off a screen: a shown badge is 3 frames, a manifest 2, a four-hop payment 17.
+- **In person, a QR code opens the channel** ([`board/src/link.rs`](../board/src/link.rs)). It carries a fresh session key, a token to find in the advertisement, the radios the phone is listening on, and an expiry, and the exchange runs over the radio, sealed. That covers the counter pickup and the door handoff, iPhone to Android included. With no radio, the same sealed messages go as loops of QR frames. [`board/tests/link.rs`](../board/tests/link.rs) does a pickup both ways.
 - **No NFC, and no background mesh.** Revocations and records spread when the app opens or has signal. So the town's epoch length, and the soft expiry that pushes swaps, should allow for wallets that are offline for hours, not minutes.
 - **One app.** A host app that renders profiles in web views, not a browser feature.
+
+## In person, measured
+
+| | |
+|---|---|
+| The invite | 186 characters: a version 6 QR code |
+| A QR-only frame | up to 600 bytes of sealed message, 981 characters: about a version 20 code at low error correction, which phones read off another screen |
+| A shown badge | 1.4 KB sealed: 3 frames |
+| A manifest | 773 B sealed: 2 frames |
+| A four-hop payment | about 9.7 KB: 17 frames |
+
+The session key travels in the code, so there is no key agreement: only who scanned it can read or inject on the radio. Someone who films the screen holds the key too; what crosses is signed and checked anyway, and the invite expires in minutes. Wi-Fi Aware's and Bluetooth's own pairing can add link-layer encryption under it.
 
 ## Next
 
 - Run the measurements on an Android and an iPhone: the Rust core through FFI, timed on device.
-- A QR-plus-radio handshake for one meet, Android to iPhone.
+- Carry the link over a real radio: Wi-Fi Aware or Bluetooth LE, Android to iPhone, through the Rust core.

@@ -32,6 +32,7 @@ pub mod dispatch;
 pub mod dispute;
 pub mod election;
 pub mod food;
+pub mod link;
 pub mod evidence;
 pub mod media;
 pub mod nac;

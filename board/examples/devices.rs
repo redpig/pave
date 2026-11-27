@@ -144,12 +144,32 @@ fn main() {
         "tickets_16_bytes": encode(&tickets).len(),
     });
 
+    // In person: the invite's QR code, and each payload sealed and cut into
+    // QR-only frames.
+    use pave_board::link::{frames, Invite, Link, Radio, Side, FRAME_BYTES};
+    let inv = Invite::new(vec![Radio::WifiAware("pave".into()), Radio::Ble([7; 16])], 120);
+    let mut l = Link::new(&inv, Side::Shower);
+    let mut framed = |kind: &str, body: Vec<u8>| {
+        let sealed = l.seal(kind, &body);
+        let f = frames(inv.token, &sealed, FRAME_BYTES);
+        json!({ "sealed_bytes": sealed.len(), "frames": f.len(), "longest_frame_chars": f.iter().map(|x| x.len()).max() })
+    };
+    let fresh = (join(&mut town, "c", &dir, &[]), join(&mut town, "e", &dir, &[]));
+    let first_bundle = encode(&fresh.0.bundle_for(&fresh.1.have()));
+    let link = json!({
+        "invite_chars": inv.to_qr().len(),
+        "shown_badge": framed("badge", encode(&shown)),
+        "manifest": framed("manifest", encode(&m)),
+        "first_meet_one_way": framed("bundle", first_bundle),
+    });
+
     println!("{}", serde_json::to_string_pretty(&json!({
         "machine": "one core of the build machine; see docs/devices.md for phones",
         "primitives": prims,
         "payment_by_hop": hops,
         "meets": { "first_bytes": first, "after_one_payment_bytes": again, "ms_meet_with_town": (meet_ms * 1000.0).round() / 1000.0 },
         "food": pieces,
+        "link": link,
     })).unwrap());
     let _ = std::fs::remove_dir_all(&dir);
 }

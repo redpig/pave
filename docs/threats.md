@@ -222,9 +222,9 @@ We do not assume that any role behaves well (principle 10), that devices are tam
 
 ## 9. Peer link
 
-`board/src/net.rs`: length-prefixed CBOR over TCP
+`board/src/net.rs`: length-prefixed CBOR over TCP. `board/src/link.rs`: in person, a QR invite carrying a session key, then sealed messages over a radio or in QR frames.
 
-**Attack surface:** the socket; frames; the IP address or radio identifier.
+**Attack surface:** the socket; frames; the IP address or radio identifier; the invite on screen; the radio advertisement.
 
 | # | Attack | Prevent | React | Briolette | Status |
 |---|---|---|---|---|---|
@@ -232,6 +232,10 @@ We do not assume that any role behaves well (principle 10), that devices are tam
 | P2 | Someone in the middle alters messages | Everything that matters is signed | They can still drop or delay | Same | Built; Gap: channel integrity |
 | P3 | Malformed frames | 64 MiB cap; typed decode | n/a | Rate limits | Partial; Gap: smaller caps and a per-message-type limit |
 | P4 | Resource exhaustion of a node | Every exposed service asks for a network access credential first: a basename signature with (service, epoch), counted per pseudonym per epoch | Bar a pseudonym from a service for the epoch; revoke a class | IP token bucket (audit M-6) | Built (`board/src/nac.rs`: every connection, 4096 per pseudonym per service per epoch). Gap: work before the gate (the TCP accept and one frame) is unbounded, enrolled Sybils each get their own limit (R1), and a server can hold a client that's behind at an invented future epoch until the challenge carries the signed epoch head |
+| P6 | A nearby phone reads or joins an in-person exchange over the radio | The invite's QR code carries a fresh session key; every message is sealed under it (XChaCha20-Poly1305, as the vault), so only who scanned it can read or inject | n/a | n/a | Built (test) |
+| P7 | A link message is replayed, reordered, reflected back or altered | Each sealed message binds its direction and sequence number as associated data; authentication comes before the sequence check, so an outsider learns nothing from the refusal | n/a | n/a | Built (mutations `lk_seq`, `lk_reflect`, `lk_dir`) |
+| P8 | Someone films the invite on screen | They hold the session key and could read or inject; what crosses is signed and checked anyway, and the invite expires in minutes | Show a fresh code | n/a | By design; Gap: a key agreement over the radio would close it |
+| P9 | A stale invite or another link's QR frames | Invites expire; frames carry the link's token and are ignored otherwise | n/a | n/a | Built (mutations `lk_expiry`, `fr_token`) |
 | P5 | A peer learns a wallet's whole history | Payments send only the paid coin's provenance; enrollment sends a new member only its own coins' provenance, the epoch sequence and the board | n/a | Tokens carry only their own history | Built for payments and enrollment. A `meet` is still a full sync, for peers a holder chooses (its own devices, the town); incremental, but not private |
 
 ---
