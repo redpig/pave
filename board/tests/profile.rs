@@ -2,6 +2,7 @@
 //! description carry parcels with wallets that run its Rust code, and both
 //! read the same custody.
 
+use pave_board::dispatch::{DayCard, Dispatch, MemberCard};
 use pave_board::node::{Node, PendingJoin};
 use pave_board::parcel::{parcel_schema, Manifest, Step};
 use pave_board::profile::{value, Params, Profile};
@@ -26,6 +27,23 @@ fn meet(a: &mut Node, b: &mut Node) {
     let (sa, sb) = (a.standings(), b.standings());
     b.absorb_standings(sa);
     a.absorb_standings(sb);
+}
+
+fn member(town: &mut Node, d: &Dispatch) -> MemberCard {
+    let (pending, req) = MemberCard::start();
+    let reply = town.add_member(&d.id, &req).unwrap();
+    MemberCard::finish(d, pending, &reply).unwrap()
+}
+
+/// Check in and get `k` shift keys, through dispatch's Rust code.
+fn shift(town: &mut Node, n: &mut Node, d: &Dispatch, card: &MemberCard, k: usize) {
+    let terms = town.shift_terms(&d.id).unwrap();
+    let (pending, req) = n.check_in(d, card, &terms).unwrap();
+    let c = town.answer_check_in(&req).unwrap();
+    let day: DayCard = Node::day_card(d, terms.0, pending, &c).unwrap();
+    let req = n.shift_request(d, card, &day, &terms, k).unwrap();
+    let t = town.answer_shift(&req).unwrap();
+    n.take_shift(d, t).unwrap();
 }
 
 fn params(kv: &[(&str, ciborium::Value)]) -> Params {
@@ -140,5 +158,50 @@ fn parcels_from_a_description() {
     // the description: Ben and Ana.
     shop.parcels.insert(manifest.parcel, manifest.clone());
     assert_eq!(shop.pay_couriers(&manifest).unwrap().len(), 2);
+
+    // ── A dispatched parcel, with the rules the description now carries:
+    // handoffs go only to shift keys, a take goes under one with the
+    // dispatch's clerk trusted, and a reminted token is void.
+    let d = town.open_dispatch("Pine Co-op").unwrap();
+    let (ca, cb) = (member(&mut town, &d), member(&mut town, &d));
+    shift(&mut town, &mut ana, &d, &ca, 4);
+    shift(&mut town, &mut ben, &d, &cb, 4);
+    let m3 = shop.ship("tools", "dn5bpsb", "dn5bpth", zoe.receive().unwrap(), 3).unwrap();
+    let m3 = shop.name_dispatch(&m3.parcel, d.clone()).unwrap();
+    let mp3 = params(&[("manifest", value(&m3))]);
+    let hand = |to: &pave_kernel::Credential| {
+        let mut hp = mp3.clone();
+        hp.insert("to".into(), value(to));
+        hp
+    };
+    // Not to a key without the dispatch's shift ticket.
+    let plain = ben.receive().unwrap();
+    meet(&mut shop, &mut ben);
+    assert!(shop.act(&p, "hand_off", &hand(&plain)).unwrap_err().contains("IfPresent"));
+    // To Ana's shift key, which she shows with its ticket; she takes it from
+    // the description, under another of her shift keys.
+    let ana_at = ana.shift_key(&d).unwrap();
+    shop.learn_ticket(ana.present(&ana_at).unwrap()).unwrap();
+    meet(&mut shop, &mut ana);
+    shop.act(&p, "hand_off", &hand(&ana_at)).unwrap();
+    meet(&mut shop, &mut ana);
+    let keys = ana.shift_keys.len();
+    ana.act(&p, "take", &mp3).unwrap();
+    assert_eq!(ana.shift_keys.len(), keys - 1, "taken under a shift key");
+    // Ana loses her phone; the shop (Rust) remints the parcel to Ben. The
+    // old token Ana's phone holds is void: whoever passes it on, a courier
+    // who has heard of the remint won't take it.
+    let code = shop.label_code(&m3.parcel).unwrap().clone();
+    let ben_at = ben.shift_key(&d).unwrap();
+    shop.learn_ticket(ben.present(&ben_at).unwrap()).unwrap();
+    meet(&mut shop, &mut ben);
+    shop.remint_parcel(&m3, &code, ben_at).unwrap();
+    let ben_old = ben.shift_key(&d).unwrap();
+    ana.learn_ticket(ben.present(&ben_old).unwrap()).unwrap();
+    meet(&mut ana, &mut ben);
+    ana.act(&p, "hand_off", &hand(&ben_old)).unwrap();
+    meet(&mut ana, &mut ben);
+    meet(&mut shop, &mut ben);
+    assert!(ben.act(&p, "take", &mp3).unwrap_err().contains("LineageCurrent"));
     let _ = std::fs::remove_dir_all(&dir);
 }

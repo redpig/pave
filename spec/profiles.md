@@ -40,8 +40,27 @@ Receipts, action states and predicates compute values from:
 | `op` | `{"transfer": {"to": T, "receipt": R}}`, `"retire"`, or `{"mint": {"to": T}}` (one unit; the change stays with the budget's key) |
 | target `T` | `{"param": name}`, or `"fresh"` for a fresh ticketed key of this wallet's |
 | `hop` | Offset added to the state's hops for `"hop"` in the receipt |
-| `requires` | Predicates checked first: `{"created_with": {"receipt": R}}` (the state was made by a transfer with that receipt, evaluated at the state's hops); `{"holder_is": E}` |
+| `requires` | Predicates checked first (below) |
 | `check` | Run the ordinary acceptance check on the state first, as a recipient does |
+| `trust` | Clerks the check also trusts, each `{"clerk": E, "sequence": E}`; skipped if either is null |
+
+A target may also be `{"key_from": {"clerk": E, "sequence": E}}`: a key of this wallet's with a ticket from that clerk, such as a dispatch's shift key, or a fresh key if either is null.
+
+### Predicates
+
+They are general, not per profile:
+
+| Predicate | Holds when |
+|---|---|
+| `{"created_with": {"receipt": R}}` | The state was made by a transfer with that receipt, evaluated at the state's hops |
+| `{"holder_is": E}` | The state's holder is that credential |
+| `{"equal": [E, E]}` | The two values are equal |
+| `{"any_of": [P, …]}` | Any of them holds |
+| `{"if_present": {"value": E, "then": P}}` | The value is null, or P holds: for optional parts such as a dispatch |
+| `{"ticket_from": {"key": E, "clerk": E, "sequence": E}}` | The key holds a ticket this wallet knows from that clerk on that sequence, and it checks out |
+| `{"lineage_current": {"lineage": E, "generation": E}}` | The lineage coin hasn't moved past that generation, and none of its states was used twice: the token isn't void |
+
+A field of a null value reads as null, so a description can reach into optional structures (the manifest's `dispatch.clerk`) and guard them with `if_present`.
 
 Every action is one kernel operation, signed by the state's holder and guarded by the wallet's signing log. So an action from a description can't do anything the kernel wouldn't allow.
 
@@ -60,18 +79,17 @@ A town or co-op publishes each description as a post on a registry board, with t
 
 ## What can't be described yet
 
-Some rules aren't one operation with a receipt check. They're logic over many records:
+With the general predicates, the parcel description covers dispatch gating and void tokens after a remint: the test hands a dispatched parcel only to shift keys, takes it under one, and refuses a reminted token, all from the description. What's left is logic over many records, or several operations at once:
 
-- dispatch gating (a key must hold a dispatch's shift ticket);
-- remint rules (a token behind its lineage is void; two remints of one generation are evidence);
+- reminting itself (a lineage move, a mint and a handoff together, and a board note);
 - which couriers get paid;
 - board message validity (only the poster accepts);
 - counting tags, tallies, and dispute windows and rulings.
 
 These stay in profile code for now. The plan for them:
 
-- **Rules as pure functions.** Each is a function from records, tickets and parameters to a verdict, with no I/O. That's true of every rule above: they're already written that way in the Rust profiles.
-- **Compiled to WASM, pinned by hash.** A description names a rule as `{"rule": {"module": <code hash>, "fn": "dispatched"}}`. An app runs it in a sandbox with no host functions beyond reading the records it's given. The hash pins the exact code: this is the toolkit's code-bound identity, so a profile's rules can be audited and versioned like its layouts.
-- **Predicates and walks can call rules.** A rule is just one more kind of predicate, so actions and walks stay declarative around it.
+- **Grow the predicates first.** Most rules turn out to be general (a ticket from a clerk, a lineage that hasn't moved), and a general predicate serves every profile.
+- **Keep the rest where the profile runs.** Rules over many records stay in the profile's own code at its servers, and in untrusted page code where they only advise.
+- **A WASM sandbox in the wallet is the fallback, not the plan.** [web.md](web.md) puts the wallet in the user agent with the web's sandbox around provider pages; a pinned module would only be needed for a rule every party must evaluate that no predicate can express.
 
-Until then, a description covers the part of a profile that moves things and reads their history. That's enough for an app to carry a parcel, but not to decide whether a dispatched one may be handed to someone.
+Until then, a description covers the part of a profile that moves things, checks who may receive them, and reads their history. [web.md](web.md) considers where such rules would run if the kernel were a web platform API, instead of a sandbox of pave's own.
