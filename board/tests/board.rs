@@ -187,7 +187,7 @@ fn the_whole_story_on_ecdaa() {
     assert!(carol.refill_request(&terms, 4).is_err());
     // A tampered request fails.
     let mut forged = alice.refill_request(&terms, 2).unwrap();
-    forged.creds.push(carol.receive().unwrap());
+    forged.body.creds.push(carol.receive().unwrap());
     assert!(town.answer_refill(&forged).is_err());
 
     // A class break: the town closes the software class. Every group it ever

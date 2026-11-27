@@ -166,14 +166,6 @@ pub fn count_basename(purpose: &Hash) -> Vec<u8> {
     encode(&("pave/board/count/v1", purpose))
 }
 
-/// The basename a token request is signed with: one per slot per mint epoch.
-pub fn token_basename(sequence: &Hash, epoch: u32, slot: u32) -> Vec<u8> {
-    crate::slots::basename("pave/board/tokens/v2", sequence, epoch as u64, slot)
-}
-
-fn token_bytes(epoch: u32, creds: &[Credential], standing: &[Standing], purpose: &Option<Hash>, access_standing: &Standing) -> Vec<u8> {
-    encode(&("pave/board/tokens/v1", epoch, creds, standing, purpose, access_standing))
-}
 
 /// A post written and waiting for a server.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -242,20 +234,17 @@ pub struct TokenTerms {
 }
 
 /// An anonymous token request.
+pub type TokenRequest = crate::request::Request<TokenBody>;
+
+/// What a token request asks for.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TokenRequest {
-    pub epoch: u32,
-    pub slot: u32,
+pub struct TokenBody {
     /// The credentials to post as, one token each (repeat one for more).
     pub creds: Vec<Credential>,
     pub standing: Vec<Standing>,
-    /// Count the holder once for this purpose.
+    /// Count the holder once for this purpose: then the request is also
+    /// signed under the purpose's basename.
     pub purpose: Option<Hash>,
-    pub access: Credential,
-    pub access_standing: Standing,
-    pub sig: Sig,
-    /// The same message signed with the purpose's basename.
-    pub count_sig: Option<Sig>,
 }
 
 /// The mint's answer: a ticket per credential, and the budget and mints.
@@ -546,6 +535,11 @@ impl Node {
 
     /// Ask for a token for each of `creds`, anonymously, counted for
     /// `purpose` if given.
+    /// The board mint's request spec: slotted per epoch.
+    pub fn token_spec(&self) -> crate::request::RequestSpec {
+        crate::request::RequestSpec { domain: "pave/board/tokens/v3".into(), scope: self.town.post_mint.output(0), linkage: crate::request::Linkage::Slots(TOKEN_SLOTS), max_skew_ms: None }
+    }
+
     pub fn token_request(&mut self, terms: &TokenTerms, creds: &[Credential], purpose: Option<Hash>) -> Result<TokenRequest, String> {
         let slot = self.slots.take(&self.town.post_mint.output(0), terms.epoch as u64, TOKEN_SLOTS);
         let s = self.view.scheme();
@@ -553,13 +547,9 @@ impl Node {
             .iter()
             .map(|c| Standing::prove(s, &self.key, c, &terms.cheats).ok_or_else(|| "this wallet is a known cheat".to_string()))
             .collect::<Result<Vec<_>, _>>()?;
-        let a = BrioletteV1 { group_public_key: self.town.classes[&self.class].group_public_key.clone() };
-        let access = a.credential(&self.access);
-        let access_standing = Standing::prove(&a, &self.access, &access, &terms.ruled).ok_or("a board ruled this wallet out")?;
-        let msg = token_bytes(terms.epoch, creds, &standing, &purpose, &access_standing);
-        let sig = a.sign(&self.access, &access, &msg, Some(&token_basename(&self.town.sequence, terms.epoch, slot)));
-        let count_sig = purpose.map(|p| a.sign(&self.access, &access, &msg, Some(&count_basename(&p))));
-        Ok(TokenRequest { epoch: terms.epoch, slot, creds: creds.to_vec(), standing, purpose, access, access_standing, sig, count_sig })
+        let group = self.town.classes[&self.class].group_public_key.clone();
+        let basenames: Vec<Vec<u8>> = purpose.iter().map(count_basename).collect();
+        self.token_spec().sign(&self.access, &group, terms.epoch as u64, slot, TokenBody { creds: creds.to_vec(), standing, purpose }, &terms.ruled, &basenames, &[])
     }
 
     /// Mint: answer an anonymous token request. The access signature shows
@@ -569,46 +559,33 @@ impl Node {
     /// signature gives the tickets a tag.
     pub fn answer_tokens(&mut self, req: &TokenRequest) -> Result<TokenGrant, String> {
         let terms = self.token_terms()?;
-        if req.epoch != terms.epoch {
+        if req.period != terms.epoch as u64 {
             return Err(format!("stale request: the mint is at epoch {}", terms.epoch));
         }
-        if req.creds.is_empty() || req.creds.len() > MAX_TOKENS || req.standing.len() != req.creds.len() {
+        let b = &req.body;
+        if b.creds.is_empty() || b.creds.len() > MAX_TOKENS || b.standing.len() != b.creds.len() {
             return Err(format!("ask for 1 to {MAX_TOKENS} tokens, each with standing"));
         }
-        if req.slot >= TOKEN_SLOTS {
-            return Err(format!("slots are 0 to {}", TOKEN_SLOTS - 1));
-        }
-        let msg = token_bytes(req.epoch, &req.creds, &req.standing, &req.purpose, &req.access_standing);
-        let bsn = token_basename(&self.town.sequence, req.epoch, req.slot);
-        let (class, a) = self
-            .town
-            .classes
-            .iter()
-            .map(|(name, c)| (name.clone(), BrioletteV1 { group_public_key: c.group_public_key.clone() }))
-            .find(|(_, a)| a.verify(&req.access, &msg, Some(&bsn), &req.sig))
-            .ok_or("not signed by a member of any class")?;
-        let nym = a.nym(&req.sig).ok_or("no request pseudonym")?;
-        let st = &req.access_standing;
-        if st.credential != req.access || !st.covers(&terms.ruled) || !st.verify(&a) {
-            return Err("ruled out by a board".into());
-        }
+        let groups = self.town.classes.iter().map(|(n, c)| (n, &c.group_public_key));
+        let expect: Vec<crate::request::Expect> = b.purpose.iter().map(|p| crate::request::Expect::Basename(count_basename(p))).collect();
+        let v = self.token_spec().verify(req, groups, &terms.ruled, &expect)?;
+        let (class, nym) = (v.group, v.nym);
         let s = self.view.scheme().clone();
-        for (c, st) in req.creds.iter().zip(&req.standing) {
+        for (c, st) in b.creds.iter().zip(&b.standing) {
             if st.credential != *c || !st.covers(&terms.cheats) || !st.verify(&s) {
                 return Err("a credential lacks standing".into());
             }
         }
-        let tag = match (req.purpose, &req.count_sig) {
-            (None, None) => None,
-            (Some(p), Some(cs)) if a.verify(&req.access, &msg, Some(&count_basename(&p)), cs) => Some(Tag { purpose: p, nym: a.nym(cs).ok_or("no pseudonym")?, class: class.clone() }),
-            _ => return Err("the purpose signature doesn't check out".into()),
+        let tag = match (b.purpose, v.also.first()) {
+            (Some(p), Some(Some(n))) => Some(Tag { purpose: p, nym: n.clone(), class: class.clone() }),
+            _ => None,
         };
         let op = self.operator.as_mut().ok_or("only the mint issues tokens")?;
         if op.closed.contains(&class) {
             return Err(format!("class {class} is closed: update the wallet and enroll again"));
         }
-        op.tokens.note(req.epoch as u64, nym);
-        self.mint_tokens(&req.creds, &class, tag)
+        op.tokens.note(req.period, nym);
+        self.mint_tokens(&b.creds, &class, tag)
     }
 
     /// Mint: ticket each credential in one fresh group and mint it a token,

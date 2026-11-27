@@ -41,9 +41,9 @@
 
 use crate::bulletin::{content_hash, now, BoardInfo, Clock, Copy, Post, Submission, CLOCK_SLACK};
 use crate::node::{apply_ok, Node};
-use pave_kernel::hash::{encode, hash_of, Hash};
+use pave_kernel::hash::{hash_of, Hash};
 use pave_kernel::objects::rights;
-use pave_kernel::{sign, Credential, Kind, Op, Record, Schema, Scheme, Sig};
+use pave_kernel::{sign, Credential, Kind, Op, Record, Schema, Scheme};
 use pave_protocol::{epoch_schema, head, roll, EpochData, Policy, SignedTicket, Tag, Ticket};
 use pave_scheme_briolette::{BrioletteV1, HolderKey, Issuer, JoinReply, JoinRequest, PendingKey};
 use serde::{Deserialize, Serialize};
@@ -84,9 +84,10 @@ impl Election {
     pub fn mint(&self) -> &Record {
         &self.records[0]
     }
-    /// The basename a vote request is signed with: the election itself.
-    pub fn basename(&self) -> Vec<u8> {
-        encode(&("pave/election/v1", self.id))
+    /// The mint's request spec: the election is the basename, so one voter
+    /// has one pseudonym for the whole election.
+    pub fn spec(&self) -> crate::request::RequestSpec {
+        crate::request::RequestSpec { domain: "pave/election/v2".into(), scope: self.id, linkage: crate::request::Linkage::Scope, max_skew_ms: Some(CLOCK_SLACK * 1000) }
     }
     /// A district's ballot box, as a board.
     pub fn board(&self, district: &str) -> Hash {
@@ -122,24 +123,14 @@ impl VoterCard {
 }
 
 /// An anonymous request for a vote coin.
+pub type VoteRequest = crate::request::Request<VoteBody>;
+
+/// What a vote request asks for: a coin held under `cred`. Its time keeps a
+/// captured request from being replayed to revoke a voter's coin.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct VoteRequest {
+pub struct VoteBody {
     pub election: Hash,
-    /// The credential the coin is to be held under.
     pub cred: Credential,
-    /// When the voter asked, in milliseconds, so a captured request can't be
-    /// replayed to revoke a voter's coin.
-    pub at: u64,
-    pub voter: Credential,
-    pub sig: Sig,
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
-}
-
-fn request_bytes(election: &Hash, cred: &Credential, at: u64) -> Vec<u8> {
-    encode(&("pave/election/request/v1", election, cred, at))
 }
 
 /// The mint's answer: the ticket, the coin's records, and the tick that
@@ -245,11 +236,7 @@ impl Node {
 
     /// Voter: ask for a vote coin held under `cred`, anonymously.
     pub fn vote_request(&self, e: &Election, card: &VoterCard, cred: &Credential) -> VoteRequest {
-        let a = BrioletteV1 { group_public_key: e.districts[&card.district].clone() };
-        let voter = a.credential(&card.key);
-        let at = now_ms();
-        let sig = a.sign(&card.key, &voter, &request_bytes(&e.id, cred, at), Some(&e.basename()));
-        VoteRequest { election: e.id, cred: cred.clone(), at, voter, sig }
+        e.spec().sign(&card.key, &e.districts[&card.district], 0, 0, VoteBody { election: e.id, cred: cred.clone() }, &[], &[], &[]).expect("no ruled list for votes")
     }
 
     /// Mint: answer a vote request inside the legal window. A pseudonym seen
@@ -258,23 +245,13 @@ impl Node {
     /// again.
     pub fn answer_vote(&mut self, req: &VoteRequest) -> Result<VoteGrant, String> {
         let t = now();
-        let a = self.authority(&req.election)?;
+        let a = self.authority(&req.body.election)?;
         let e = a.election.clone();
         if !e.open_at(t) {
             return Err("outside the legal window".into());
         }
-        if req.at.abs_diff(now_ms()) > CLOCK_SLACK * 1000 {
-            return Err("a stale request".into());
-        }
-        let msg = request_bytes(&e.id, &req.cred, req.at);
-        let bsn = e.basename();
-        let (district, s) = e
-            .districts
-            .iter()
-            .map(|(d, gpk)| (d.clone(), BrioletteV1 { group_public_key: gpk.clone() }))
-            .find(|(_, s)| s.verify(&req.voter, &msg, Some(&bsn), &req.sig))
-            .ok_or("not on any district's roll")?;
-        let nym = s.nym(&req.sig).ok_or("no pseudonym")?;
+        let v = e.spec().verify(req, e.districts.iter(), &[], &[]).map_err(|err| if err.contains("member") { "not on any district's roll".to_string() } else { err })?;
+        let (district, nym) = (v.group, v.nym);
         let prior = a.issued.get(&nym).cloned();
         let mut tick = None;
         if let Some(p) = &prior {
@@ -300,14 +277,14 @@ impl Node {
         let op = self.operator.as_ref().unwrap();
         let sch = self.view.scheme().clone();
         let tag = Tag { purpose: e.id, nym: nym.clone(), class: district };
-        let ticket = SignedTicket::issue(&sch, &op.clerk, &e.clerk, Ticket { credential: req.cred.clone(), sequence: e.sequence, epoch: number, group, max_spend: None, tag: Some(tag) });
+        let ticket = SignedTicket::issue(&sch, &op.clerk, &e.clerk, Ticket { credential: req.body.cred.clone(), sequence: e.sequence, epoch: number, group, max_spend: None, tag: Some(tag) });
         let (minter, me) = (op.minter.clone(), op.minter_cred.clone());
         let budget = sign(&sch, &minter, &me, Op::IssueBudget { authority: e.id, schema: vote_schema(&e.label), amount: 1, to: me.clone() });
         apply_ok(&mut self.view, &budget)?;
-        let coin = self.guard(sign(&sch, &minter, &me, Op::Mint { budget: budget.output(0), amount: 1, to: req.cred.clone(), change_to: me.clone() }))?;
+        let coin = self.guard(sign(&sch, &minter, &me, Op::Mint { budget: budget.output(0), amount: 1, to: req.body.cred.clone(), change_to: me.clone() }))?;
         apply_ok(&mut self.view, &coin)?;
         self.know.add_ticket(&sch, ticket.clone());
-        self.authority_mut(&e.id)?.issued.insert(nym, Issued { group, credential: req.cred.clone(), at: req.at, cast: false });
+        self.authority_mut(&e.id)?.issued.insert(nym, Issued { group, credential: req.body.cred.clone(), at: req.at, cast: false });
         self.save()?;
         Ok(VoteGrant { ticket, records: vec![budget, coin], tick })
     }

@@ -90,6 +90,18 @@ The basename is the smallest scope that covers question 2, named so it can't ove
 | (dispatch, day) | One co-op, one day | A daily check-in: counting distinct couriers; a second check-in is linked | [Dispatch](../spec/parcels.md) |
 | (dispatch, day, slot) | One slot, one day | Shift-key requests: a budget unlinkable to each other | Dispatch |
 
+### One request type
+
+Every request to a mint in pave is the same type ([`request.rs`](../board/src/request.rs)): a **spec** (a domain string, the mint's scope, a linkage, and how fresh it must be) plus your profile's **body**. The linkage is the decision this section is about:
+
+| Linkage | Basename | For |
+|---|---|---|
+| `Slots(n)` | (domain, scope, period, slot), slot below n | A budget of unlinkable requests per period |
+| `Period` | (domain, scope, period) | One pseudonym per holder per period: counting |
+| `Scope` | (domain, scope) | One pseudonym per holder for the whole scope: one live coin |
+
+A request is signed by a group credential with standing against the mint's ruled list. It can also be signed under another basename (a pseudonym for a purpose, as counted posts are) or by another group's credential with no basename (showing membership, as a courier's day credential is). The mint checks all of it with one call. Because the spec is data, an app can build any mint's requests from a profile's description.
+
 ### Budgets, not caps: slots
 
 When you want to limit how often someone asks, don't refuse past a count. Give them a **budget of unlinkable requests** instead: sign with (domain, scope, period, slot) and accept only slots 0 to N−1. This is Briolette's ticket-request pattern.

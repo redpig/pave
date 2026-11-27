@@ -142,14 +142,14 @@ pub struct RefillTerms {
 /// the wallet's access credential, with the epoch as basename: the clerk
 /// learns the wallet's class and can count its requests this epoch, and
 /// nothing links it to the wallet's tickets, its other requests or its name.
+pub type RefillRequest = crate::request::Request<RefillBody>;
+
+/// What a ticket request asks for: credentials, each with standing against
+/// every cheat the clerk knows of.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RefillRequest {
-    pub epoch: u32,
-    pub slot: u32,
+pub struct RefillBody {
     pub creds: Vec<Credential>,
     pub standing: Vec<Standing>,
-    pub access: Credential,
-    pub sig: Sig,
 }
 
 /// The town's answer to a join request.
@@ -339,15 +339,6 @@ pub(crate) fn op_recipients(op: &Op) -> Vec<&Credential> {
     }
 }
 
-/// The basename a ticket request is signed with: one per slot per clerk epoch.
-pub fn refill_basename(sequence: &Hash, epoch: u32, slot: u32) -> Vec<u8> {
-    crate::slots::basename("pave/ticket-request/v1", sequence, epoch as u64, slot)
-}
-
-/// The bytes a ticket request signs.
-pub fn refill_bytes(epoch: u32, creds: &[Credential], standing: &[Standing]) -> Vec<u8> {
-    pave_kernel::hash::encode(&("pave/ticket-request/v0", epoch, creds, standing))
-}
 
 /// The classes a test town starts with.
 fn default_classes() -> Vec<(&'static str, Option<u64>)> {
@@ -898,6 +889,11 @@ impl Node {
     /// Ask for `count` more tickets, anonymously: fresh credentials, each
     /// with standing against every cheat the clerk knows of, signed with a
     /// fresh randomization of this wallet's access credential.
+    /// The clerk's request spec: slotted per epoch of the town's sequence.
+    pub fn refill_spec(&self) -> crate::request::RequestSpec {
+        crate::request::RequestSpec { domain: "pave/ticket-request/v2".into(), scope: self.town.sequence, linkage: crate::request::Linkage::Slots(REFILL_SLOTS), max_skew_ms: None }
+    }
+
     pub fn refill_request(&mut self, terms: &RefillTerms, count: usize) -> Result<RefillRequest, String> {
         let slot = self.slots.take(&self.town.sequence, terms.epoch as u64, REFILL_SLOTS);
         let s = self.scheme();
@@ -906,11 +902,8 @@ impl Node {
             .iter()
             .map(|c| Standing::prove(s, &self.key, c, &terms.cheats).ok_or_else(|| "this wallet is a known cheat".to_string()))
             .collect::<Result<Vec<_>, _>>()?;
-        let a = BrioletteV1 { group_public_key: self.town.classes[&self.class].group_public_key.clone() };
-        let access = a.credential(&self.access);
-        let bsn = refill_basename(&self.town.sequence, terms.epoch, slot);
-        let sig = a.sign(&self.access, &access, &refill_bytes(terms.epoch, &creds, &standing), Some(&bsn));
-        Ok(RefillRequest { epoch: terms.epoch, slot, creds, standing, access, sig })
+        let group = self.town.classes[&self.class].group_public_key.clone();
+        self.refill_spec().sign(&self.access, &group, terms.epoch as u64, slot, RefillBody { creds, standing }, &[], &[], &[])
     }
 
     /// Operator: answer an anonymous ticket request. The access signature
@@ -920,27 +913,18 @@ impl Node {
     /// random group.
     pub fn answer_refill(&mut self, req: &RefillRequest) -> Result<Vec<SignedTicket>, String> {
         let terms = self.refill_terms()?;
-        if req.epoch != terms.epoch {
+        if req.period != terms.epoch as u64 {
             return Err(format!("stale request: the clerk is at epoch {}", terms.epoch));
         }
-        if req.creds.is_empty() || req.creds.len() > MAX_BATCH || req.standing.len() != req.creds.len() {
+        let b = &req.body;
+        if b.creds.is_empty() || b.creds.len() > MAX_BATCH || b.standing.len() != b.creds.len() {
             return Err(format!("ask for 1 to {MAX_BATCH} tickets, each with standing"));
         }
-        if req.slot >= REFILL_SLOTS {
-            return Err(format!("slots are 0 to {}", REFILL_SLOTS - 1));
-        }
-        let msg = refill_bytes(req.epoch, &req.creds, &req.standing);
-        let bsn = refill_basename(&self.town.sequence, req.epoch, req.slot);
-        let class = self
-            .town
-            .classes
-            .iter()
-            .find(|(_, c)| BrioletteV1 { group_public_key: c.group_public_key.clone() }.verify(&req.access, &msg, Some(&bsn), &req.sig))
-            .map(|(name, _)| name.clone())
-            .ok_or("not signed by a member of any class")?;
-        let nym = self.scheme().nym(&req.sig).ok_or("no request pseudonym")?;
+        let groups = self.town.classes.iter().map(|(n, c)| (n, &c.group_public_key));
+        let v = self.refill_spec().verify(req, groups, &[], &[])?;
+        let (class, nym) = (v.group, v.nym);
         let s = self.view.scheme().clone();
-        for (c, st) in req.creds.iter().zip(&req.standing) {
+        for (c, st) in b.creds.iter().zip(&b.standing) {
             if st.credential != *c || !st.covers(&terms.cheats) || !st.verify(&s) {
                 return Err("a credential lacks standing".into());
             }
@@ -949,8 +933,8 @@ impl Node {
         if op.closed.contains(&class) {
             return Err(format!("class {class} is closed: update the wallet and enroll again"));
         }
-        op.refills.note(req.epoch as u64, nym);
-        Ok(self.issue_tickets(&req.creds, &class)?.1)
+        op.refills.note(req.period, nym);
+        Ok(self.issue_tickets(&b.creds, &class)?.1)
     }
 
     pub fn take_tickets(&mut self, tickets: Vec<SignedTicket>) -> usize {

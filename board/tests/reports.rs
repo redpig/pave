@@ -168,11 +168,11 @@ fn reports() {
     let terms = town.token_terms().unwrap();
     let fresh = alice.view.scheme().credential(&alice.key);
     let mut req = alice.token_request(&terms, std::slice::from_ref(&fresh), Some(Hash([1; 32]))).unwrap();
-    req.purpose = Some(Hash([2; 32]));
+    req.body.purpose = Some(Hash([2; 32]));
     assert!(town.answer_tokens(&req).is_err());
     let mut req = alice.token_request(&terms, std::slice::from_ref(&fresh), Some(Hash([1; 32]))).unwrap();
-    req.count_sig = alice.token_request(&terms, std::slice::from_ref(&fresh), Some(Hash([2; 32]))).unwrap().count_sig;
-    assert!(town.answer_tokens(&req).unwrap_err().contains("purpose"));
+    req.also = alice.token_request(&terms, std::slice::from_ref(&fresh), Some(Hash([2; 32]))).unwrap().also;
+    assert!(town.answer_tokens(&req).unwrap_err().contains("extra signature"));
 
     // Only the board mint's tokens post: a budget of the same schema under
     // the root's own capability makes tokens no server or reader takes.
