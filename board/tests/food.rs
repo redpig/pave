@@ -5,7 +5,9 @@
 //! pay; the order and the address stay with the restaurant and the courier.
 
 use pave_board::dispatch::{DayCard, MemberCard};
-use pave_board::food::{Delivered, Outcome};
+use pave_board::board::contractor;
+use pave_board::bulletin::purpose;
+use pave_board::food::{Delivered, DeliveryVouch, Outcome};
 use pave_board::node::{Node, PendingJoin};
 use pave_board::parcel::Delivery;
 use pave_board::pay::{Invoice, PayVerdict, Prefix};
@@ -54,6 +56,25 @@ fn pay(payer: &mut Node, payee: &mut Node, inv: &Invoice) {
     let rec = payer.pay_invoice(inv, offer.state).unwrap();
     let ack = payee.take_payment(&rec).unwrap();
     payer.confirm(&rec, &ack).unwrap();
+}
+
+/// A parcel's custody records as `n` has them: its mint and every spend.
+fn chain(n: &Node, m: &pave_board::parcel::Manifest) -> Vec<pave_kernel::Record> {
+    let mut out: Vec<_> = n.view.creator(&m.parcel).into_iter().cloned().collect();
+    let mut state = m.parcel;
+    while let Some(r) = n.view.spender(&state) {
+        out.push(r.clone());
+        state = r.output(0);
+    }
+    out
+}
+
+/// Post a delivery vouch as `signer` without the wallet's own checks,
+/// carrying the records `records` has.
+fn raw_vouch(n: &mut Node, records: Vec<pave_kernel::Record>, signer: &pave_kernel::Credential, m: &pave_board::parcel::Manifest, who: pave_kernel::hash::Hash) {
+    let v = DeliveryVouch { manifest: m.clone(), records, note: "raw".into() };
+    let scope = n.town.jobs.scope;
+    n.compose(&scope, signer, "delivery vouch", Some(who), pave_kernel::hash::encode(&v), Some(purpose(&scope, "vouch", &who))).unwrap();
 }
 
 fn kv(pairs: &[(&str, ciborium::Value)]) -> Params {
@@ -212,6 +233,65 @@ fn food_by_an_accountable_courier() {
     cust.sync_with(&mut town);
     cafe.sync_with(&mut town);
     assert!(matches!(cafe.food_outcome(&m2, order2, due), Outcome::SealBroken { .. }));
+
+    // The customer vouches for the courier who brought the first order, in
+    // the thread of her badge key. Bea, who never saw these parcels, checks
+    // it from the records the vouch carries.
+    let who = contractor(&ana_id);
+    assert!(ana.vouch_delivery(&m, "me").unwrap_err().contains("addressee"));
+    cust.vouch_delivery(&m, "hot, and quick").unwrap();
+    cust.vouch_delivery(&m, "again").unwrap();
+    // Ana vouches for her own second delivery under another key: not the
+    // addressee's, so it doesn't count.
+    let rs = chain(&cust, &m2);
+    raw_vouch(&mut ana, rs, &other, &m2, who);
+    for n in [&mut cust, &mut ana, &mut bea] {
+        n.sync_with(&mut town);
+    }
+    let (people, vouches) = bea.delivery_vouches(&who);
+    assert_eq!((people, vouches.len(), vouches[0].note.as_str()), (1, 1, "hot, and quick"), "one parcel counts once");
+    // A second delivery to the same customer adds a vouch, not a person.
+    cust.vouch_delivery(&m2, "fine").unwrap();
+    cust.sync_with(&mut town);
+    bea.sync_with(&mut town);
+    assert_eq!((bea.delivery_vouches(&who).0, bea.delivery_vouches(&who).1.len()), (1, 2));
+
+    // Two vouches that don't count: in Ana's thread for a bag the cafe
+    // handed over itself, and for one Ana handed over that the customer
+    // hasn't confirmed.
+    let ship = |cafe: &mut Node| {
+        let m = cafe.ship("order", "dn5bpsb", "dn5bpth", deliver_to.clone(), 400).unwrap();
+        cafe.name_dispatch(&m.parcel, d.clone()).unwrap()
+    };
+    let with = |m: &pave_board::parcel::Manifest, to: Option<&pave_kernel::Credential>| {
+        let mut p = kv(&[("manifest", value(m))]);
+        if let Some(k) = to {
+            p.insert("to".into(), value(k));
+        }
+        p
+    };
+    let direct = ship(&mut cafe);
+    cafe.act(&food, "hand_off", &with(&direct, Some(&deliver_to))).unwrap();
+    meet(&mut cafe, &mut cust);
+    cust.act(&food, "confirm", &with(&direct, None)).unwrap();
+    let rs = chain(&cafe, &direct).into_iter().chain(chain(&cust, &direct)).collect();
+    raw_vouch(&mut cust, rs, &deliver_to, &direct, who);
+    let open = ship(&mut cafe);
+    cafe.act(&food, "hand_off", &with(&open, Some(&ana_id))).unwrap();
+    meet(&mut cafe, &mut ana);
+    ana.act(&food, "take", &with(&open, None)).unwrap();
+    meet(&mut ana, &mut cust);
+    ana.act(&food, "hand_off", &with(&open, Some(&deliver_to))).unwrap();
+    meet(&mut ana, &mut cust);
+    assert!(cust.vouch_delivery(&open, "early").unwrap_err().contains("not delivered"));
+    let rs = chain(&cafe, &open).into_iter().chain(chain(&cust, &open)).collect();
+    raw_vouch(&mut cust, rs, &deliver_to, &open, who);
+    cust.sync_with(&mut town);
+    bea.sync_with(&mut town);
+    // A reader needs the shipper's budget history, as any record, to check
+    // a bag's mint: Bea hears it from the cafe.
+    meet(&mut bea, &mut cafe);
+    assert_eq!(bea.delivery_vouches(&who).1.len(), 2);
 
     // The co-op revokes Ana's badge: the cafe won't hand her another order,
     // and a bag she still held couldn't be taken under it.

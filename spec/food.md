@@ -38,8 +38,19 @@ A badge is a **ticket**, not an access credential. The co-op vets a courier outs
 
 The board's clock is the time witness: the server binds its epoch and clock into each post, so a note can't be backdated (H8). A dispute reads the same outcomes, with the custody chain naming the badge.
 
+## Vouching for the courier
+
+The customer can vouch for the courier who handed the bag over, in the thread of that courier's key: with the badge on its trade key, deliveries and other jobs add up on one record. A vouch is a counted post carrying the manifest and the parcel's custody records, from its mint to the customer's confirmation. A reader learns those records, as from any meet, and counts the vouch only if:
+
+- it is signed by the manifest's addressee;
+- the custody shows that courier's key handing the bag to the addressee;
+- the addressee confirmed it.
+
+Each parcel counts once, and each person once however many bags they vouch for. The courier can't vouch for itself, nobody can credit a bag the cafe handed over itself to a courier, and a bag not yet confirmed earns nothing. Whether to vouch for a late or opened bag is the customer's call; the outcome is on the board beside it.
+
+A reader also needs the shipper's budget history to check a bag's mint. It travels like any record; a reader without it doesn't count the vouch yet.
+
 ## Still to build
 
 - **Badge renewal.** A badge lasts until revoked. A co-op would re-issue after re-vetting, on a period of its choosing.
-- **Delivery vouches.** A delivered, on-time, sealed bag is a good mark for the badge: the voucher is the customer who confirmed, and the courier's identity is the badge's. Not built.
 - **Offering deliveries** to checked-in, badged couriers; **refunds and no-shows**; **a real adapter**; **the host app**: as in [orders.md](orders.md).

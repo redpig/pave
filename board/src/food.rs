@@ -11,9 +11,21 @@
 //! - **The outcome** compares the note with the order's deadline: on time,
 //!   late by so many seconds, or delivered with a broken seal. It is what a
 //!   dispute over the order starts from.
+//! - **Vouching for the courier.** The customer can vouch for the courier
+//!   that handed the bag over, in the thread of that courier's key (best its
+//!   badge on its trade key, so jobs and deliveries make one reputation; see
+//!   [`crate::board`]). A vouch carries the parcel's custody records, so any
+//!   reader checks it from the records alone: the bag was minted from a
+//!   shipper's budget, the courier's key handed it to the addressee, the
+//!   addressee confirmed it, and the vouch is signed by the addressee. Each
+//!   parcel counts once, and each person once.
 
-use crate::parcel::{label_hash, Manifest};
+use crate::board::contractor;
+use crate::bulletin::purpose;
+use crate::parcel::{label_hash, Manifest, Step};
 use pave_kernel::hash::Hash;
+use pave_kernel::Record;
+use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 /// The customer's note on delivery.
@@ -21,6 +33,22 @@ use serde::{Deserialize, Serialize};
 pub struct Delivered {
     pub order: Hash,
     pub seal_ok: bool,
+}
+
+/// The customer's vouch for the courier who delivered: the manifest, and
+/// the records from the parcel's mint to its retirement.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DeliveryVouch {
+    pub manifest: Manifest,
+    pub records: Vec<Record>,
+    pub note: String,
+}
+
+/// One delivery vouch that counts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeliveryVouched {
+    pub parcel: Hash,
+    pub note: String,
 }
 
 /// How a food order went.
@@ -43,6 +71,68 @@ impl crate::node::Node {
         let note = Delivered { order, seal_ok };
         let scope = self.town.jobs.scope;
         self.compose(&scope, &m.addressee, "delivered", Some(order), pave_kernel::hash::encode(&note), None)
+    }
+
+    /// Customer: vouch for the courier who handed this wallet the parcel,
+    /// in that courier key's thread, counted once per person. The parcel
+    /// must be delivered and confirmed.
+    pub fn vouch_delivery(&mut self, m: &Manifest, note: &str) -> Result<Hash, String> {
+        if !self.mine.contains(&m.addressee) {
+            return Err("only the addressee vouches for its delivery".into());
+        }
+        let c = self.custody(m);
+        if !c.delivered {
+            return Err("not delivered".into());
+        }
+        let courier = c.steps.iter().rev().find_map(|s| match s {
+            Step::Handoff { from, to } if *to == m.addressee => Some(from.clone()),
+            _ => None,
+        });
+        let courier = courier.ok_or("no courier handed it over")?;
+        let mut records: Vec<Record> = self.view.creator(&m.parcel).into_iter().cloned().collect();
+        let mut state = m.parcel;
+        while let Some(r) = self.view.spender(&state) {
+            records.push(r.clone());
+            state = r.output(0);
+        }
+        let who = contractor(&courier);
+        let scope = self.town.jobs.scope;
+        let v = DeliveryVouch { manifest: m.clone(), records, note: note.into() };
+        self.compose(&scope, &m.addressee, "delivery vouch", Some(who), pave_kernel::hash::encode(&v), Some(purpose(&scope, "vouch", &who)))
+    }
+
+    /// Anyone: the delivery vouches for the courier key whose contractor id
+    /// is `who`, and how many distinct people made them. Each vouch's
+    /// records are learned first, as from any meet.
+    pub fn delivery_vouches(&mut self, who: &Hash) -> (usize, Vec<DeliveryVouched>) {
+        let scope = self.town.jobs.scope;
+        let Ok(copy) = self.copy(&scope) else { return (0, vec![]) };
+        let mut found = vec![];
+        for i in copy.items() {
+            if i.post.kind != "delivery vouch" || i.post.thread != Some(*who) {
+                continue;
+            }
+            let Ok(v) = ciborium::from_reader::<DeliveryVouch, _>(i.content) else { continue };
+            if *i.signer != v.manifest.addressee {
+                continue;
+            }
+            let Some((_, nym)) = i.counted(&purpose(&scope, "vouch", who)) else { continue };
+            found.push((v, nym));
+        }
+        let (mut parcels, mut people, mut out) = (BTreeSet::new(), BTreeSet::new(), vec![]);
+        for (v, nym) in found {
+            for r in &v.records {
+                let _ = self.view.apply(r);
+            }
+            let m = &v.manifest;
+            let c = self.custody(m);
+            let by_courier = c.steps.iter().any(|s| matches!(s, Step::Handoff { from, to } if *to == m.addressee && contractor(from) == *who));
+            if c.delivered && by_courier && parcels.insert(m.parcel) {
+                people.insert(nym);
+                out.push(DeliveryVouched { parcel: m.parcel, note: v.note });
+            }
+        }
+        (people.len(), out)
     }
 
     /// Anyone: how the order went, from the board, against its deadline.
