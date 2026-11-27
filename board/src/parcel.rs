@@ -672,7 +672,7 @@ impl Node {
     }
 
     /// Pay `amount` to `to` from one coin, with change to a fresh credential.
-    pub(crate) fn pay_to(&mut self, to: Credential, amount: u64, receipt: Hash) -> Result<Hash, String> {
+    pub fn pay_to(&mut self, to: Credential, amount: u64, receipt: Hash) -> Result<Hash, String> {
         let coin = self.my_coins().into_iter().find(|c| c.amount >= amount).ok_or("no single coin covers the pay")?;
         let rec = if coin.amount == amount {
             self.signed(&coin.holder, Op::Transfer { state: coin.state, to, receipt })?

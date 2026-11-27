@@ -12,6 +12,8 @@
 //! answering with one JSON object per line on stdout, so a person, a script
 //! or an agent can drive it the same way. Send `{"cmd":"help"}` for the list.
 
+mod cli_food;
+
 use pave_board::node::{Enrollment, Join, Node, PendingJoin};
 use pave_board::report;
 use pave_board::net;
@@ -60,7 +62,7 @@ const HELP: &[&str] = &[
 fn command(node: &Arc<Mutex<Node>>, v: &Value) -> Result<Value, String> {
     let cmd = v["cmd"].as_str().ok_or("missing cmd")?;
     match cmd {
-        "help" => Ok(json!({ "commands": HELP })),
+        "help" => Ok(json!({ "commands": HELP.iter().chain(cli_food::HELP).collect::<Vec<_>>() })),
         "meet" => {
             let peer = v["peer"].as_str().ok_or("missing peer")?;
             let (new, bytes) = net::meet(node, peer).map_err(|e| e.to_string())?;
@@ -147,6 +149,9 @@ fn command(node: &Arc<Mutex<Node>>, v: &Value) -> Result<Value, String> {
 }
 
 fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
+    if let Some(r) = cli_food::command(n, cmd, v) {
+        return r;
+    }
     match cmd {
         "issues" => {
             let issues: Vec<Value> = n

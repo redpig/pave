@@ -2,7 +2,7 @@
 
 Food goes to someone's door, so its courier must be known. Not to the customer, who needn't learn who it was, but to the restaurant and the co-op, so a courier answers for how they deliver, well or badly. The anonymous shift keys of [parcels](parcels.md#dispatch) don't do that: they fit a relay between fixed points (a locker, a depot, a shop counter), never a home address.
 
-The description is [`profiles/food.json`](../profiles/food.json), with the order binding from [`profiles/orders.json`](../profiles/orders.json) ([orders.md](orders.md)). [`board/tests/food.rs`](../board/tests/food.rs) runs it end to end.
+The description is [`profiles/food.json`](../profiles/food.json), with the order binding from [`profiles/orders.json`](../profiles/orders.json) ([orders.md](orders.md)). [`board/tests/food.rs`](../board/tests/food.rs) runs it end to end, and [`demo/food_demo.py`](../demo/food_demo.py) runs it across separate `pave-node` processes, one per person, through the food commands in [`board/src/cli_food.rs`](../board/src/cli_food.rs).
 
 ## Badges
 
