@@ -18,7 +18,7 @@ Profiles can be published as data that one app loads and acts on: see [spec/prof
 
 To design a system on pave, start with [docs/building.md](docs/building.md): the decisions in order, with how to choose basenames and clocks, where checks go, and worked examples. The patterns it uses are defined in [spec/toolkit.md](spec/toolkit.md).
 
-The values behind it are in [docs/principles.md](docs/principles.md), and the reasoning behind each decision is in [docs/design-log.md](docs/design-log.md). Every component's attack surface, the attacks on it and how each is prevented or answered are in [docs/threats.md](docs/threats.md).
+The values behind it are in [docs/principles.md](docs/principles.md), and the reasoning behind each decision is in [docs/design-log.md](docs/design-log.md). Every component's attack surface, the attacks on it and how each is prevented or answered are in [docs/threats.md](docs/threats.md). What a wallet sends and computes, and what phones can do with it today, is in [docs/devices.md](docs/devices.md).
 
 ## Code
 
