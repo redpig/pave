@@ -10,6 +10,8 @@
 //! - [`dispatch`]: a co-op's dispatch: members, daily caps and bans by a
 //!   per-day pseudonym
 //! - [`dispute`]: disputes as jobs, with appeals and arbiter reputation
+//! - [`food`]: food delivery's outcomes: the board's clock as the time
+//!   witness, the tamper seal, lateness
 //! - [`election`]: a municipal election: a mint whose basename is the
 //!   election and whose clock is its own
 //! - [`evidence`]: evidence for dispute panels, held by the host and shown only to the panel
@@ -29,6 +31,7 @@ pub mod bulletin;
 pub mod dispatch;
 pub mod dispute;
 pub mod election;
+pub mod food;
 pub mod evidence;
 pub mod media;
 pub mod nac;

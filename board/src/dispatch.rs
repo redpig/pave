@@ -78,6 +78,15 @@ impl Dispatch {
     pub fn purpose(&self, day: u64) -> Hash {
         hash_of("pave/dispatch/shift", &(self.id, day))
     }
+    /// What a courier badge's ticket is tagged for.
+    pub fn badge_purpose(&self) -> Hash {
+        hash_of("pave/dispatch/badge", &self.id)
+    }
+    /// The courier id on `t`, if it is a badge from this dispatch.
+    pub fn badge_of(&self, s: &impl Scheme, t: &SignedTicket) -> Option<String> {
+        let tag = t.ticket.tag.as_ref().filter(|g| g.purpose == self.badge_purpose())?;
+        (t.clerk == self.clerk && t.ticket.sequence == self.id && t.verify(s)).then(|| String::from_utf8(tag.nym.clone()).ok()).flatten()
+    }
     /// Whether `t` is this dispatch's shift ticket, for any day.
     pub fn shift_of(&self, s: &impl Scheme, t: &SignedTicket) -> Option<u64> {
         if t.clerk != self.clerk || t.ticket.sequence != self.id || !t.verify(s) {
@@ -164,6 +173,10 @@ pub struct Book {
     pub requests: crate::slots::Seen,
     pub ruled: Vec<Cheat>,
     pub revoked: BTreeMap<u32, u32>,
+    /// Badges: each courier id's identity key and ticket group. Who the
+    /// courier is stays with the co-op, outside pave.
+    #[serde(default)]
+    pub badges: BTreeMap<String, (Credential, u32)>,
 }
 
 impl Node {
@@ -185,7 +198,7 @@ impl Node {
         apply_ok(&mut self.view, &first)?;
         let roll = Issuer::new();
         let d = Dispatch { id: first.output(0), label: label.into(), roll: roll.group_public_key.clone(), clerk, records: vec![budget, first] };
-        let book = Book { dispatch: d.clone(), roll, shifts: BTreeMap::new(), days: BTreeMap::new(), checked_in: BTreeMap::new(), requests: Default::default(), ruled: vec![], revoked: BTreeMap::new() };
+        let book = Book { dispatch: d.clone(), roll, shifts: BTreeMap::new(), days: BTreeMap::new(), checked_in: BTreeMap::new(), requests: Default::default(), ruled: vec![], revoked: BTreeMap::new(), badges: BTreeMap::new() };
         self.operator.as_mut().unwrap().dispatches.insert(d.id, book);
         self.save()?;
         Ok(d)
@@ -311,6 +324,48 @@ impl Node {
         let s = self.view.scheme().clone();
         let i = self.shift_keys.iter().position(|c| self.know.tickets.get(c).is_some_and(|t| d.shift_of(&s, t).is_some()))?;
         Some(self.shift_keys.remove(i))
+    }
+
+    /// Co-op: issue a courier badge: a ticket for the courier's stable
+    /// identity key, tagged with the co-op's courier id, in a group of its
+    /// own so it can be revoked alone. The co-op vets the courier and keeps
+    /// who they are; pave sees the id.
+    pub fn issue_badge(&mut self, id: &Hash, courier: &str, key: &Credential) -> Result<SignedTicket, String> {
+        let d = self.book(id)?.dispatch.clone();
+        let used: BTreeSet<u32> = { let b = self.book(id)?; b.shifts.values().flatten().map(|(g, _)| *g).chain(b.badges.values().map(|(_, g)| *g)).collect() };
+        let group = loop {
+            let g = rand::Rng::gen_range(&mut rand::rngs::OsRng, 1..u32::MAX);
+            if !used.contains(&g) {
+                break g;
+            }
+        };
+        let epoch = head(&self.view, &d.id).ok_or("no dispatch tick")?.number;
+        let op = self.operator.as_ref().unwrap();
+        let s = self.view.scheme().clone();
+        let tag = Tag { purpose: d.badge_purpose(), nym: courier.as_bytes().to_vec(), class: "badge".into() };
+        let t = SignedTicket::issue(&s, &op.clerk, &d.clerk, Ticket { credential: key.clone(), sequence: d.id, epoch, group, max_spend: None, tag: Some(tag) });
+        self.know.add_ticket(&s, t.clone());
+        self.book_mut(id)?.badges.insert(courier.into(), (key.clone(), group));
+        self.save()?;
+        Ok(t)
+    }
+
+    /// Co-op: revoke a courier's badge on a new tick.
+    pub fn revoke_badge(&mut self, id: &Hash, courier: &str) -> Result<(), String> {
+        let (_, group) = self.book(id)?.badges.get(courier).cloned().ok_or("no such badge")?;
+        self.tick_dispatch(id, &[group])
+    }
+
+    /// Courier: keep a badge, and the dispatch's ticks.
+    pub fn take_badge(&mut self, d: &Dispatch, t: SignedTicket) -> Result<(), String> {
+        for r in &d.records {
+            apply_ok(&mut self.view, r)?;
+        }
+        let s = self.view.scheme().clone();
+        d.badge_of(&s, &t).ok_or("not a badge from this dispatch")?;
+        self.mine.insert(t.ticket.credential.clone());
+        self.know.add_ticket(&s, t);
+        self.save()
     }
 
     /// Courier: the ticket to show with a shift key it wants a parcel handed

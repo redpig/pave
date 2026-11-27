@@ -40,6 +40,8 @@ Participation is an issuer group. Joining is a **join**: the member's device mak
 - **Town classes** (`hardware`, and so on) are the town's own groups, used for access credentials. Every member has one, and they gate every network service and refill.
 - **A roll of your own** is for when your system has its own membership: a co-op's members ([`dispatch.rs`](../board/src/dispatch.rs)), a district's voters ([`election.rs`](../board/src/election.rs)). Who may join is decided outside pave, by whoever runs the roll, as today.
 
+**Decide who must be known, and to whom.** Unlinkable participation is the default, not a rule. When someone must answer for what they do (a courier at a front door), give them a ticket on one stable key, tagged with who they are to the issuer: a badge ([food.md](../spec/food.md)). The issuer and whoever checks the badge can name them; nobody else learns more than a key. A key holds one ticket, so keep a badge key for the one role.
+
 One roll per **thing you need to tell apart** at the mint: an election has one roll per district, so the district comes from which group key verifies, and nobody states it.
 
 ## 3. Name your mints
@@ -145,6 +147,7 @@ This is the town's own layering (class, access credential, refills) applied one 
 | A hard cap on requests per period | Turns a lost phone or a busy day into a refusal; use slots, and link past the budget |
 | Counting people with a slotted basename | One person appears under several pseudonyms; count with a check-in of its own |
 | A basename for the person's lifetime, "to be safe" | Links everything they ever do with that mint; use the shortest span that enforces what you need, and standing for bans |
+| Anonymous keys where someone must answer for their conduct | Nobody can be held to account; use a badge on a stable key |
 | Deriving the basename from the content of a free-text field | Two people describing one thing differently become two topics; derive it from structured fields (a category and a cell, as reports do) |
 
 ## 5. Choose your clocks

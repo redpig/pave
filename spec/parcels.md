@@ -25,6 +25,8 @@ A co-op that carries parcels can run a dispatch ([`board/src/dispatch.rs`](../bo
 - **Shift keys are slotted refills.** A courier asks for tickets for the keys it will take parcels under, signed twice: by its member credential with (dispatch, day, slot) as basename, and by its day credential with no basename. A courier's first 4 requests a day can't be linked to each other; each later one is served and linked to an earlier one. The day signature shows the courier checked in today and links nothing. Shift tickets carry the request's pseudonym and the day as a tag.
 - **Its own ticks.** Dispatch signs shift tickets on its own tick sequence, and revokes on it.
 
+Shift keys are anonymous: dispatch knows a member carried it, not which. That fits relays between fixed points, never a home address; food goes by badged couriers whom the co-op and the restaurant can name ([food.md](food.md)).
+
 Membership is enforced where custody moves:
 
 | Where | Check |

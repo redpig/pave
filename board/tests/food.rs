@@ -1,0 +1,226 @@
+//! Food delivery end to end, by an accountable courier: a restaurant that
+//! keeps its own ordering system (a mock of Toast here), a customer, a
+//! co-op with its dispatch, and a courier the co-op vetted and badged. Pave
+//! carries the order's binding, the payment, custody of the bag and the
+//! pay; the order and the address stay with the restaurant and the courier.
+
+use pave_board::dispatch::{DayCard, MemberCard};
+use pave_board::food::{Delivered, Outcome};
+use pave_board::node::{Node, PendingJoin};
+use pave_board::parcel::Delivery;
+use pave_board::pay::{Invoice, PayVerdict, Prefix};
+use pave_board::profile::{value, Params, Profile};
+
+const ORDERS: &str = include_str!("../../profiles/orders.json");
+const FOOD: &str = include_str!("../../profiles/food.json");
+
+fn join(town: &mut Node, name: &str, dir: &std::path::Path, credits: &[u64]) -> Node {
+    let (pending, req) = PendingJoin::generate();
+    let e = town.enroll(&req, "hardware", credits).unwrap();
+    let mut n = Node::finish_enrollment(pending, &e, name, &dir.join(name)).unwrap();
+    for _ in 0..2 {
+        let t = town.answer_refill(&n.refill_request(&town.refill_terms().unwrap(), 16).unwrap()).unwrap();
+        n.take_tickets(t);
+    }
+    n
+}
+
+fn meet(a: &mut Node, b: &mut Node) {
+    let (ba, bb) = (a.bundle_for(&b.have()), b.bundle_for(&a.have()));
+    b.absorb_bundle(&ba);
+    a.absorb_bundle(&bb);
+    a.outbox.clear();
+    b.outbox.clear();
+    let (sa, sb) = (a.standings(), b.standings());
+    b.absorb_standings(sa);
+    a.absorb_standings(sb);
+}
+
+fn balance(n: &Node) -> u64 {
+    n.my_coins().iter().map(|c| c.amount).sum()
+}
+
+fn pay(payer: &mut Node, payee: &mut Node, inv: &Invoice) {
+    payer.check_invoice(inv).unwrap();
+    let offer = payer.offer(inv).unwrap();
+    let lacks: Vec<Prefix> = payee.lacks(&offer);
+    let mut p = payer.propose(&offer, &lacks, &pave_protocol::cheat_list(&payer.view)).unwrap();
+    let mut v = payee.judge(&p);
+    if let PayVerdict::NeedStanding(list) = v {
+        p = payer.propose(&offer, &[], &list).unwrap();
+        v = payee.judge(&p);
+    }
+    assert_eq!(v, PayVerdict::Accept);
+    let rec = payer.pay_invoice(inv, offer.state).unwrap();
+    let ack = payee.take_payment(&rec).unwrap();
+    payer.confirm(&rec, &ack).unwrap();
+}
+
+fn kv(pairs: &[(&str, ciborium::Value)]) -> Params {
+    pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+}
+
+fn field(v: &ciborium::Value, k: &str) -> ciborium::Value {
+    v.as_map().unwrap().iter().find(|(f, _)| f.as_text() == Some(k)).unwrap().1.clone()
+}
+
+#[test]
+fn food_by_an_accountable_courier() {
+    let dir = std::env::temp_dir().join(format!("pave-food-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (orders, food) = (Profile::from_json(ORDERS).unwrap(), Profile::from_json(FOOD).unwrap());
+    let mut town = Node::init_town(&dir.join("town"), "test").unwrap();
+    let mut cafe = join(&mut town, "cafe", &dir, &[]);
+    let mut cust = join(&mut town, "cust", &dir, &[3000]);
+    let mut coop = join(&mut town, "coop", &dir, &[]);
+    let mut ana = join(&mut town, "ana", &dir, &[]);
+    let mut bea = join(&mut town, "bea", &dir, &[]);
+    let budget = cafe.receive().unwrap();
+    town.issue_parcel_budget(budget, 50).unwrap();
+    meet(&mut cafe, &mut town);
+
+    // The co-op vets Ana outside pave (who she is, insurance) and badges her
+    // stable identity key as courier-47. Bea is a member with no badge.
+    let d = town.open_dispatch("Pine Co-op").unwrap();
+    let ana_id = ana.identity("courier").unwrap();
+    let badge = town.issue_badge(&d.id, "courier-47", &ana_id).unwrap();
+    ana.take_badge(&d, badge).unwrap();
+    let provider = coop.receive().unwrap();
+
+    // Amounts are cents of test credit. The customer orders on the cafe's
+    // own site; its system keeps the order and the address. The binding
+    // carries the order's hash, a commitment to the address, and a deadline.
+    let toast_order = br#"{"guid":"7d1c","items":[{"name":"pho","qty":2}],"total":2400,"deliveryFee":500}"#;
+    let (address, salt) = ("12 Elm St", value(&serde_bytes::ByteBuf::from(vec![7u8; 16])));
+    let address_commit = orders.receipt_of("address", &kv(&[("salt", salt.clone()), ("address", value(&address))])).unwrap();
+    let due = pave_board::bulletin::now() + 45 * 60;
+    let deliver_to = cust.receive().unwrap();
+    let cafe_id = cafe.identity("public").unwrap();
+    let binding = orders
+        .build("order", &kv(&[("restaurant", value(&cafe_id)), ("order", value(&pave_board::bulletin::content_hash(toast_order))), ("total", value(&2400u64)), ("delivery", value(&500u64)), ("to_cell", value(&"dn5bpth")), ("address", value(&address_commit)), ("deliver_to", value(&deliver_to)), ("provider", value(&Some(provider.clone()))), ("due", value(&due))]))
+        .unwrap();
+    let order = orders.hash("order", &binding).unwrap();
+
+    // The cafe invoices; the customer's payment commits to the binding.
+    let paid = orders.receipt_of("paid", &kv(&[("order", binding.clone())])).unwrap();
+    let inv = cafe.invoice_for(2400, paid).unwrap();
+    pay(&mut cust, &mut cafe, &inv);
+
+    // The cafe bags the order (the seal sticker carries the label code) and
+    // ships it about the order, with the co-op and its dispatch named.
+    let m = cafe.ship("order", "dn5bpsb", "dn5bpth", deliver_to.clone(), 400).unwrap();
+    cafe.name_about(&m.parcel, order).unwrap();
+    cafe.name_provider(&m.parcel, provider.clone()).unwrap();
+    let m = cafe.name_dispatch(&m.parcel, d.clone()).unwrap();
+    let mp = kv(&[("manifest", value(&m))]);
+    let to = |k: &pave_kernel::Credential| {
+        let mut p = mp.clone();
+        p.insert("to".into(), value(k));
+        p
+    };
+
+    // Only a badged courier picks it up: not Bea, a member who checked in
+    // today and holds the dispatch's shift keys, but has no badge.
+    let (pending, req) = MemberCard::start();
+    let card = MemberCard::finish(&d, pending, &town.add_member(&d.id, &req).unwrap()).unwrap();
+    let terms = town.shift_terms(&d.id).unwrap();
+    let (pending, ci) = bea.check_in(&d, &card, &terms).unwrap();
+    let day: DayCard = Node::day_card(&d, terms.0, pending, &town.answer_check_in(&ci).unwrap()).unwrap();
+    let req = bea.shift_request(&d, &card, &day, &terms, 2).unwrap();
+    let t = town.answer_shift(&req).unwrap();
+    bea.take_shift(&d, t).unwrap();
+    let bea_key = bea.shift_key(&d).unwrap();
+    let bea_ticket = bea.present(&bea_key).unwrap();
+    assert_eq!(d.badge_of(cafe.view.scheme(), &bea_ticket), None, "a shift ticket isn't a badge");
+    cafe.learn_ticket(bea_ticket).unwrap();
+    meet(&mut cafe, &mut bea);
+    assert!(cafe.act(&food, "hand_off", &to(&bea_key)).unwrap_err().contains("AnyOf"));
+    // Ana shows her badge; the cafe checks it and knows which courier this
+    // is, and the co-op knows who.
+    let shown = ana.present(&ana_id).unwrap();
+    assert_eq!(d.badge_of(cafe.view.scheme(), &shown).as_deref(), Some("courier-47"));
+    cafe.learn_ticket(shown).unwrap();
+    meet(&mut cafe, &mut ana);
+    cafe.act(&food, "hand_off", &to(&ana_id)).unwrap();
+    meet(&mut cafe, &mut ana);
+    // The address goes to Ana only now, off the record; she checks it
+    // against the binding's commitment.
+    let given = orders.receipt_of("address", &kv(&[("salt", salt.clone()), ("address", value(&address))])).unwrap();
+    assert_eq!(value(&given), field(&binding, "address"));
+    assert_ne!(value(&orders.receipt_of("address", &kv(&[("salt", salt.clone()), ("address", value(&"14 Elm St"))])).unwrap()), field(&binding, "address"));
+    ana.act(&food, "take", &mp).unwrap();
+    // The record names the accountable courier: the take stays on her badge key.
+    meet(&mut ana, &mut cafe);
+    let (steps, holder) = cafe.walk(&food, "custody", &mp).unwrap();
+    assert_eq!((steps.last().unwrap().label.as_str(), holder.as_ref()), ("take", Some(&ana_id)));
+
+    // Ana delivers; the customer checks the seal, confirms, and posts that
+    // it arrived. The board's clock is the time witness.
+    meet(&mut ana, &mut cust);
+    ana.act(&food, "hand_off", &to(&deliver_to)).unwrap();
+    meet(&mut ana, &mut cust);
+    cust.act(&food, "confirm", &mp).unwrap();
+    // Ana can't say it was delivered on time for the customer: only a note
+    // from the key it was delivered to counts.
+    let jobs = ana.town.jobs.scope;
+    let claim = pave_kernel::hash::encode(&Delivered { order, seal_ok: true });
+    // (Her badge key can't post at all: that would replace the badge.)
+    assert!(ana.compose(&jobs, &ana_id, "delivered", Some(order), claim.clone(), None).unwrap_err().contains("another clerk"));
+    let other = ana.receive().unwrap();
+    ana.compose(&jobs, &other, "delivered", Some(order), claim, None).unwrap();
+    ana.sync_with(&mut town);
+    cafe.sync_with(&mut town);
+    assert_eq!(cafe.food_outcome(&m, order, due), Outcome::Pending);
+    let seal = cafe.label_code(&m.parcel).unwrap().clone();
+    cust.note_delivered(&m, order, &seal).unwrap();
+    cust.sync_with(&mut town);
+    cafe.sync_with(&mut town);
+    meet(&mut cust, &mut cafe);
+    assert_eq!(cafe.delivery(&m), Delivery::Delivered("signed"));
+    let Outcome::OnTime { at } = cafe.food_outcome(&m, order, due) else { panic!("{:?}", cafe.food_outcome(&m, order, due)) };
+    // Against an earlier deadline the same note is late, by the board's clock.
+    assert_eq!(cafe.food_outcome(&m, order, at - 60), Outcome::Late { at, by: 60 });
+
+    // The cafe pays the co-op; the co-op pays Ana at her badge.
+    cafe.pay_provider(&m, 500).unwrap();
+    meet(&mut cafe, &mut coop);
+    coop.parcels.insert(m.parcel, m.clone());
+    meet(&mut ana, &mut coop);
+    meet(&mut cust, &mut coop);
+    coop.learn_ticket(ana.present(&ana_id).unwrap()).unwrap();
+    assert_eq!(coop.pay_couriers(&m).unwrap().len(), 1);
+    meet(&mut coop, &mut ana);
+    assert_eq!((balance(&cust), balance(&cafe), balance(&coop), balance(&ana)), (600, 1900, 100, 400));
+
+    // A seal that doesn't match is a broken seal, whatever the time.
+    let m2 = cafe.ship("order", "dn5bpsb", "dn5bpth", deliver_to.clone(), 400).unwrap();
+    let m2 = cafe.name_dispatch(&m2.parcel, d.clone()).unwrap();
+    let mp2 = kv(&[("manifest", value(&m2))]);
+    let order2 = pave_kernel::hash::Hash([2; 32]);
+    let mut p2 = mp2.clone();
+    p2.insert("to".into(), value(&ana_id));
+    cafe.act(&food, "hand_off", &p2).unwrap();
+    meet(&mut cafe, &mut ana);
+    ana.act(&food, "take", &mp2).unwrap();
+    meet(&mut ana, &mut cust);
+    let mut p2 = mp2.clone();
+    p2.insert("to".into(), value(&deliver_to));
+    ana.act(&food, "hand_off", &p2).unwrap();
+    meet(&mut ana, &mut cust);
+    cust.act(&food, "confirm", &mp2).unwrap();
+    cust.note_delivered(&m2, order2, "wrong").unwrap();
+    cust.sync_with(&mut town);
+    cafe.sync_with(&mut town);
+    assert!(matches!(cafe.food_outcome(&m2, order2, due), Outcome::SealBroken { .. }));
+
+    // The co-op revokes Ana's badge: the cafe won't hand her another order,
+    // and a bag she still held couldn't be taken under it.
+    town.revoke_badge(&d.id, "courier-47").unwrap();
+    meet(&mut cafe, &mut town);
+    let m3 = cafe.ship("order", "dn5bpsb", "dn5bpth", deliver_to.clone(), 400).unwrap();
+    let m3 = cafe.name_dispatch(&m3.parcel, d.clone()).unwrap();
+    let mut p3 = kv(&[("manifest", value(&m3))]);
+    p3.insert("to".into(), value(&ana_id));
+    assert!(cafe.act(&food, "hand_off", &p3).unwrap_err().contains("AnyOf"));
+    let _ = std::fs::remove_dir_all(&dir);
+}

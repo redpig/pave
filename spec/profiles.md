@@ -31,6 +31,7 @@ Receipts, action states and predicates compute values from:
 | `{"field": {"of": E, "name": "parcel"}}` | A field of a map |
 | `{"hash": {"layout": "manifest", "of": E}}` | The hash of a value under a layout's domain |
 | `"hop"` | The hop in context: the state's hops plus the action's `hop` offset, or the hop a walk is at |
+| `"holder"` | The key holding the state an action is about to use |
 
 ### Actions
 
@@ -44,7 +45,7 @@ Receipts, action states and predicates compute values from:
 | `check` | Run the ordinary acceptance check on the state first, as a recipient does |
 | `trust` | Clerks the check also trusts, each `{"clerk": E, "sequence": E}`; skipped if either is null |
 
-A target may also be `{"key_from": {"clerk": E, "sequence": E}}`: a key of this wallet's with a ticket from that clerk, such as a dispatch's shift key, or a fresh key if either is null.
+A target may also be `{"key_from": {"clerk": E, "sequence": E}}`: a key of this wallet's with a ticket from that clerk, such as a dispatch's shift key, or a fresh key if either is null. A target of `"holder"` keeps the state on the key already holding it, as the food profile's take does so custody stays on the courier's badge.
 
 ### Predicates
 
@@ -57,7 +58,7 @@ They are general, not per profile:
 | `{"equal": [E, E]}` | The two values are equal |
 | `{"any_of": [P, …]}` | Any of them holds |
 | `{"if_present": {"value": E, "then": P}}` | The value is null, or P holds: for optional parts such as a dispatch |
-| `{"ticket_from": {"key": E, "clerk": E, "sequence": E}}` | The key holds a ticket this wallet knows from that clerk on that sequence, and it checks out |
+| `{"ticket_from": {"key": E, "clerk": E, "sequence": E, "purpose": E?}}` | The key holds a ticket this wallet knows from that clerk on that sequence, tagged for the purpose if one is given, that checks out and whose group the sequence hasn't revoked |
 | `{"lineage_current": {"lineage": E, "generation": E}}` | The lineage coin hasn't moved past that generation, and none of its states was used twice: the token isn't void |
 
 A field of a null value reads as null, so a description can reach into optional structures (the manifest's `dispatch.clerk`) and guard them with `if_present`.

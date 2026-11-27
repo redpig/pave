@@ -1,0 +1,408 @@
+{
+  "name": "food",
+  "version": 1,
+  "doc": "Food delivered by accountable couriers: custody of the order's bag goes only to a courier badge, the co-op's ticket on the courier's stable identity key, so the restaurant and the co-op know which courier had it and the co-op knows who that is. The order's binding (profiles/orders.json) carries a deadline and a commitment to the address, which only the badged courier is given. The bag's tamper seal is the manifest's label code. The customer confirms by retiring it, and posts a delivered note whose board clock is the time witness for lateness.",
+  "schemas": {
+    "parcel": {
+      "meaning": "A package in someone's custody. Its origin is the parcel's id; whoever holds it has the package.",
+      "schema": {
+        "label": "parcel",
+        "divisible": false,
+        "soft_expiry": null,
+        "hard_expiry": null,
+        "offline_transfers": 32,
+        "max_per_holder": null,
+        "sequence": null
+      }
+    }
+  },
+  "layouts": {
+    "manifest": {
+      "domain": "pave/parcel/manifest",
+      "fields": [
+        {
+          "name": "parcel",
+          "type": "hash",
+          "doc": "The parcel token's origin"
+        },
+        {
+          "name": "what",
+          "type": "text"
+        },
+        {
+          "name": "from_cell",
+          "type": "text",
+          "doc": "A coarse location cell"
+        },
+        {
+          "name": "to_cell",
+          "type": "text"
+        },
+        {
+          "name": "addressee",
+          "type": "credential",
+          "doc": "Who may confirm delivery"
+        },
+        {
+          "name": "pay_per_hop",
+          "type": "u64"
+        },
+        {
+          "name": "mode",
+          "type": "any",
+          "default": "Signed",
+          "doc": "How delivery is shown: \"Signed\" here"
+        },
+        {
+          "name": "provider",
+          "type": {
+            "opt": "credential"
+          }
+        },
+        {
+          "name": "label",
+          "type": {
+            "opt": "hash"
+          },
+          "doc": "The hash of the code on the package's label"
+        },
+        {
+          "name": "dispatch",
+          "type": {
+            "opt": "any"
+          }
+        },
+        {
+          "name": "replaces",
+          "type": {
+            "opt": "hash"
+          }
+        },
+        {
+          "name": "lineage",
+          "type": {
+            "opt": "hash"
+          },
+          "doc": "The lineage coin the shipper keeps"
+        },
+        {
+          "name": "generation",
+          "type": "u32",
+          "default": 0
+        },
+        {
+          "name": "about",
+          "type": {
+            "opt": "hash"
+          },
+          "doc": "What the parcel is for, such as an order's binding hash"
+        }
+      ]
+    },
+    "badge": {
+      "domain": "pave/dispatch/badge",
+      "fields": []
+    }
+  },
+  "receipts": {
+    "handoff": {
+      "domain": "pave/parcel/handoff",
+      "parts": [
+        {
+          "hash": {
+            "layout": "manifest",
+            "of": {
+              "param": "manifest"
+            }
+          }
+        },
+        "hop"
+      ]
+    },
+    "take": {
+      "domain": "pave/parcel/take",
+      "parts": [
+        {
+          "hash": {
+            "layout": "manifest",
+            "of": {
+              "param": "manifest"
+            }
+          }
+        },
+        "hop"
+      ]
+    }
+  },
+  "actions": {
+    "mint": {
+      "doc": "Shipper: mint a parcel coin to a fresh key from the parcel budget. Shipping mints two: the token that travels, and the lineage coin the shipper keeps; then build the manifest.",
+      "state": {
+        "budget": {
+          "schema": "parcel"
+        }
+      },
+      "op": {
+        "mint": {
+          "to": "fresh"
+        }
+      }
+    },
+    "hand_off": {
+      "doc": "Restaurant: hand the bag to a courier's badge key (or, at the door, to the customer's key). The badge must be this dispatch's, tagged as a badge, and not revoked.",
+      "state": {
+        "held": {
+          "origin": {
+            "field": {
+              "of": {
+                "param": "manifest"
+              },
+              "name": "parcel"
+            }
+          }
+        }
+      },
+      "requires": [
+        {
+          "any_of": [
+            {
+              "equal": [
+                {
+                  "param": "to"
+                },
+                {
+                  "field": {
+                    "of": {
+                      "param": "manifest"
+                    },
+                    "name": "addressee"
+                  }
+                }
+              ]
+            },
+            {
+              "ticket_from": {
+                "key": {
+                  "param": "to"
+                },
+                "clerk": {
+                  "field": {
+                    "of": {
+                      "field": {
+                        "of": {
+                          "param": "manifest"
+                        },
+                        "name": "dispatch"
+                      }
+                    },
+                    "name": "clerk"
+                  }
+                },
+                "sequence": {
+                  "field": {
+                    "of": {
+                      "field": {
+                        "of": {
+                          "param": "manifest"
+                        },
+                        "name": "dispatch"
+                      }
+                    },
+                    "name": "id"
+                  }
+                },
+                "purpose": {
+                  "hash": {
+                    "layout": "badge",
+                    "of": {
+                      "field": {
+                        "of": {
+                          "field": {
+                            "of": {
+                              "param": "manifest"
+                            },
+                            "name": "dispatch"
+                          }
+                        },
+                        "name": "id"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "op": {
+        "transfer": {
+          "to": {
+            "param": "to"
+          },
+          "receipt": "handoff"
+        }
+      },
+      "hop": 1
+    },
+    "take": {
+      "doc": "Courier: take the bag on your badge key, so the record names the accountable courier; refused if the badge was revoked.",
+      "state": {
+        "held": {
+          "origin": {
+            "field": {
+              "of": {
+                "param": "manifest"
+              },
+              "name": "parcel"
+            }
+          }
+        }
+      },
+      "requires": [
+        {
+          "created_with": {
+            "receipt": "handoff"
+          }
+        },
+        {
+          "ticket_from": {
+            "key": "holder",
+            "clerk": {
+              "field": {
+                "of": {
+                  "field": {
+                    "of": {
+                      "param": "manifest"
+                    },
+                    "name": "dispatch"
+                  }
+                },
+                "name": "clerk"
+              }
+            },
+            "sequence": {
+              "field": {
+                "of": {
+                  "field": {
+                    "of": {
+                      "param": "manifest"
+                    },
+                    "name": "dispatch"
+                  }
+                },
+                "name": "id"
+              }
+            },
+            "purpose": {
+              "hash": {
+                "layout": "badge",
+                "of": {
+                  "field": {
+                    "of": {
+                      "field": {
+                        "of": {
+                          "param": "manifest"
+                        },
+                        "name": "dispatch"
+                      }
+                    },
+                    "name": "id"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "check": true,
+      "trust": [
+        {
+          "clerk": {
+            "field": {
+              "of": {
+                "field": {
+                  "of": {
+                    "param": "manifest"
+                  },
+                  "name": "dispatch"
+                }
+              },
+              "name": "clerk"
+            }
+          },
+          "sequence": {
+            "field": {
+              "of": {
+                "field": {
+                  "of": {
+                    "param": "manifest"
+                  },
+                  "name": "dispatch"
+                }
+              },
+              "name": "id"
+            }
+          }
+        }
+      ],
+      "op": {
+        "transfer": {
+          "to": "holder",
+          "receipt": "take"
+        }
+      },
+      "hop": 1
+    },
+    "confirm": {
+      "doc": "Addressee: confirm delivery by retiring the parcel.",
+      "state": {
+        "held": {
+          "origin": {
+            "field": {
+              "of": {
+                "param": "manifest"
+              },
+              "name": "parcel"
+            }
+          }
+        }
+      },
+      "requires": [
+        {
+          "holder_is": {
+            "field": {
+              "of": {
+                "param": "manifest"
+              },
+              "name": "addressee"
+            }
+          }
+        }
+      ],
+      "op": "retire"
+    }
+  },
+  "walks": {
+    "custody": {
+      "from": {
+        "field": {
+          "of": {
+            "param": "manifest"
+          },
+          "name": "parcel"
+        }
+      },
+      "steps": [
+        {
+          "receipt": "handoff",
+          "label": "handoff"
+        },
+        {
+          "receipt": "take",
+          "label": "take"
+        }
+      ],
+      "retire": "retired"
+    }
+  }
+}

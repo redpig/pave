@@ -103,6 +103,8 @@ pub enum Expr {
     /// The hop count in context: the state's hops plus the action's offset,
     /// or the hop a walk is at.
     Hop,
+    /// The holder of the state an action consumes.
+    Holder,
 }
 
 /// One kernel operation.
@@ -152,6 +154,9 @@ pub enum Target {
     /// A key of this wallet's with a ticket from `clerk` on `sequence`, such
     /// as a dispatch's shift key; a fresh key if either is null.
     KeyFrom { clerk: Expr, sequence: Expr },
+    /// The state's own holder: custody stays on the same key, such as a
+    /// courier's badge.
+    Holder,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -168,8 +173,15 @@ pub enum Pred {
     /// `then` holds, if `value` is present (not null); otherwise true.
     IfPresent { value: Expr, then: Box<Pred> },
     /// `key` holds a ticket this wallet knows, signed by `clerk` on
-    /// `sequence`, that checks out.
-    TicketFrom { key: Expr, clerk: Expr, sequence: Expr },
+    /// `sequence`, that checks out and isn't revoked as far as this wallet
+    /// knows; tagged for `purpose`, if given.
+    TicketFrom {
+        key: Expr,
+        clerk: Expr,
+        sequence: Expr,
+        #[serde(default)]
+        purpose: Option<Expr>,
+    },
     /// The state's lineage hasn't moved past `generation`, and no lineage
     /// state was used twice: the token isn't void.
     LineageCurrent { lineage: Expr, generation: Expr },
@@ -235,6 +247,7 @@ fn fits(ty: &Ty, v: &Value) -> bool {
 struct Ctx<'a> {
     params: &'a Params,
     hop: u32,
+    holder: Option<Credential>,
 }
 
 impl Profile {
@@ -277,13 +290,14 @@ impl Profile {
             },
             Expr::Hash { layout, of } => value(&self.hash(layout, &self.eval(of, cx)?)?),
             Expr::Hop => value(&cx.hop),
+            Expr::Holder => cx.holder.clone().map(|h| value(&h)).ok_or("no state in context")?,
         })
     }
 
     /// A receipt for `params`: what an app shows a payment or a handoff
     /// should commit to.
     pub fn receipt_of(&self, name: &str, params: &Params) -> Result<Hash, String> {
-        self.receipt(name, &Ctx { params, hop: 0 })
+        self.receipt(name, &Ctx { params, hop: 0, holder: None })
     }
 
     fn receipt(&self, name: &str, cx: &Ctx) -> Result<Hash, String> {
@@ -302,7 +316,7 @@ impl Node {
         let a = p.actions.get(action).ok_or_else(|| format!("{}: no action {action}", p.name))?;
         let coin = match &a.state {
             StateSel::Held { origin } => {
-                let origin = as_hash(&p.eval(origin, &Ctx { params, hop: 0 })?)?;
+                let origin = as_hash(&p.eval(origin, &Ctx { params, hop: 0, holder: None })?)?;
                 self.view.unspent().find(|c| c.origin == origin && self.mine.contains(&c.holder)).cloned().ok_or("this wallet doesn't hold it")?
             }
             StateSel::Budget { schema } => {
@@ -316,7 +330,7 @@ impl Node {
             }
         }
         if a.check {
-            let cx = Ctx { params, hop: coin.hops };
+            let cx = Ctx { params, hop: coin.hops, holder: Some(coin.holder.clone()) };
             let mut trusted = vec![];
             for t in &a.trust {
                 let (c, s) = (p.eval(&t.clerk, &cx)?, p.eval(&t.sequence, &cx)?);
@@ -331,7 +345,7 @@ impl Node {
                 Target::Param(name) => as_cred(params.get(name).ok_or_else(|| format!("no parameter {name}"))?),
                 Target::Fresh => n.fresh(),
                 Target::KeyFrom { clerk, sequence } => {
-                    let cx = Ctx { params, hop: coin.hops };
+                    let cx = Ctx { params, hop: coin.hops, holder: Some(coin.holder.clone()) };
                     let (c, s) = (p.eval(clerk, &cx)?, p.eval(sequence, &cx)?);
                     if c.is_null() || s.is_null() {
                         return n.fresh();
@@ -340,9 +354,10 @@ impl Node {
                     let i = n.shift_keys.iter().position(|k| n.know.tickets.get(k).is_some_and(|t| t.clerk == c && t.ticket.sequence == s)).ok_or("no key with a ticket from that clerk")?;
                     Ok(n.shift_keys.remove(i))
                 }
+                Target::Holder => Ok(coin.holder.clone()),
             }
         };
-        let cx = Ctx { params, hop: coin.hops + a.hop };
+        let cx = Ctx { params, hop: coin.hops + a.hop, holder: Some(coin.holder.clone()) };
         let op = match &a.op {
             OpDesc::Transfer { to, receipt } => Op::Transfer { state: coin.state, to: target(self, to)?, receipt: p.receipt(receipt, &cx)? },
             OpDesc::Retire => Op::Retire { state: coin.state },
@@ -355,7 +370,7 @@ impl Node {
     }
 
     fn holds(&self, p: &Profile, pred: &Pred, coin: &pave_kernel::Coin, params: &Params) -> Result<bool, String> {
-        let cx = Ctx { params, hop: coin.hops };
+        let cx = Ctx { params, hop: coin.hops, holder: Some(coin.holder.clone()) };
         Ok(match pred {
             Pred::CreatedWith { receipt } => {
                 let want = p.receipt(receipt, &cx)?;
@@ -372,9 +387,18 @@ impl Node {
                 false
             }
             Pred::IfPresent { value, then } => p.eval(value, &cx)?.is_null() || self.holds(p, then, coin, params)?,
-            Pred::TicketFrom { key, clerk, sequence } => {
+            Pred::TicketFrom { key, clerk, sequence, purpose } => {
                 let (k, c, s) = (as_cred(&p.eval(key, &cx)?)?, as_cred(&p.eval(clerk, &cx)?)?, as_hash(&p.eval(sequence, &cx)?)?);
-                self.know.tickets.get(&k).is_some_and(|t| t.clerk == c && t.ticket.sequence == s && t.verify(self.view.scheme()))
+                let want = match purpose {
+                    Some(e) => Some(as_hash(&p.eval(e, &cx)?)?),
+                    None => None,
+                };
+                let revoked = |g: u32| {
+                    pave_protocol::head(&self.view, &s).and_then(|h| h.data).and_then(|d| self.know.epoch_data.get(&d)).is_some_and(|d| d.revoked.contains_key(&g))
+                };
+                self.know.tickets.get(&k).is_some_and(|t| {
+                    t.clerk == c && t.ticket.sequence == s && t.verify(self.view.scheme()) && !revoked(t.ticket.group) && want.is_none_or(|w| t.ticket.tag.as_ref().is_some_and(|g| g.purpose == w))
+                })
             }
             Pred::LineageCurrent { lineage, generation } => {
                 let l = as_hash(&p.eval(lineage, &cx)?)?;
@@ -402,7 +426,7 @@ impl Node {
     /// steps and the current holder, if it's still held.
     pub fn walk(&self, p: &Profile, walk: &str, params: &Params) -> Result<(Vec<Stepped>, Option<Credential>), String> {
         let w = p.walks.get(walk).ok_or_else(|| format!("no walk {walk}"))?;
-        let mut state = as_hash(&p.eval(&w.from, &Ctx { params, hop: 0 })?)?;
+        let mut state = as_hash(&p.eval(&w.from, &Ctx { params, hop: 0, holder: None })?)?;
         let (mut steps, mut hop) = (vec![], 0u32);
         loop {
             if let Some(c) = self.view.coin(&state) {
@@ -412,7 +436,7 @@ impl Node {
             hop += 1;
             match &rec.op {
                 Op::Transfer { to, receipt, .. } => {
-                    let cx = Ctx { params, hop };
+                    let cx = Ctx { params, hop, holder: None };
                     let label = w.steps.iter().find(|s| p.receipt(&s.receipt, &cx).ok() == Some(*receipt)).map_or("other".to_string(), |s| s.label.clone());
                     steps.push(Stepped { label, signer: rec.signer.clone(), to: Some(to.clone()) });
                 }

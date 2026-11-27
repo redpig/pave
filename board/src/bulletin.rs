@@ -468,6 +468,11 @@ impl Node {
         if let Some(label) = identity {
             self.identity(label)?;
         }
+        // A key holds one ticket. Posting would put a post ticket on it,
+        // replacing a badge or shift ticket from another clerk.
+        if self.know.tickets.get(signer).is_some_and(|t| t.clerk != self.town.clerk) {
+            return Err("this key carries another clerk's ticket (a badge or shift); post under another key".into());
+        }
         let mut nonce = [0u8; 16];
         rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce);
         let d = Draft { board: *scope, signer: signer.clone(), kind: kind.into(), thread, content, nonce, count, identity: identity.map(String::from) };

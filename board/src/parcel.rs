@@ -441,12 +441,12 @@ impl Node {
         Ok(m)
     }
 
-    /// Whether `key` holds a shift ticket from the parcel's dispatch, if it
-    /// names one.
+    /// Whether `key` holds a shift ticket or a courier badge from the
+    /// parcel's dispatch, if it names one.
     fn dispatched(&self, m: &Manifest, key: &Credential) -> bool {
         match &m.dispatch {
             None => true,
-            Some(d) => self.know.tickets.get(key).is_some_and(|t| d.shift_of(self.view.scheme(), t).is_some()),
+            Some(d) => self.know.tickets.get(key).is_some_and(|t| d.shift_of(self.view.scheme(), t).is_some() || d.badge_of(self.view.scheme(), t).is_some()),
         }
     }
 

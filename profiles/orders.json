@@ -1,24 +1,87 @@
 {
   "name": "orders",
   "version": 1,
-  "doc": "An order from a restaurant that keeps its own ordering system (Toast, say). Pave holds only the order's binding: the hash of the order as the restaurant's system has it, the totals, where it goes and who confirms it, and the co-op that delivers. The customer pays the restaurant's invoice committing to the binding; the restaurant ships a parcel about it (the parcels profile), pays the co-op its fee once it's delivered, and the co-op pays its couriers. Menus, kitchen tickets and the order's contents stay with the restaurant.",
+  "doc": "An order from a restaurant that keeps its own ordering system (Toast, say). Pave holds only the order's binding: the hash of the order as the restaurant's system has it, the totals, where it goes and who confirms it, and the co-op that delivers. The customer pays the restaurant's invoice committing to the binding; the restaurant ships a parcel about it (the parcels profile), pays the co-op its fee once it's delivered, and the co-op pays its couriers. For food, the delivery itself is profiles/food.json, by badged couriers only. Menus, kitchen tickets and the order's contents stay with the restaurant.",
   "schemas": {},
   "layouts": {
     "order": {
       "domain": "pave/order/v1",
       "fields": [
-        { "name": "restaurant", "type": "credential", "doc": "The restaurant's public identity" },
-        { "name": "order", "type": "hash", "doc": "The hash of the order as the restaurant's system has it; the contents stay there" },
-        { "name": "total", "type": "u64", "doc": "What the customer pays, delivery included" },
-        { "name": "delivery", "type": "u64", "doc": "The part of the total the restaurant pays the co-op" },
-        { "name": "to_cell", "type": "text", "doc": "A coarse location cell; the address goes only to the courier carrying it" },
-        { "name": "deliver_to", "type": "credential", "doc": "The customer's key, which confirms delivery" },
-        { "name": "provider", "type": { "opt": "credential" }, "doc": "The co-op that delivers" }
+        {
+          "name": "restaurant",
+          "type": "credential",
+          "doc": "The restaurant's public identity"
+        },
+        {
+          "name": "order",
+          "type": "hash",
+          "doc": "The hash of the order as the restaurant's system has it; the contents stay there"
+        },
+        {
+          "name": "total",
+          "type": "u64",
+          "doc": "What the customer pays, delivery included"
+        },
+        {
+          "name": "delivery",
+          "type": "u64",
+          "doc": "The part of the total the restaurant pays the co-op"
+        },
+        {
+          "name": "to_cell",
+          "type": "text",
+          "doc": "A coarse location cell; the address goes only to the courier carrying it"
+        },
+        {
+          "name": "address",
+          "type": "hash",
+          "doc": "The salted hash of the street address: only the badged courier is given the address and salt"
+        },
+        {
+          "name": "deliver_to",
+          "type": "credential",
+          "doc": "The customer's key, which confirms delivery"
+        },
+        {
+          "name": "provider",
+          "type": {
+            "opt": "credential"
+          },
+          "doc": "The co-op that delivers"
+        },
+        {
+          "name": "due",
+          "type": "u64",
+          "doc": "When it must arrive, in seconds since 1970; a delivered note stamped later by the board's clock is late"
+        }
       ]
     }
   },
   "receipts": {
-    "paid": { "domain": "pave/order/paid/v1", "parts": [ { "hash": { "layout": "order", "of": { "param": "order" } } } ] }
+    "paid": {
+      "domain": "pave/order/paid/v1",
+      "parts": [
+        {
+          "hash": {
+            "layout": "order",
+            "of": {
+              "param": "order"
+            }
+          }
+        }
+      ]
+    },
+    "address": {
+      "domain": "pave/order/address/v1",
+      "parts": [
+        {
+          "param": "salt"
+        },
+        {
+          "param": "address"
+        }
+      ]
+    }
   },
   "actions": {},
   "walks": {}
