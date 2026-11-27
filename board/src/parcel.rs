@@ -632,6 +632,9 @@ impl Node {
         if m.provider.as_ref().is_some_and(|p| !self.mine.contains(p)) {
             return Err("this parcel's provider pays its couriers".into());
         }
+        if self.delivery_job(m).is_some_and(|(_, k)| k.is_some()) {
+            return Err("this parcel's courier is paid through its delivery job".into());
+        }
         let c = self.custody(m);
         if !matches!(self.delivery(m), Delivery::Delivered(_)) {
             return Err("not delivered".into());

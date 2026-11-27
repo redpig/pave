@@ -5,7 +5,7 @@
 //! pay; the order and the address stay with the restaurant and the courier.
 
 use pave_board::dispatch::{DayCard, MemberCard};
-use pave_board::board::contractor;
+use pave_board::board::{contractor, Known};
 use pave_board::bulletin::purpose;
 use pave_board::food::{Delivered, DeliveryVouch, Outcome};
 use pave_board::node::{Node, PendingJoin};
@@ -93,7 +93,7 @@ fn food_by_an_accountable_courier() {
     let mut town = Node::init_town(&dir.join("town"), "test").unwrap();
     let mut cafe = join(&mut town, "cafe", &dir, &[]);
     let mut cust = join(&mut town, "cust", &dir, &[3000]);
-    let mut coop = join(&mut town, "coop", &dir, &[]);
+    let mut coop = join(&mut town, "coop", &dir, &[1000]);
     let mut ana = join(&mut town, "ana", &dir, &[]);
     let mut bea = join(&mut town, "bea", &dir, &[]);
     let budget = cafe.receive().unwrap();
@@ -156,8 +156,35 @@ fn food_by_an_accountable_courier() {
     cafe.learn_ticket(bea_ticket).unwrap();
     meet(&mut cafe, &mut bea);
     assert!(cafe.act(&food, "hand_off", &to(&bea_key)).unwrap_err().contains("AnyOf"));
-    // Ana shows her badge; the cafe checks it and knows which courier this
-    // is, and the co-op knows who.
+    // The co-op offers the delivery as a job for badged couriers, under the
+    // provider key the manifest names. A job about this bag from anyone
+    // else, even one some stranger accepts, assigns nobody.
+    let stray = cust.post_about("Deliver a parcel", 400, Some(Known::Badge(d.clone())), Some(m.parcel)).unwrap();
+    assert!(cust.offer_delivery(&m, 400).unwrap_err().contains("provider"));
+    let gig = coop.offer_delivery(&m, 400).unwrap();
+    for n in [&mut coop, &mut cust, &mut ana, &mut cafe] {
+        n.sync_with(&mut town);
+    }
+    // Ana replies to both, anonymously; the co-op accepts her on her badge.
+    // The stranger accepts her too, which assigns nothing.
+    ana.reply(stray, "me").unwrap();
+    ana.reply(gig, "5 min away").unwrap();
+    for n in [&mut ana, &mut cust] {
+        n.sync_with(&mut town);
+    }
+    let w = cust.jobs()[&stray].replies[0].0.clone();
+    cust.accept_shown(stray, w, ana.show_known(stray).unwrap()).unwrap();
+    for n in [&mut ana, &mut coop, &mut cust] {
+        n.sync_with(&mut town);
+    }
+    assert_eq!(cafe.assigned_courier(&m), None);
+    let w = coop.jobs()[&gig].replies[0].0.clone();
+    coop.accept_shown(gig, w, ana.show_known(gig).unwrap()).unwrap();
+    coop.sync_with(&mut town);
+    cafe.sync_with(&mut town);
+    assert_eq!(cafe.assigned_courier(&m), Some(ana_id.clone()));
+    // At the counter Ana shows her badge; the cafe checks it and knows which
+    // courier this is, and the co-op knows who.
     let shown = ana.present(&ana_id).unwrap();
     assert_eq!(d.badge_of(cafe.view.scheme(), &shown).as_deref(), Some("courier-47"));
     cafe.learn_ticket(shown).unwrap();
@@ -202,16 +229,30 @@ fn food_by_an_accountable_courier() {
     // Against an earlier deadline the same note is late, by the board's clock.
     assert_eq!(cafe.food_outcome(&m, order, at - 60), Outcome::Late { at, by: 60 });
 
-    // The cafe pays the co-op; the co-op pays Ana at her badge.
+    // Ana marks the job done. The co-op pays the job with a vouch, a coin
+    // Ana holds, once custody shows her key delivered it: not on her word.
+    ana.done(gig).unwrap();
+    for n in [&mut ana, &mut coop] {
+        n.sync_with(&mut town);
+    }
+    assert!(coop.pay_delivery(&m, "fast").unwrap_err().contains("custody"));
+    // The cafe pays the co-op its fee, and the co-op hears the custody.
     cafe.pay_provider(&m, 500).unwrap();
     meet(&mut cafe, &mut coop);
+    coop.pay_delivery(&m, "fast").unwrap();
     coop.parcels.insert(m.parcel, m.clone());
-    meet(&mut ana, &mut coop);
-    meet(&mut cust, &mut coop);
-    coop.learn_ticket(ana.present(&ana_id).unwrap()).unwrap();
-    assert_eq!(coop.pay_couriers(&m).unwrap().len(), 1);
+    assert!(coop.pay_couriers(&m).unwrap_err().contains("delivery job"), "not paid twice");
     meet(&mut coop, &mut ana);
-    assert_eq!((balance(&cust), balance(&cafe), balance(&coop), balance(&ana)), (600, 1900, 100, 400));
+    assert_eq!((balance(&cust), balance(&cafe), balance(&coop), balance(&ana)), (600, 1900, 1000 - 400 + 500, 400));
+    coop.sync_with(&mut town);
+    bea.sync_with(&mut town);
+    let (rep, vouches) = bea.reputation(&contractor(&ana_id));
+    assert_eq!((rep.get("delivery"), vouches[0].known_by.is_none()), (Some(&1), true));
+    // A second offer of the same bag from the co-op leaves it unassigned.
+    coop.offer_delivery(&m, 400).unwrap();
+    coop.sync_with(&mut town);
+    cafe.sync_with(&mut town);
+    assert!(cafe.delivery_job(&m).is_none());
 
     // A seal that doesn't match is a broken seal, whatever the time.
     let m2 = cafe.ship("order", "dn5bpsb", "dn5bpth", deliver_to.clone(), 400).unwrap();

@@ -19,8 +19,16 @@
 //!   shipper's budget, the courier's key handed it to the addressee, the
 //!   addressee confirmed it, and the vouch is signed by the addressee. Each
 //!   parcel counts once, and each person once.
+//! - **Offering the delivery.** The co-op named as the parcel's provider
+//!   offers it as a job about the parcel, posted under that provider key,
+//!   whose worker must show the dispatch's badge. Couriers reply
+//!   anonymously; the co-op accepts one on its badge; the restaurant hands
+//!   the bag only to the key that accept shows. Once custody shows that key
+//!   handed it to the customer and the courier marks the job done, the
+//!   co-op pays the job with a vouch: a coin the courier holds.
 
-use crate::board::contractor;
+use crate::board::{contractor, Known};
+use pave_kernel::Credential;
 use crate::bulletin::purpose;
 use crate::parcel::{label_hash, Manifest, Step};
 use pave_kernel::hash::Hash;
@@ -133,6 +141,45 @@ impl crate::node::Node {
             }
         }
         (people.len(), out)
+    }
+
+    /// Provider: offer the delivery of `m` as a job paying `pay`, under the
+    /// provider key the manifest names, for couriers with its dispatch's
+    /// badge.
+    pub fn offer_delivery(&mut self, m: &Manifest, pay: u64) -> Result<Hash, String> {
+        let provider = m.provider.clone().filter(|p| self.mine.contains(p)).ok_or("only the parcel's provider offers it")?;
+        let d = m.dispatch.as_deref().ok_or("this parcel names no dispatch")?;
+        self.post_as(provider, "Deliver a parcel", pay, Some(Known::Badge(d.clone())), Some(m.parcel))
+    }
+
+    /// The delivery job for `m`: the one job about it posted under the
+    /// provider key, and the key of the courier accepted for it. None if
+    /// the provider posted more than one: nobody is assigned until that's
+    /// settled. (The profile's own gate still takes only badged keys.)
+    pub fn delivery_job(&self, m: &Manifest) -> Option<(Hash, Option<Credential>)> {
+        let provider = m.provider.as_ref()?;
+        let mut offers = self.jobs().into_values().filter(|j| j.about == Some(m.parcel) && j.poster == *provider);
+        let j = offers.next()?;
+        offers.next().is_none().then_some((j.id, j.known_key))
+    }
+
+    /// Restaurant: the courier the provider assigned to `m`, if any.
+    pub fn assigned_courier(&self, m: &Manifest) -> Option<Credential> {
+        self.delivery_job(m)?.1
+    }
+
+    /// Provider: pay the delivery job for `m` and vouch for the courier,
+    /// once custody shows the assigned courier's key handed it to the
+    /// addressee and the addressee confirmed it.
+    pub fn pay_delivery(&mut self, m: &Manifest, note: &str) -> Result<Hash, String> {
+        let (job, key) = self.delivery_job(m).ok_or("no delivery job for this parcel")?;
+        let key = key.ok_or("no courier accepted")?;
+        let c = self.custody(m);
+        let handed = c.steps.iter().any(|s| matches!(s, Step::Handoff { from, to } if *from == key && *to == m.addressee));
+        if !c.delivered || !handed {
+            return Err("custody doesn't show the assigned courier delivering it".into());
+        }
+        self.pay_and_vouch(job, "delivery", note, None)
     }
 
     /// Anyone: how the order went, from the board, against its deadline.

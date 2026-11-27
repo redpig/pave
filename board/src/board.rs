@@ -89,6 +89,9 @@ pub enum BoardMsg {
         terms: Hash,
         #[serde(default)]
         known: Option<Box<Known>>,
+        /// What the job is about, such as a parcel to deliver.
+        #[serde(default)]
+        about: Option<Hash>,
     },
     /// `trade` is set when the replier wants vouches for this job.
     Reply { job: Hash, note: String, trade: Option<Trade> },
@@ -236,6 +239,10 @@ pub struct Job {
     pub means: Hash,
     /// How the worker must be known.
     pub known: Option<Known>,
+    /// What the job is about.
+    pub about: Option<Hash>,
+    /// The stable key the accepted worker showed.
+    pub known_key: Option<Credential>,
     /// The worker's id on its badge, once accepted.
     pub known_as: Option<String>,
     pub replies: Vec<(Credential, String)>,
@@ -260,7 +267,7 @@ pub fn jobs(copy: &Copy) -> BTreeMap<Hash, Job> {
         }
         let (id, signer) = (item.id, item.signer);
         match msg {
-            BoardMsg::Post { title, pay, means, known, .. } => {
+            BoardMsg::Post { title, pay, means, known, about, .. } => {
                 jobs.insert(id, Job {
                     id,
                     title,
@@ -268,6 +275,8 @@ pub fn jobs(copy: &Copy) -> BTreeMap<Hash, Job> {
                     poster: signer.clone(),
                     means,
                     known: known.map(|k| *k),
+                    about,
+                    known_key: None,
                     known_as: None,
                     replies: vec![],
                     contractors: BTreeMap::new(),
@@ -301,6 +310,7 @@ pub fn jobs(copy: &Copy) -> BTreeMap<Hash, Job> {
                     if j.status == Status::Open {
                         if let Some((id, key)) = known {
                             j.known_as = id;
+                            j.known_key = Some(key.clone());
                             j.contractors.insert(worker.clone(), contractor(&key));
                         }
                         j.worker = Some(worker);

@@ -406,6 +406,8 @@ Where pave can do better once this is built:
 | PC21 | A bag is opened on the way | The customer posts the seal code off the sticker; a mismatch is a broken seal | A dispute, with the custody chain naming the badge | Built (mutation `seal`); a resealed sticker with the code copied off isn't caught |
 | PC22 | Posting under a badge key replaces the badge with a post ticket | A key holds one ticket; the wallet won't post under a key holding another clerk's ticket | n/a | Built (mutation `post_guard`) |
 | PC23 | A courier inflates its delivery record | A delivery vouch counts only if signed by the addressee, with custody records showing that courier's key handed the bag to the addressee and the addressee confirmed it; once per parcel and once per person | n/a | Built (mutations `dv_signer`, `dv_courier`, `dv_delivered`, `dv_once`, `dv_learn`, `dv_mine`); a customer and courier who collude still need a real bag from a shipper's budget, and count as one person |
+| PC24 | Someone other than the co-op assigns a courier to a bag | Only the one job about the parcel posted under the manifest's provider key assigns; two such offers assign nobody | n/a | Built (mutations `dj_poster`, `dj_one`, `od_mine`) |
+| PC25 | A courier is paid for a delivery it didn't make, or twice | The co-op pays the delivery job only once custody shows the assigned key handed the bag to the addressee and the addressee confirmed it; a parcel with a delivery job isn't paid per hop | n/a | Built (mutation `pd_custody`; test) |
 | PC16 | A shipper remints one parcel twice | Each remint moves the lineage coin, so a second is a double spend | Kernel evidence; takers refuse the parcel | Built (mutations `remint_once`, `twice_take`) |
 
 ---

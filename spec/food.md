@@ -19,11 +19,12 @@ A badge is a **ticket**, not an access credential. The co-op vets a courier outs
 1. **Order.** The customer orders on the restaurant's own system. The binding carries the order's hash, the total and fee, a coarse cell, a **commitment to the address** (a hash of a salt and the address), the customer's key, the co-op, and a **deadline** (`due`).
 2. **Pay.** The restaurant invoices the binding's `paid` receipt; the customer pays it.
 3. **Ship.** The restaurant bags the order with a seal sticker that carries the label code, and ships a parcel about the binding with the co-op and its dispatch named.
-4. **Pick up.** The courier shows their badge. `hand_off` goes only to the addressee or to a key with this dispatch's badge; a member with only shift keys is refused.
-5. **Address.** The restaurant gives the courier the address and salt, off the record. The courier checks them against the binding's commitment, so the address they were given is the one the customer paid for.
-6. **Carry.** `take` stays on the badge key, with the dispatch's clerk trusted, so a revoked badge takes nothing.
-7. **Deliver.** The courier hands the bag to the customer's key. The customer confirms, and posts a `delivered` note on the jobs board giving the seal code they read off the sticker.
-8. **Pay out.** The restaurant pays the co-op; the co-op pays the courier at the badge key.
+4. **Offer.** The co-op offers the delivery as a job about the parcel, posted under the provider key the manifest names, whose worker must show the dispatch's badge ([boards.md](boards.md#job-board)). Couriers reply anonymously; the co-op accepts one on their badge. The restaurant reads which key that is: only the one job about the parcel under the provider key assigns anybody, and two such offers assign nobody until settled.
+5. **Pick up.** The courier shows their badge. `hand_off` goes only to the addressee or to a key with this dispatch's badge; a member with only shift keys is refused.
+6. **Address.** The restaurant gives the courier the address and salt, off the record. The courier checks them against the binding's commitment, so the address they were given is the one the customer paid for.
+7. **Carry.** `take` stays on the badge key, with the dispatch's clerk trusted, so a revoked badge takes nothing.
+8. **Deliver.** The courier hands the bag to the customer's key. The customer confirms, and posts a `delivered` note on the jobs board giving the seal code they read off the sticker.
+9. **Pay out.** The restaurant pays the co-op its fee. The courier marks the job done, and the co-op pays the job with a vouch once custody shows the courier's key handed the bag to the customer and the customer confirmed: the pay goes to the key the courier replied under, and the vouch coin with it, so the courier holds its record. A parcel with a delivery job isn't paid per hop as well.
 
 ## Outcomes
 
@@ -40,7 +41,9 @@ The board's clock is the time witness: the server binds its epoch and clock into
 
 ## Vouching for the courier
 
-The customer can vouch for the courier who handed the bag over, in the thread of that courier's key: with the badge on its trade key, deliveries and other jobs add up on one record. A vouch is a counted post carrying the manifest and the parcel's custody records, from its mint to the customer's confirmation. A reader learns those records, as from any meet, and counts the vouch only if:
+A courier gets two kinds of vouch on the one key. The co-op's rides on its payment for the delivery job, as any job's does: a zero-value coin the courier holds, offline too. The customer, who doesn't pay the courier, vouches with a post instead:
+
+The customer can vouch for the courier who handed the bag over, in the thread of that courier's key: with the badge on its trade key, deliveries and other jobs add up on one record. A customer's vouch is a counted post carrying the manifest and the parcel's custody records, from its mint to the customer's confirmation. A reader learns those records, as from any meet, and counts the vouch only if:
 
 - it is signed by the manifest's addressee;
 - the custody shows that courier's key handing the bag to the addressee;
@@ -53,4 +56,4 @@ A reader also needs the shipper's budget history to check a bag's mint. It trave
 ## Still to build
 
 - **Badge renewal.** A badge lasts until revoked. A co-op would re-issue after re-vetting, on a period of its choosing.
-- **Offering deliveries** to checked-in, badged couriers; **refunds and no-shows**; **a real adapter**; **the host app**: as in [orders.md](orders.md).
+- **Re-offering after a no-show**: today a second offer leaves the bag unassigned; closing the first job is not built. **Refunds**; **a real adapter**; **the host app**: as in [orders.md](orders.md).

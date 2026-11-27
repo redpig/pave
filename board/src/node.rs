@@ -1009,25 +1009,31 @@ impl Node {
     /// Post a job under a fresh credential, with a zero-value split of a coin
     /// covering the pay as proof of means, committing to the terms.
     pub fn post(&mut self, title: &str, pay: u64) -> Result<Hash, String> {
-        self.post_with(title, pay, None)
+        self.post_about(title, pay, None, None)
     }
 
     /// As [`Node::post`], for a job whose worker must be known as `known`
     /// says. Replies stay anonymous; the one accepted shows its key.
     pub fn post_known(&mut self, title: &str, pay: u64, known: board::Known) -> Result<Hash, String> {
-        self.post_with(title, pay, Some(known))
+        self.post_about(title, pay, Some(known), None)
     }
 
-    fn post_with(&mut self, title: &str, pay: u64, known: Option<board::Known>) -> Result<Hash, String> {
-        let coin = self.my_coins().into_iter().find(|c| c.amount >= pay).ok_or("no single coin covers the pay")?;
+    /// Post a job, saying how its worker must be known and what it is about.
+    pub fn post_about(&mut self, title: &str, pay: u64, known: Option<board::Known>, about: Option<Hash>) -> Result<Hash, String> {
         let poster = self.fresh()?;
+        self.post_as(poster, title, pay, known, about)
+    }
+
+    /// Post a job under `poster`, a key of this wallet's.
+    pub(crate) fn post_as(&mut self, poster: Credential, title: &str, pay: u64, known: Option<board::Known>, about: Option<Hash>) -> Result<Hash, String> {
+        let coin = self.my_coins().into_iter().find(|c| c.amount >= pay).ok_or("no single coin covers the pay")?;
         let terms = Receipt::Node(vec![
             ("public".into(), Receipt::leaf(format!("{title} | pay {pay}").into_bytes())),
             ("parties".into(), Receipt::leaf(b"terms: done when the poster signs off".to_vec())),
         ]);
         let proof = self.signed(&coin.holder, Op::Split { state: coin.state, parts: vec![(coin.amount, poster.clone()), (0, poster.clone())], receipt: terms.root() })?;
         apply_ok(&mut self.view, &proof)?;
-        self.send_as(&poster, BoardMsg::Post { title: title.into(), pay, means: proof.id(), terms: terms.root(), known: known.map(Box::new) })
+        self.send_as(&poster, BoardMsg::Post { title: title.into(), pay, means: proof.id(), terms: terms.root(), known: known.map(Box::new), about })
     }
 
     /// Reply under a fresh credential; that credential is who gets accepted and paid.

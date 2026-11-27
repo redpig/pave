@@ -30,7 +30,7 @@ Nothing new in the kernel, and the order profile itself is one layout and two re
 
 ## What a product still needs
 
-- **Offering the delivery.** In the test the restaurant hands the parcel to a courier it chose. A co-op would post it on its dispatch board for checked-in couriers, and the one who accepts gets the assignment, as a job's acceptance is. Not built.
+- **Offering the delivery.** Built as a job for badged couriers: see [food.md](food.md#the-flow).
 - **The address, only to the courier carrying it.** Built as a commitment: the binding carries a salted hash, and the restaurant gives the badged courier the address and salt at pickup. Sending it sealed to the badge key instead, as evidence is sealed to a panel, is not built.
 - **Refunds and no-shows.** Payment goes to the restaurant up front. If the order is never delivered, the refund is the restaurant's payment back, or a dispute. A courier who takes a parcel and doesn't deliver is a dispute with the custody chain as evidence.
 - **A real adapter.** The test's adapter maps custody to "READY", "PICKED_UP" and "DELIVERED". A real one polls the restaurant's system and writes those statuses back.
