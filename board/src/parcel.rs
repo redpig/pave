@@ -111,6 +111,9 @@ pub struct Manifest {
     pub lineage: Option<Hash>,
     #[serde(default)]
     pub generation: u32,
+    /// What the parcel is for, such as the hash of an order's binding.
+    #[serde(default)]
+    pub about: Option<Hash>,
 }
 
 impl Manifest {
@@ -222,7 +225,7 @@ impl Node {
     pub fn ship_with(&mut self, what: &str, from_cell: &str, to_cell: &str, addressee: Credential, pay_per_hop: u64, mode: Mode) -> Result<(Manifest, Option<String>), String> {
         let (parcel, lineage) = (self.mint_parcel()?, self.mint_parcel()?);
         let label = random_code(8);
-        let m = Manifest { parcel, what: what.into(), from_cell: from_cell.into(), to_cell: to_cell.into(), addressee, pay_per_hop, mode, provider: None, label: Some(label_hash(&parcel, &label)), dispatch: None, replaces: None, lineage: Some(lineage), generation: 0 };
+        let m = Manifest { parcel, what: what.into(), from_cell: from_cell.into(), to_cell: to_cell.into(), addressee, pay_per_hop, mode, provider: None, label: Some(label_hash(&parcel, &label)), dispatch: None, replaces: None, lineage: Some(lineage), generation: 0, about: None };
         self.labels.insert(parcel, label);
         let code = (m.mode == Mode::Code).then(|| random_code(6));
         if let Some(c) = &code {
@@ -522,6 +525,18 @@ impl Node {
         let msg = crate::board::BoardMsg::Replaced { parcel: old.parcel, with: parcel, roll };
         let scope = self.town.jobs.scope;
         self.compose(&scope, &shipper, msg.kind(), msg.job(), msg.encode(), None)?;
+        self.save()?;
+        Ok(m)
+    }
+
+    /// Shipper: say what the parcel is for, before the first handoff.
+    pub fn name_about(&mut self, parcel: &Hash, about: Hash) -> Result<Manifest, String> {
+        if self.held(parcel)?.hops > 0 {
+            return Err("what it's for is named before the first handoff".into());
+        }
+        let m = self.parcels.get_mut(parcel).ok_or("no manifest for that parcel")?;
+        m.about = Some(about);
+        let m = m.clone();
         self.save()?;
         Ok(m)
     }

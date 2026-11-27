@@ -81,9 +81,14 @@ pub fn memo_hash(memo: &str) -> Hash {
 impl Node {
     /// Payee: an invoice for `amount`, to a fresh credential.
     pub fn invoice(&mut self, amount: u64, memo: &str) -> Result<Invoice, String> {
+        self.invoice_for(amount, memo_hash(memo))
+    }
+
+    /// Payee: an invoice whose payment commits to `memo`, such as the hash
+    /// of an order's binding.
+    pub fn invoice_for(&mut self, amount: u64, memo: Hash) -> Result<Invoice, String> {
         let to = self.fresh()?;
         let ticket = self.know.tickets.get(&to).cloned().ok_or("no ticket for a fresh credential")?;
-        let memo = memo_hash(memo);
         self.invoices.insert(to.clone(), (amount, memo));
         Ok(Invoice { amount, memo, to, ticket })
     }

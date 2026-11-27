@@ -1,0 +1,25 @@
+{
+  "name": "orders",
+  "version": 1,
+  "doc": "An order from a restaurant that keeps its own ordering system (Toast, say). Pave holds only the order's binding: the hash of the order as the restaurant's system has it, the totals, where it goes and who confirms it, and the co-op that delivers. The customer pays the restaurant's invoice committing to the binding; the restaurant ships a parcel about it (the parcels profile), pays the co-op its fee once it's delivered, and the co-op pays its couriers. Menus, kitchen tickets and the order's contents stay with the restaurant.",
+  "schemas": {},
+  "layouts": {
+    "order": {
+      "domain": "pave/order/v1",
+      "fields": [
+        { "name": "restaurant", "type": "credential", "doc": "The restaurant's public identity" },
+        { "name": "order", "type": "hash", "doc": "The hash of the order as the restaurant's system has it; the contents stay there" },
+        { "name": "total", "type": "u64", "doc": "What the customer pays, delivery included" },
+        { "name": "delivery", "type": "u64", "doc": "The part of the total the restaurant pays the co-op" },
+        { "name": "to_cell", "type": "text", "doc": "A coarse location cell; the address goes only to the courier carrying it" },
+        { "name": "deliver_to", "type": "credential", "doc": "The customer's key, which confirms delivery" },
+        { "name": "provider", "type": { "opt": "credential" }, "doc": "The co-op that delivers" }
+      ]
+    }
+  },
+  "receipts": {
+    "paid": { "domain": "pave/order/paid/v1", "parts": [ { "hash": { "layout": "order", "of": { "param": "order" } } } ] }
+  },
+  "actions": {},
+  "walks": {}
+}

@@ -24,7 +24,8 @@
         { "name": "dispatch", "type": { "opt": "any" } },
         { "name": "replaces", "type": { "opt": "hash" } },
         { "name": "lineage", "type": { "opt": "hash" }, "doc": "The lineage coin the shipper keeps" },
-        { "name": "generation", "type": "u32", "default": 0 }
+        { "name": "generation", "type": "u32", "default": 0 },
+        { "name": "about", "type": { "opt": "hash" }, "doc": "What the parcel is for, such as an order's binding hash" }
       ]
     }
   },
