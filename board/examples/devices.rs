@@ -127,7 +127,7 @@ fn main() {
     let to = a.receive().unwrap();
     let m = b.ship("order", "dn5bpsb", "dn5bpth", to, 400).unwrap();
     let m = b.name_dispatch(&m.parcel, d.clone()).unwrap();
-    let job = b.post_known("Deliver", 10, Known::Badge(d.clone())).unwrap();
+    let job = b.post_known("Deliver", 10, Known::Badge(d.roster.clone())).unwrap();
     b.sync_with(&mut town);
     a.sync_with(&mut town);
     a.reply(job, "here").unwrap();

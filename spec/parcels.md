@@ -18,7 +18,7 @@ The prototype is [`board/src/parcel.rs`](../board/src/parcel.rs), with a test in
 
 ## Dispatch
 
-A co-op that carries parcels can run a dispatch ([`board/src/dispatch.rs`](../board/src/dispatch.rs)), named in the manifest before the first handoff. It is the town's own layering one level down: a roll like a class, a daily credential like an access credential, and shift-key requests like refills.
+A co-op that carries parcels can run a dispatch ([`board/src/dispatch.rs`](../board/src/dispatch.rs)), named in the manifest before the first handoff. The manifest names only its roster (its id, label and clerk), which is all a reader needs to check shift tickets and badges; the members' group key and the records that set up its ticks stay with members and travel as records. It is the town's own layering one level down: a roll like a class, a daily credential like an access credential, and shift-key requests like refills.
 
 - **Members are an issuer group.** Joining is a join on a key the member's device made.
 - **Checking in is the count.** Each day dispatch runs a fresh issuer group. A member checks in by joining it, the join signed by its member credential with (dispatch, day) as basename. That pseudonym is the same for a member all day and unrelated across days, so dispatch counts distinct couriers without learning who anyone is, and a second check-in the same day (a new phone) is linked and counted once. The day credential is the courier's daily credential.

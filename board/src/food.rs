@@ -156,7 +156,7 @@ impl crate::node::Node {
     /// badge, to be picked up by `pickup_by` (board-clock seconds).
     pub fn offer_delivery(&mut self, m: &Manifest, pay: u64, pickup_by: u64) -> Result<Hash, String> {
         let provider = m.provider.clone().filter(|p| self.mine.contains(p)).ok_or("only the parcel's provider offers it")?;
-        let d = m.dispatch.as_deref().ok_or("this parcel names no dispatch")?;
+        let d = m.dispatch.as_ref().ok_or("this parcel names no dispatch")?;
         self.post_as(provider, "Deliver a parcel", pay, Some(Known::Badge(d.clone())), Some(m.parcel), Some(pickup_by))
     }
 

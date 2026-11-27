@@ -102,7 +102,7 @@ pub struct Manifest {
     pub label: Option<Hash>,
     /// The dispatch whose couriers carry it, if any.
     #[serde(default)]
-    pub dispatch: Option<Box<crate::dispatch::Dispatch>>,
+    pub dispatch: Option<crate::dispatch::Roster>,
     /// The parcel this one replaces, after a remint.
     #[serde(default)]
     pub replaces: Option<Hash>,
@@ -435,7 +435,7 @@ impl Node {
             apply_ok(&mut self.view, r)?;
         }
         let m = self.parcels.get_mut(parcel).ok_or("no manifest for that parcel")?;
-        m.dispatch = Some(Box::new(d));
+        m.dispatch = Some(d.roster);
         let m = m.clone();
         self.save()?;
         Ok(m)

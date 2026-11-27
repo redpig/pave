@@ -73,7 +73,7 @@ fn lifeguards_are_known_before_the_job() {
     let d = town.open_dispatch("Lifeguards").unwrap();
     let badge = town.issue_badge(&d.id, "guard-12", &key).unwrap();
     ana.take_badge(&d, badge).unwrap();
-    let guard = Known::Badge(d.clone());
+    let guard = Known::Badge(d.roster.clone());
 
     let job = pool.post_known("Lifeguard, Saturday 10-4", 40, guard.clone()).unwrap();
     sync(&mut town, &mut [&mut pool, &mut ana, &mut bea]);

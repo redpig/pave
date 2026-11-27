@@ -160,7 +160,7 @@ fn food_by_an_accountable_courier() {
     // provider key the manifest names. A job about this bag from anyone
     // else, even one some stranger accepts, assigns nobody.
     let pickup_by = pave_board::bulletin::now() + 15 * 60;
-    let stray = cust.post_about("Deliver a parcel", 400, Some(Known::Badge(d.clone())), Some(m.parcel), None).unwrap();
+    let stray = cust.post_about("Deliver a parcel", 400, Some(Known::Badge(d.roster.clone())), Some(m.parcel), None).unwrap();
     assert!(cust.offer_delivery(&m, 400, pickup_by).unwrap_err().contains("provider"));
     let gig = coop.offer_delivery(&m, 400, pickup_by).unwrap();
     for n in [&mut coop, &mut cust, &mut ana, &mut cafe] {

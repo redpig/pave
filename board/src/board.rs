@@ -35,7 +35,7 @@
 //! person vouched for several jobs. Without one, a vouch is anonymous.
 
 use crate::bulletin::{purpose, Copy};
-use crate::dispatch::Dispatch;
+use crate::dispatch::Roster;
 use pave_protocol::SignedTicket;
 use pave_kernel::hash::{hash_of, Hash};
 use pave_kernel::{Credential, Op, Record, Scheme, Sig};
@@ -59,8 +59,8 @@ pub fn trade_bytes(job: &Hash, worker: &Credential) -> Vec<u8> {
 pub enum Known {
     /// By a stable pseudonym: the job counts toward it.
     Stable,
-    /// By a stable pseudonym this roster badged.
-    Badge(Dispatch),
+    /// By a stable pseudonym this dispatch's roster badged.
+    Badge(Roster),
 }
 
 /// What a worker shows for a job: its stable key's signature over the job

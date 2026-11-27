@@ -44,22 +44,42 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Shift requests a courier makes per day that can't be linked to each other.
 pub const SHIFT_SLOTS: u32 = 4;
 
-/// What everyone knows about a dispatch.
+/// A dispatch's public face: what a manifest or a job names, enough to
+/// check its tickets and badges. Its ticks travel as records, as any do.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Dispatch {
+pub struct Roster {
     /// The dispatch's id: its tick sequence.
     pub id: Hash,
     pub label: String,
+    /// The clerk that signs shift tickets and badges and rolls the ticks.
+    pub clerk: Credential,
+}
+
+/// What members and couriers know about a dispatch: its roster, the
+/// members' group key, and the records that set up its ticks.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Dispatch {
+    pub roster: Roster,
     /// The members' group key.
     pub roll: Vec<u8>,
-    /// The clerk that signs shift tickets and rolls the ticks.
-    pub clerk: Credential,
-
     /// The ticks' budget and first tick.
     pub records: Vec<Record>,
 }
 
+impl std::ops::Deref for Dispatch {
+    type Target = Roster;
+    fn deref(&self) -> &Roster {
+        &self.roster
+    }
+}
+
 impl Dispatch {
+    fn members(&self) -> [(String, Vec<u8>); 1] {
+        [("member".to_string(), self.roll.clone())]
+    }
+}
+
+impl Roster {
     pub fn sequence(&self) -> Hash {
         self.id
     }
@@ -70,9 +90,6 @@ impl Dispatch {
     /// The shift request spec: a budget of unlinkable requests per day.
     pub fn shift_spec(&self) -> RequestSpec {
         RequestSpec { domain: "pave/dispatch/shift/v3".into(), scope: self.id, linkage: Linkage::Slots(SHIFT_SLOTS), max_skew_ms: Some(CLOCK_SLACK * 1000) }
-    }
-    fn members(&self) -> [(String, Vec<u8>); 1] {
-        [("member".to_string(), self.roll.clone())]
     }
     /// What a day's shift tickets are tagged for.
     pub fn purpose(&self, day: u64) -> Hash {
@@ -197,7 +214,7 @@ impl Node {
         apply_ok(&mut self.view, &budget)?;
         apply_ok(&mut self.view, &first)?;
         let roll = Issuer::new();
-        let d = Dispatch { id: first.output(0), label: label.into(), roll: roll.group_public_key.clone(), clerk, records: vec![budget, first] };
+        let d = Dispatch { roster: Roster { id: first.output(0), label: label.into(), clerk }, roll: roll.group_public_key.clone(), records: vec![budget, first] };
         let book = Book { dispatch: d.clone(), roll, shifts: BTreeMap::new(), days: BTreeMap::new(), checked_in: BTreeMap::new(), requests: Default::default(), ruled: vec![], revoked: BTreeMap::new(), badges: BTreeMap::new() };
         self.operator.as_mut().unwrap().dispatches.insert(d.id, book);
         self.save()?;
@@ -320,7 +337,7 @@ impl Node {
 
     /// An unused shift key from `d`, if this wallet has one: to be handed a
     /// parcel at, or to take one under.
-    pub fn shift_key(&mut self, d: &Dispatch) -> Option<Credential> {
+    pub fn shift_key(&mut self, d: &Roster) -> Option<Credential> {
         let s = self.view.scheme().clone();
         let i = self.shift_keys.iter().position(|c| self.know.tickets.get(c).is_some_and(|t| d.shift_of(&s, t).is_some()))?;
         Some(self.shift_keys.remove(i))
