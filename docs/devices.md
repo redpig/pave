@@ -4,6 +4,8 @@ What a wallet sends and computes, measured on the real flows, and what phones ca
 
     cargo run --release -p pave-board --example devices
 
+Signatures are stored without the signer's credential, which every record and request already carries beside them (Briolette's `deflate_signature`); verifying puts it back. That saves 192 bytes a signature: a signature is 98 bytes, not 291.
+
 They were measured on one core of a 2.3 GHz Xeon build machine, not a phone. The group signatures are ECDAA over BLS12-381 in pure Rust (`briolette-crypto`, `bls12_381_plus`). A recent phone's big core should be in the same range, but that is an estimate until the numbers are run on a device; doing so is the first item under [next](#next).
 
 ## Measured
@@ -13,25 +15,25 @@ They were measured on one core of a 2.3 GHz Xeon build machine, not a phone. The
 | | Size | Time |
 |---|---|---|
 | A fresh credential (a new unlinkable key for one holding or role) | 192 B | 1.7 ms |
-| Sign | 291 B | 0.9 ms |
-| Sign with a basename (a pseudonym that links on reuse) | 339 B | 1.8 ms |
+| Sign | 98 B | 0.9 ms |
+| Sign with a basename (a pseudonym that links on reuse) | 146 B | 1.8 ms |
 | Verify | | 6.3 ms |
 
 **A payment, by how many hands the coin has passed through.** What crosses is the coin with its history and the payment record. The payee's checks (every signature in the history, standing, tickets) grow with it. A coin may make five offline transfers before it must be swapped with the town, which bounds both.
 
 | Hops | Bytes | Payee checks |
 |---|---|---|
-| 1 | 4.2 KB | 35 ms |
-| 2 | 6.0 KB | 57 ms |
-| 3 | 7.9 KB | 75 ms |
-| 4 | 9.7 KB | 97 ms |
+| 1 | 3.4 KB | 35 ms |
+| 2 | 4.9 KB | 57 ms |
+| 3 | 6.3 KB | 75 ms |
+| 4 | 7.8 KB | 97 ms |
 | 5 | refused: swap first | |
 
 **Meets**
 
 | | Bytes |
 |---|---|
-| First meet between two wallets that know only the town | 3.9 KB |
+| First meet between two wallets that know only the town | 3.1 KB |
 | The next meet, after one payment | 188 B |
 | A meet with the town (time, both ways) | 113 ms |
 
@@ -39,16 +41,16 @@ They were measured on one core of a 2.3 GHz Xeon build machine, not a phone. The
 
 | | Bytes |
 |---|---|
-| A courier's badge (the ticket) | 855 B |
-| The badge shown for a job (ticket and signature) | 1.4 KB |
+| A courier's badge (the ticket) | 662 B |
+| The badge shown for a job (ticket and signature) | 977 B |
 | A bag's manifest, naming its dispatch's roster | 703 B (it was 3.0 KB carrying the whole dispatch, 2.5 KB of it) |
-| A refill: request for 16 tickets / the 16 tickets | 7.5 KB / 12.5 KB |
+| A refill: request for 16 tickets / the 16 tickets | 7.3 KB / 9.5 KB |
 
 ## What that means
 
-- **The bytes are small.** Every in-person exchange is under 10 KB, and a repeat meet is a few hundred bytes. Bluetooth LE moves that in well under a second; Wi-Fi Aware moves it in milliseconds. Only a QR-only exchange feels the size.
+- **The bytes are small.** Every in-person exchange is under 8 KB, and a repeat meet is a few hundred bytes. Bluetooth LE moves that in well under a second; Wi-Fi Aware moves it in milliseconds. Only a QR-only exchange feels the size.
 - **The CPU is fine.** The heaviest offline step, checking a four-hop payment, is about 0.1 s here. Verification dominates, at about 6 ms a signature, so a phone doing several times worse is still well under a second per exchange.
-- **Refills belong online.** Sixteen tickets are 20 KB both ways and need the clerk; a wallet refills when it has signal, as it does already.
+- **Refills belong online.** Sixteen tickets are 17 KB both ways and need the clerk; a wallet refills when it has signal, as it does already.
 - **A manifest names only the dispatch's roster.** Its id, label and clerk are all a reader needs to check tickets and badges. The members' group key and the records that set up its ticks stay with members and travel as records, as any do. A badge job names the roster the same way.
 
 ## Phones today
@@ -78,11 +80,11 @@ So the realistic first app:
 
 | | |
 |---|---|
-| The invite | 186 characters: a version 6 QR code |
+| The invite | about 185 characters: a version 6 or 7 QR code |
 | A QR-only frame | up to 600 bytes of sealed message, 981 characters: about a version 20 code at low error correction, which phones read off another screen |
-| A shown badge | 1.4 KB sealed: 3 frames |
+| A shown badge | 1.0 KB sealed: 2 frames |
 | A manifest | 773 B sealed: 2 frames |
-| A four-hop payment | about 9.7 KB: 17 frames |
+| A four-hop payment | about 7.8 KB: 14 frames |
 
 The session key travels in the code, so there is no key agreement: only who scanned it can read or inject on the radio. Someone who films the screen holds the key too; what crosses is signed and checked anyway, and the invite expires in minutes. Wi-Fi Aware's and Bluetooth's own pairing can add link-layer encryption under it.
 
@@ -90,8 +92,8 @@ The session key travels in the code, so there is no key agreement: only who scan
 
 The wallet for apps is [`mobile/`](../mobile/): one library behind a C interface, `pave.h`. An app sends it the JSON commands `pave-node` takes, and passes its platform keystore as callbacks. [`demo/phone_demo.py`](../demo/phone_demo.py) drives three wallets through that interface:
 
-- **At the counter,** a QR invite (a version 7 code) opens the link. Badge, meets and manifest go over a socket standing in for Wi-Fi Aware: about 10 KB in all.
-- **At the door,** with no radio, the handoff and confirmation go as 22 QR frames.
+- **At the counter,** a QR invite (a version 7 code) opens the link. Badge, meets and manifest go over a socket standing in for Wi-Fi Aware: about 8.5 KB in all.
+- **At the door,** with no radio, the handoff and confirmation go as 19 QR frames.
 
 Kotlin and Swift wrappers are there, not yet built on a device.
 

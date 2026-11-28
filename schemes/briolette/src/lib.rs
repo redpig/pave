@@ -15,7 +15,13 @@ use pave_kernel::{Credential, Scheme, Sig};
 
 /// Encoding sizes from `briolette-crypto` v1 (BLS12-381).
 pub const G1_LENGTH: usize = 48;
-pub const SIGNATURE_LENGTH: usize = 3 * 32 + 4 * G1_LENGTH;
+/// A credential: four G1 points.
+pub const CREDENTIAL_LENGTH: usize = 4 * G1_LENGTH;
+/// A signature as stored: Briolette's signature with the signer's
+/// credential taken out ("deflated"). Every use of a signature already has
+/// the credential beside it, in a record or a request, so carrying it
+/// twice would cost 192 bytes a signature. Verifying puts it back.
+pub const SIGNATURE_LENGTH: usize = 3 * 32 + 4 * G1_LENGTH - CREDENTIAL_LENGTH;
 pub const SIGNATURE_WITH_NYM_LENGTH: usize = SIGNATURE_LENGTH + G1_LENGTH;
 
 /// The scheme: verification needs only the issuer's group public key.
@@ -163,18 +169,17 @@ impl Scheme for BrioletteV1 {
             &mut sig,
         );
         assert!(ok, "briolette v1 sign failed");
+        v1::deflate_signature(&mut sig);
         Sig(sig)
     }
 
     fn verify(&self, cred: &Credential, msg: &[u8], basename: Option<&[u8]>, sig: &Sig) -> bool {
-        !msg.is_empty()
-            && v1::verify(
-                &self.group_public_key,
-                &basename.map(|b| b.to_vec()),
-                &Some(cred.0.clone()),
-                &sig.0,
-                &msg.to_vec(),
-            )
+        if msg.is_empty() || cred.0.len() != CREDENTIAL_LENGTH || (sig.0.len() != SIGNATURE_LENGTH && sig.0.len() != SIGNATURE_WITH_NYM_LENGTH) {
+            return false;
+        }
+        let mut full = sig.0.clone();
+        v1::inflate_signature(&cred.0, &mut full);
+        v1::verify(&self.group_public_key, &basename.map(|b| b.to_vec()), &Some(cred.0.clone()), &full, &msg.to_vec())
     }
 
     fn nym(&self, sig: &Sig) -> Option<Vec<u8>> {

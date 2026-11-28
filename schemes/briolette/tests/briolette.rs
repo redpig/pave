@@ -3,7 +3,7 @@
 use pave_kernel::invariants::{check_all, no_false_flag};
 use pave_kernel::receipt::Receipt;
 use pave_kernel::*;
-use pave_scheme_briolette::{BrioletteV1, HolderKey, Issuer, SIGNATURE_WITH_NYM_LENGTH};
+use pave_scheme_briolette::{BrioletteV1, HolderKey, Issuer, SIGNATURE_LENGTH, SIGNATURE_WITH_NYM_LENGTH};
 use std::collections::BTreeSet;
 
 struct P {
@@ -38,6 +38,13 @@ fn holdings_are_unlinkable_but_reuse_links() {
     assert_eq!(scheme.nym(&x), scheme.nym(&y), "same key, same basename: same pseudonym");
     assert_ne!(scheme.nym(&x), scheme.nym(&z), "different basename: unlinkable");
     assert!(!scheme.verify(&c2, &msg, Some(b1), &x), "bound to the signing credential");
+    // Stored without the credential it was made with: 96 bytes, 144 with a
+    // pseudonym, not 288 and 336.
+    assert_eq!((s_plain.0.len(), x.0.len()), (SIGNATURE_LENGTH, SIGNATURE_WITH_NYM_LENGTH));
+    assert_eq!((SIGNATURE_LENGTH, SIGNATURE_WITH_NYM_LENGTH), (96, 144));
+    let mut short = x.clone();
+    short.0.pop();
+    assert!(!scheme.verify(&c1, &msg, Some(b1), &short), "a malformed signature is refused");
 }
 
 #[test]
