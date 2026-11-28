@@ -44,7 +44,13 @@ fn seal_with(version: u64, key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, Strin
     let mut nonce = [0u8; 24];
     rand::rngs::OsRng.fill_bytes(&mut nonce);
     let ct = XChaCha20Poly1305::new(Key::from_slice(key))
-        .encrypt(XNonce::from_slice(&nonce), chacha20poly1305::aead::Payload { msg: data, aad: &version.to_be_bytes() })
+        .encrypt(
+            XNonce::from_slice(&nonce),
+            chacha20poly1305::aead::Payload {
+                msg: data,
+                aad: &version.to_be_bytes(),
+            },
+        )
         .map_err(|_| "seal failed")?;
     let mut out = version.to_be_bytes().to_vec();
     out.extend_from_slice(&nonce);
@@ -59,7 +65,13 @@ fn open_with(keys: &BTreeMap<u64, [u8; 32]>, sealed: &[u8]) -> Result<Vec<u8>, S
     let version = u64::from_be_bytes(sealed[..8].try_into().unwrap());
     let key = keys.get(&version).ok_or("this state was sealed under a retired key: it is an old copy, and restoring it could sign spent coins again")?;
     XChaCha20Poly1305::new(Key::from_slice(key))
-        .decrypt(XNonce::from_slice(&sealed[8..32]), chacha20poly1305::aead::Payload { msg: &sealed[32..], aad: &version.to_be_bytes() })
+        .decrypt(
+            XNonce::from_slice(&sealed[8..32]),
+            chacha20poly1305::aead::Payload {
+                msg: &sealed[32..],
+                aad: &version.to_be_bytes(),
+            },
+        )
         .map_err(|_| "the state doesn't open under its key: tampered or corrupt".into())
 }
 
@@ -80,7 +92,8 @@ impl SoftwareKeystore {
     pub fn for_state(state: &Path) -> Result<Self, String> {
         let path = state.with_extension("vault");
         let keys = match std::fs::read(&path) {
-            Ok(b) => ciborium::from_reader(b.as_slice()).map_err(|e| format!("{}: {e}", path.display()))?,
+            Ok(b) => ciborium::from_reader(b.as_slice())
+                .map_err(|e| format!("{}: {e}", path.display()))?,
             Err(_) => BTreeMap::new(),
         };
         Ok(SoftwareKeystore { path, keys })
@@ -92,7 +105,8 @@ impl SoftwareKeystore {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| e.to_string())?;
         }
         std::fs::rename(&tmp, &self.path).map_err(|e| e.to_string())
     }

@@ -16,7 +16,9 @@ fn join(town: &mut Node, name: &str, class: &str, dir: &std::path::Path, credits
 }
 
 fn refill(town: &mut Node, p: &mut Node) {
-    let t = town.answer_refill(&p.refill_request(&town.refill_terms().unwrap(), 8).unwrap()).unwrap();
+    let t = town
+        .answer_refill(&p.refill_request(&town.refill_terms().unwrap(), 8).unwrap())
+        .unwrap();
     p.take_tickets(t);
 }
 
@@ -40,7 +42,11 @@ fn gossip_to(from: &Node, to: &mut Node) {
 }
 
 /// The whole swap, in process. Returns the outcome.
-fn swap(town: &mut Node, p: &mut Node, state: pave_kernel::Hash) -> Result<(pave_kernel::Credential, SwapOutcome), String> {
+fn swap(
+    town: &mut Node,
+    p: &mut Node,
+    state: pave_kernel::Hash,
+) -> Result<(pave_kernel::Credential, SwapOutcome), String> {
     let q = town.quote(&p.quote_request(state, &cheat_list(&town.view))?)?;
     let req = p.swap_request(&q)?;
     let to = req.to.clone();
@@ -59,20 +65,28 @@ fn swaps() {
 
     // Carol pays Bob honestly, before anything goes wrong.
     let carols = carol.my_coins();
-    let to_bob = carol.spend(carols[0].state, bob.receive().unwrap()).unwrap();
+    let to_bob = carol
+        .spend(carols[0].state, bob.receive().unwrap())
+        .unwrap();
     meet(&mut carol, &mut bob);
     assert_eq!(bob.check(&to_bob), Ok(()));
 
     // 1. Tainted: the town revokes Carol's enrollment group. Bob's coin from
     //    her was issued within the window, so recipients refuse it offline;
     //    the swapper holds it, then pays once the hold is over.
-    town.roll_epoch([carol.group].into_iter().collect(), BTreeSet::new()).unwrap();
+    town.roll_epoch([carol.group].into_iter().collect(), BTreeSet::new())
+        .unwrap();
     gossip_to(&town, &mut bob);
     refill(&mut town, &mut bob);
     assert!(matches!(bob.check(&to_bob), Err(Refusal::Revoked { .. })));
     let (owed, out) = swap(&mut town, &mut bob, to_bob).unwrap();
-    let SwapOutcome::Held { until } = out else { panic!("expected a hold, got {out:?}") };
-    assert!(matches!(town.collect_swap(&owed).unwrap(), SwapOutcome::Held { .. }), "not before the hold is over");
+    let SwapOutcome::Held { until } = out else {
+        panic!("expected a hold, got {out:?}")
+    };
+    assert!(
+        matches!(town.collect_swap(&owed).unwrap(), SwapOutcome::Held { .. }),
+        "not before the hold is over"
+    );
     for _ in 0..SWAP_HOLD {
         town.roll_epoch(BTreeSet::new(), BTreeSet::new()).unwrap();
     }
@@ -88,7 +102,10 @@ fn swaps() {
     }
     gossip_to(&town, &mut alice);
     let old = alice.my_coins()[0].state;
-    assert!(matches!(alice.check(&old), Err(Refusal::Expired { .. }) | Err(Refusal::CoinExpired { .. })));
+    assert!(matches!(
+        alice.check(&old),
+        Err(Refusal::Expired { .. }) | Err(Refusal::CoinExpired { .. })
+    ));
     refill(&mut town, &mut alice); // fresh tickets to receive the new coin on
     let quote = town.quote(&alice.quote_request(old, &[]).unwrap()).unwrap();
     assert_eq!(quote.verdict, Verdict::Pay);
@@ -99,7 +116,9 @@ fn swaps() {
     assert_eq!(alice.check(&fresh), Ok(()));
     assert_eq!(alice.my_coins().iter().map(|c| c.amount).sum::<u64>(), 100);
     // Every payout is paired with a public retirement of the same amount.
-    let SwapOutcome::Paid { retire, mint, .. } = &out else { panic!() };
+    let SwapOutcome::Paid { retire, mint, .. } = &out else {
+        panic!()
+    };
     assert!(matches!(retire.op, Op::Retire { .. }));
     assert!(matches!(mint.op, Op::Mint { amount: 100, .. }));
     // The coin can't be swapped twice.
@@ -119,7 +138,10 @@ fn swaps() {
     // Asking with an empty list only gets the list back.
     let q = carol.quote_request(other, &[]).ok().map(|r| town.quote(&r));
     if let Some(Ok(q)) = q {
-        assert!(matches!(q.verdict, Verdict::NeedStanding(_) | Verdict::Refuse(_)));
+        assert!(matches!(
+            q.verdict,
+            Verdict::NeedStanding(_) | Verdict::Refuse(_)
+        ));
     }
     let _ = std::fs::remove_dir_all(&dir);
 }

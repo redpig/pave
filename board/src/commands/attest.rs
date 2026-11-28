@@ -29,7 +29,17 @@ fn name(a: &Attested) -> &'static str {
 }
 
 fn ders(v: &Value, k: &str) -> Result<Vec<ByteBuf>, String> {
-    v[k].as_array().map(|a| a.iter().map(|x| hex::decode(x.as_str().ok_or("expected hex")?).map(ByteBuf::from).map_err(|e| e.to_string())).collect()).unwrap_or(Ok(vec![]))
+    v[k].as_array()
+        .map(|a| {
+            a.iter()
+                .map(|x| {
+                    hex::decode(x.as_str().ok_or("expected hex")?)
+                        .map(ByteBuf::from)
+                        .map_err(|e| e.to_string())
+                })
+                .collect()
+        })
+        .unwrap_or(Ok(vec![]))
 }
 
 fn show(p: &Policy) -> Value {
@@ -50,19 +60,59 @@ pub fn command(n: &mut Node, cmd: &str, v: &Value) -> Option<Result<Value, Strin
         return None;
     }
     Some((|| {
-        let op = n.operator.as_mut().ok_or("only the town operator has an attestation policy")?;
+        let op = n
+            .operator
+            .as_mut()
+            .ok_or("only the town operator has an attestation policy")?;
         if v.as_object().is_some_and(|o| o.keys().any(|k| k != "cmd")) {
-            let apps = v["android_apps"].as_array().map(|a| a.iter().map(|x| Ok(AndroidApp {
-                package: x["package"].as_str().ok_or("an app needs a package")?.into(),
-                signer_sha256: ByteBuf::from(hex::decode(x["signer_sha256"].as_str().ok_or("an app needs signer_sha256")?).map_err(|e| e.to_string())?),
-            })).collect::<Result<Vec<_>, String>>()).transpose()?.unwrap_or_default();
-            let earns = v["earns"].as_object().map(|m| m.iter().map(|(k, c)| Ok((kind(k)?, c.as_str().ok_or("a class is a name")?.to_string()))).collect::<Result<_, String>>()).transpose()?.unwrap_or_default();
+            let apps = v["android_apps"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .map(|x| {
+                            Ok(AndroidApp {
+                                package: x["package"]
+                                    .as_str()
+                                    .ok_or("an app needs a package")?
+                                    .into(),
+                                signer_sha256: ByteBuf::from(
+                                    hex::decode(
+                                        x["signer_sha256"]
+                                            .as_str()
+                                            .ok_or("an app needs signer_sha256")?,
+                                    )
+                                    .map_err(|e| e.to_string())?,
+                                ),
+                            })
+                        })
+                        .collect::<Result<Vec<_>, String>>()
+                })
+                .transpose()?
+                .unwrap_or_default();
+            let earns = v["earns"]
+                .as_object()
+                .map(|m| {
+                    m.iter()
+                        .map(|(k, c)| {
+                            Ok((kind(k)?, c.as_str().ok_or("a class is a name")?.to_string()))
+                        })
+                        .collect::<Result<_, String>>()
+                })
+                .transpose()?
+                .unwrap_or_default();
             op.attest = Policy {
                 android_roots: ders(v, "android_roots")?,
                 android_apps: apps,
                 allow_unlocked: v["allow_unlocked"].as_bool().unwrap_or(false),
                 apple_roots: ders(v, "apple_roots")?,
-                apple_app_ids: v["apple_app_ids"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
+                apple_app_ids: v["apple_app_ids"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 allow_apple_development: v["allow_apple_development"].as_bool().unwrap_or(false),
                 earns,
             };

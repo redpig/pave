@@ -17,26 +17,25 @@ Four things, as in Briolette:
 
 **Deposit:**
 
-1. The depositor's wallet makes a fresh credential and computes its commitment: a hash of the ramp, the credential and a nonce.
+1. The depositor's wallet makes a fresh credential and computes its commitment: a hash of the ramp's schema, the credential and a nonce.
 2. It sends the outside asset to the pool with the commitment attached: an `OP_RETURN` on Bitcoin, or a contract call's argument. It gives the ramp the credential and nonce, on the board or directly.
-3. After the outside system's confirmations, the ramp mints to the credential. The receipt is a hash of the deposit's id (txid and output) and the commitment.
+3. After the outside system's confirmations, the ramp mints the deposit to a key of its own and splits it. The depositor's credential gets its share, and the treasury gets the fee. The split's receipt is a hash of the deposit's id (txid and output) and the commitment.
 
-Each deposit is credited once. A second mint naming the same deposit is visible to anyone reading the ramp's records, and is a ruling against the ramp.
+Each deposit is credited once. A second credit naming the same deposit is visible to anyone reading the ramp's records, and is a ruling against the ramp.
 
 **Withdrawal:**
 
-1. The holder retires credit with a receipt naming the ramp, the payout address, the amount and a nonce. A retire is a spend, so the same coin can't also be paid away. A double spend offline is caught when the records meet.
-2. The ramp checks the retire with pave's acceptance check, against its standing list and the town's ticks.
-3. The ramp pays out after the challenge period:
-   - **Bitcoin:** an output timelocked with `OP_CHECKSEQUENCEVERIFY`.
-   - **Ethereum:** the contract's withdrawal delay.
+1. The ramp invoices the holder in its own credit. The invoice's memo commits to the payout address, the amount and a nonce. The holder pays it like any invoice, so the coin can't also be paid away, and a double spend offline is caught when the records meet.
+2. The ramp takes the payment with pave's acceptance check, against its standing list and the town's ticks. Its wallet refuses a payment in any other credit.
+3. After the challenge period, counted in blocks from when the ramp took the payment, the co-signers each check the withdrawal against their own view and sign the payout.
 
    The period should cover the town's detection window: how long until a double spend has met the ramp. That is the same window that sets ticket and epoch lifetimes.
 4. Evidence of a double spend arriving in that window is the challenge:
    - **Bitcoin:** the co-signers refuse.
    - **Ethereum:** the fraud proof.
+5. Once the payout is broadcast, the ramp settles the credit: the town's fee goes to the treasury, and the rest is retired.
 
-**The co-signers are the town's.** On Bitcoin a withdrawal needs the ramp and a threshold of co-signers. Briolette's design asks for independent, accountable co-signers. In a co-op that is the auditors or dispute panel the members elect ([elections.md](elections.md)). They each run the acceptance check on the retire before signing, so a ramp can't pay out alone.
+**The co-signers are the town's.** On Bitcoin a withdrawal needs the ramp and a threshold of co-signers. If the ramp disappears, the co-signers alone can move the pool after a long timelock. Briolette's design asks for independent, accountable co-signers. In a co-op that is the auditors or dispute panel the members elect ([elections.md](elections.md)). They each check the withdrawal's payment against their own records before signing, so a ramp can't pay out alone.
 
 The Ethereum route differs. The contract verifies Briolette's fraud proofs on BN254. Pave's credentials are on BLS12-381, so an on-chain proof would go through a SNARK, as Briolette's decentralization notes describe. Until then the Bitcoin-style co-signing is the honest model on either chain.
 
@@ -66,14 +65,29 @@ Exchanging between a ramp's credit and the town's own is a swap at a posted rate
   - the `L1Client` trait;
   - an Ethereum contract, with a client that runs;
   - a Bitcoin client that so far simulates deposits, with the Taproot scripts and the `OP_RETURN` formats.
-- **In pave:** nothing yet. The pieces it would use are all there:
-  - a clerk with a budget;
-  - mints and retires with receipts;
-  - the acceptance check;
-  - boards for keys and rates;
-  - elections for the co-signers and the fee.
+- **In pave**, a Bitcoin ramp:
+  - **The credit** ([`board/src/ramp.rs`](../board/src/ramp.rs)): the ramp's schema and budget; deposit claims and their commitments; crediting a deposit as a mint and a split (the depositor's share and the fee); withdrawal invoices whose memo commits to the payout; settling a payout; and `ramp_ledger`, the audit anyone can run from their records, which finds double credits.
+  - **Invoices name their credit.** A town with a ramp has two credits, and a wallet refuses a payment in the wrong one.
+  - **The pool** ([`ramp/src/pool.rs`](../ramp/src/pool.rs)): a Taproot output with an unspendable key path and two leaves. One needs the ramp and `k` of `n` co-signers; the other needs the co-signers alone after 4,320 blocks. It also has the sighashes and witnesses for spending it, and the `OP_RETURN` formats: `PAV\x02` plus a 32-byte commitment for deposits, and `PAV\x01`, epoch and hash for anchors.
+  - **The chain** ([`ramp/src/chain.rs`](../ramp/src/chain.rs)): an `L1` trait in the shape of Briolette's `L1Client`, and a chain with regtest's rules in memory behind it. It tracks confirmations and unspent outputs, and refuses an unconfirmed or spent input, more out than in, a pool spend that doesn't verify, or a key spend without its key.
+  - **The roles** ([`ramp/src/lib.rs`](../ramp/src/lib.rs)):
+    - `Ramp` scans for and credits deposits, invoices and takes withdrawals, builds and broadcasts payouts, and anchors epochs, paying for them from its own fee output.
+    - `Cosigner` reviews a payout against its own view before signing it. It checks:
+      - the challenge period;
+      - the memo's address and amount;
+      - that the payment was in the ramp's credit;
+      - for a double spend;
+      - that the outputs pay the recipient its share, with change back to the pool.
+  - **Tests**: [`ramp/tests/ramp.rs`](../ramp/tests/ramp.rs) runs sats in, credit around, and sats out end to end, then the audit, the anchor and each refusal; [`ramp/tests/pool.rs`](../ramp/tests/pool.rs) covers the spending rules. Each check has a mutation that the tests catch.
 
-Next: a pave ramp against Bitcoin regtest, using Briolette's script and `OP_RETURN` formats, with the town's auditors as co-signers.
+Not yet built:
+- **bitcoind on regtest.** The pool's spends are checked by our own reading of the leaf, not by Bitcoin's interpreter. An RPC client behind `L1` would check them against the interpreter and a real mempool.
+- **Reorgs.**
+- **The recovery leaf's spend.**
+- **Fee estimation.** The miners' share is a fixed 500 sats.
+- **The co-signers' keys from the town's election.** Today they are given to `Ramp::open`.
+- **Posting the keys and the pool's address on the board.** The anchor commits to the tick head and the ledger, but not yet to the boards' roots.
+- **An Ethereum or bank `L1`.**
 
 Open questions, as in Briolette's note:
 - how the co-signers' keys are made and rotated;

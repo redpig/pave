@@ -21,7 +21,10 @@
 // UniFFI 0.25's generated scaffolding compares function pointers, which
 // newer compilers warn about, and leaves blank lines after doc comments;
 // it's the generator's code, not ours.
-#![allow(unpredictable_function_pointer_comparisons, clippy::empty_line_after_doc_comments)]
+#![allow(
+    unpredictable_function_pointer_comparisons,
+    clippy::empty_line_after_doc_comments
+)]
 
 use pave_board::commands::command;
 use pave_board::node::{Enrollment, Node, PendingJoin};
@@ -38,12 +41,22 @@ uniffi::include_scaffolding!("pave");
 /// An attestation as the app hands it over: `{"android": {"chain": [hex]}}`
 /// or `{"apple": {"object": hex, "key_id": hex}}`.
 fn attestation(v: &Value) -> Result<pave_board::attest::Attestation, String> {
-    let hexes = |x: &Value| -> Result<Vec<u8>, String> { hex::decode(x.as_str().ok_or("expected hex")?).map_err(|e| e.to_string()) };
+    let hexes = |x: &Value| -> Result<Vec<u8>, String> {
+        hex::decode(x.as_str().ok_or("expected hex")?).map_err(|e| e.to_string())
+    };
     if let Some(a) = v.get("android") {
-        let chain = a["chain"].as_array().ok_or("android needs a chain")?.iter().map(|c| hexes(c).map(serde_bytes::ByteBuf::from)).collect::<Result<_, _>>()?;
+        let chain = a["chain"]
+            .as_array()
+            .ok_or("android needs a chain")?
+            .iter()
+            .map(|c| hexes(c).map(serde_bytes::ByteBuf::from))
+            .collect::<Result<_, _>>()?;
         Ok(pave_board::attest::Attestation::Android { chain })
     } else if let Some(a) = v.get("apple") {
-        Ok(pave_board::attest::Attestation::Apple { object: serde_bytes::ByteBuf::from(hexes(&a["object"])?), key_id: serde_bytes::ByteBuf::from(hexes(&a["key_id"])?) })
+        Ok(pave_board::attest::Attestation::Apple {
+            object: serde_bytes::ByteBuf::from(hexes(&a["object"])?),
+            key_id: serde_bytes::ByteBuf::from(hexes(&a["key_id"])?),
+        })
     } else {
         Err("expected android or apple".into())
     }
@@ -77,8 +90,22 @@ fn request(join: &pave_board::node::Join) -> Value {
 #[derive(Clone, Copy)]
 pub struct PaveKeystore {
     pub ctx: *mut c_void,
-    pub seal: extern "C" fn(ctx: *mut c_void, data: *const u8, len: usize, out: *mut u8, cap: usize, out_len: *mut usize) -> c_int,
-    pub open: extern "C" fn(ctx: *mut c_void, sealed: *const u8, len: usize, out: *mut u8, cap: usize, out_len: *mut usize) -> c_int,
+    pub seal: extern "C" fn(
+        ctx: *mut c_void,
+        data: *const u8,
+        len: usize,
+        out: *mut u8,
+        cap: usize,
+        out_len: *mut usize,
+    ) -> c_int,
+    pub open: extern "C" fn(
+        ctx: *mut c_void,
+        sealed: *const u8,
+        len: usize,
+        out: *mut u8,
+        cap: usize,
+        out_len: *mut usize,
+    ) -> c_int,
     pub commit: extern "C" fn(ctx: *mut c_void) -> c_int,
     /// Nonzero if an old copy of the state can't be opened after a commit.
     pub rollback_resistant: c_int,
@@ -91,11 +118,22 @@ struct Callbacks(PaveKeystore);
 unsafe impl Send for Callbacks {}
 
 impl Callbacks {
-    fn call(&self, f: extern "C" fn(*mut c_void, *const u8, usize, *mut u8, usize, *mut usize) -> c_int, data: &[u8]) -> Result<Vec<u8>, String> {
+    fn call(
+        &self,
+        f: extern "C" fn(*mut c_void, *const u8, usize, *mut u8, usize, *mut usize) -> c_int,
+        data: &[u8],
+    ) -> Result<Vec<u8>, String> {
         let mut out = vec![0u8; data.len() + 256];
         loop {
             let mut len = 0usize;
-            match f(self.0.ctx, data.as_ptr(), data.len(), out.as_mut_ptr(), out.len(), &mut len) {
+            match f(
+                self.0.ctx,
+                data.as_ptr(),
+                data.len(),
+                out.as_mut_ptr(),
+                out.len(),
+                &mut len,
+            ) {
                 0 => {
                     out.truncate(len);
                     return Ok(out);
@@ -126,7 +164,9 @@ impl VaultKeystore for Callbacks {
 }
 
 fn out(v: Value) -> *mut c_char {
-    CString::new(v.to_string()).expect("JSON has no NULs").into_raw()
+    CString::new(v.to_string())
+        .expect("JSON has no NULs")
+        .into_raw()
 }
 
 fn fail(e: impl std::fmt::Display) -> *mut c_char {
@@ -147,7 +187,9 @@ unsafe fn set_err(err: *mut *mut c_char, e: String) {
 }
 
 fn wallet(n: Node) -> *mut PaveWallet {
-    Box::into_raw(Box::new(PaveWallet { node: Arc::new(Mutex::new(n)) }))
+    Box::into_raw(Box::new(PaveWallet {
+        node: Arc::new(Mutex::new(n)),
+    }))
 }
 
 /// This library's version.
@@ -177,7 +219,11 @@ pub unsafe extern "C" fn pave_open(path: *const c_char, err: *mut *mut c_char) -
 /// # Safety
 /// As [`pave_open`]; `ks`'s callbacks stay valid while the wallet is open.
 #[no_mangle]
-pub unsafe extern "C" fn pave_open_with(path: *const c_char, ks: PaveKeystore, err: *mut *mut c_char) -> *mut PaveWallet {
+pub unsafe extern "C" fn pave_open_with(
+    path: *const c_char,
+    ks: PaveKeystore,
+    err: *mut *mut c_char,
+) -> *mut PaveWallet {
     match text(path).and_then(|p| Node::load_with(Path::new(p), Box::new(Callbacks(ks)))) {
         Ok(n) => wallet(n),
         Err(e) => {
@@ -213,12 +259,16 @@ pub unsafe extern "C" fn pave_join_begin(request_out: *mut *mut c_char) -> *mut 
 /// `join` came from [`pave_join_begin`] and isn't finished; `json` is
 /// NUL-terminated.
 #[no_mangle]
-pub unsafe extern "C" fn pave_join_attest(join: *mut PaveJoin, json_in: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn pave_join_attest(
+    join: *mut PaveJoin,
+    json_in: *const c_char,
+) -> *mut c_char {
     if join.is_null() {
         return fail("null join");
     }
     let r = (|| -> Result<Value, String> {
-        let v: Value = serde_json::from_str(text(json_in)?).map_err(|e| format!("bad json: {e}"))?;
+        let v: Value =
+            serde_json::from_str(text(json_in)?).map_err(|e| format!("bad json: {e}"))?;
         (*join).join.attestation = Some(attestation(&v)?);
         Ok(request(&(*join).join))
     })();
@@ -235,7 +285,14 @@ pub unsafe extern "C" fn pave_join_attest(join: *mut PaveJoin, json_in: *const c
 /// `join` came from [`pave_join_begin`] and isn't used again; strings are
 /// NUL-terminated; `ks` as in [`pave_open_with`].
 #[no_mangle]
-pub unsafe extern "C" fn pave_join_finish(join: *mut PaveJoin, reply: *const c_char, name: *const c_char, path: *const c_char, ks: PaveKeystore, err: *mut *mut c_char) -> *mut PaveWallet {
+pub unsafe extern "C" fn pave_join_finish(
+    join: *mut PaveJoin,
+    reply: *const c_char,
+    name: *const c_char,
+    path: *const c_char,
+    ks: PaveKeystore,
+    err: *mut *mut c_char,
+) -> *mut PaveWallet {
     if join.is_null() {
         set_err(err, "null join".into());
         return std::ptr::null_mut();
@@ -244,7 +301,13 @@ pub unsafe extern "C" fn pave_join_finish(join: *mut PaveJoin, reply: *const c_c
     let r = (|| {
         let bytes = hex::decode(text(reply)?).map_err(|e| e.to_string())?;
         let e: Enrollment = ciborium::from_reader(bytes.as_slice()).map_err(|e| e.to_string())?;
-        Node::finish_enrollment_with(j.pending, &e, text(name)?, Path::new(text(path)?), Box::new(Callbacks(ks)))
+        Node::finish_enrollment_with(
+            j.pending,
+            &e,
+            text(name)?,
+            Path::new(text(path)?),
+            Box::new(Callbacks(ks)),
+        )
     })();
     match r {
         Ok(n) => wallet(n),
@@ -266,7 +329,9 @@ pub unsafe extern "C" fn pave_call(w: *mut PaveWallet, json_in: *const c_char) -
     if w.is_null() {
         return fail("null wallet");
     }
-    let v: Value = match text(json_in).and_then(|t| serde_json::from_str(t).map_err(|e| format!("bad json: {e}"))) {
+    let v: Value = match text(json_in)
+        .and_then(|t| serde_json::from_str(t).map_err(|e| format!("bad json: {e}")))
+    {
         Ok(v) => v,
         Err(e) => return fail(e),
     };

@@ -67,12 +67,24 @@ pub trait Scheme {
     /// (basename, pseudonym) pairs from evidence, without revealing anything
     /// else about it. `ctx` binds the proof to one use. None if the key is
     /// one of them, or if the scheme can't prove it.
-    fn prove_not_cheat(&self, _key: &Self::HolderKey, _cred: &Credential, _cheats: &[(Vec<u8>, Vec<u8>)], _ctx: &[u8]) -> Option<Vec<u8>> {
+    fn prove_not_cheat(
+        &self,
+        _key: &Self::HolderKey,
+        _cred: &Credential,
+        _cheats: &[(Vec<u8>, Vec<u8>)],
+        _ctx: &[u8],
+    ) -> Option<Vec<u8>> {
         None
     }
 
     /// Check a proof from `prove_not_cheat`.
-    fn verify_not_cheat(&self, _cred: &Credential, _cheats: &[(Vec<u8>, Vec<u8>)], _ctx: &[u8], _proof: &[u8]) -> bool {
+    fn verify_not_cheat(
+        &self,
+        _cred: &Credential,
+        _cheats: &[(Vec<u8>, Vec<u8>)],
+        _ctx: &[u8],
+        _proof: &[u8],
+    ) -> bool {
         false
     }
 }
@@ -115,7 +127,13 @@ impl Scheme for DevScheme {
         Credential(key.verifying_key().to_bytes().to_vec())
     }
 
-    fn sign(&self, key: &SigningKey, _cred: &Credential, msg: &[u8], basename: Option<&[u8]>) -> Sig {
+    fn sign(
+        &self,
+        key: &SigningKey,
+        _cred: &Credential,
+        msg: &[u8],
+        basename: Option<&[u8]>,
+    ) -> Sig {
         let sig = key.sign(&Self::signed_bytes(msg, basename));
         let mut out = sig.to_bytes().to_vec();
         if let Some(b) = basename {
@@ -153,11 +171,24 @@ impl Scheme for DevScheme {
 
     // Not anonymous, so anyone can compute a credential's pseudonym and the
     // proof is empty.
-    fn prove_not_cheat(&self, key: &SigningKey, cred: &Credential, cheats: &[(Vec<u8>, Vec<u8>)], ctx: &[u8]) -> Option<Vec<u8>> {
-        (self.credential(key) == *cred && self.verify_not_cheat(cred, cheats, ctx, &[])).then(Vec::new)
+    fn prove_not_cheat(
+        &self,
+        key: &SigningKey,
+        cred: &Credential,
+        cheats: &[(Vec<u8>, Vec<u8>)],
+        ctx: &[u8],
+    ) -> Option<Vec<u8>> {
+        (self.credential(key) == *cred && self.verify_not_cheat(cred, cheats, ctx, &[]))
+            .then(Vec::new)
     }
 
-    fn verify_not_cheat(&self, cred: &Credential, cheats: &[(Vec<u8>, Vec<u8>)], _ctx: &[u8], proof: &[u8]) -> bool {
+    fn verify_not_cheat(
+        &self,
+        cred: &Credential,
+        cheats: &[(Vec<u8>, Vec<u8>)],
+        _ctx: &[u8],
+        proof: &[u8],
+    ) -> bool {
         proof.is_empty() && cheats.iter().all(|(b, k)| Self::nym_for(&cred.0, b) != *k)
     }
 }

@@ -139,10 +139,15 @@ pub enum StateSel {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OpDesc {
-    Transfer { to: Target, receipt: String },
+    Transfer {
+        to: Target,
+        receipt: String,
+    },
     Retire,
     /// Mint one from the budget; the change stays with the budget's key.
-    Mint { to: Target },
+    Mint {
+        to: Target,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -153,7 +158,10 @@ pub enum Target {
     Fresh,
     /// A key of this wallet's with a ticket from `clerk` on `sequence`, such
     /// as a dispatch's shift key; a fresh key if either is null.
-    KeyFrom { clerk: Expr, sequence: Expr },
+    KeyFrom {
+        clerk: Expr,
+        sequence: Expr,
+    },
     /// The state's own holder: custody stays on the same key, such as a
     /// courier's badge.
     Holder,
@@ -257,7 +265,10 @@ impl Profile {
 
     /// Build a layout's value from parameters, checking each field's type.
     pub fn build(&self, layout: &str, params: &Params) -> Result<Value, String> {
-        let l = self.layouts.get(layout).ok_or_else(|| format!("no layout {layout}"))?;
+        let l = self
+            .layouts
+            .get(layout)
+            .ok_or_else(|| format!("no layout {layout}"))?;
         let mut out = vec![];
         for f in &l.fields {
             let v = match (params.get(&f.name), &f.default, &f.ty) {
@@ -276,33 +287,66 @@ impl Profile {
 
     /// The hash of a value under a layout's domain.
     pub fn hash(&self, layout: &str, v: &Value) -> Result<Hash, String> {
-        Ok(hash_of(&self.layouts.get(layout).ok_or_else(|| format!("no layout {layout}"))?.domain, v))
+        Ok(hash_of(
+            &self
+                .layouts
+                .get(layout)
+                .ok_or_else(|| format!("no layout {layout}"))?
+                .domain,
+            v,
+        ))
     }
 
     fn eval(&self, e: &Expr, cx: &Ctx) -> Result<Value, String> {
         Ok(match e {
-            Expr::Param(n) => cx.params.get(n).cloned().ok_or_else(|| format!("no parameter {n}"))?,
+            Expr::Param(n) => cx
+                .params
+                .get(n)
+                .cloned()
+                .ok_or_else(|| format!("no parameter {n}"))?,
             Expr::Field { of, name } => match self.eval(of, cx)? {
                 // A field of nothing is nothing: optional structures read as null.
                 Value::Null => Value::Null,
-                Value::Map(m) => m.into_iter().find(|(k, _)| k.as_text() == Some(name)).map(|(_, v)| v).ok_or_else(|| format!("no field {name}"))?,
+                Value::Map(m) => m
+                    .into_iter()
+                    .find(|(k, _)| k.as_text() == Some(name))
+                    .map(|(_, v)| v)
+                    .ok_or_else(|| format!("no field {name}"))?,
                 _ => return Err(format!("{name}: not a map")),
             },
             Expr::Hash { layout, of } => value(&self.hash(layout, &self.eval(of, cx)?)?),
             Expr::Hop => value(&cx.hop),
-            Expr::Holder => cx.holder.clone().map(|h| value(&h)).ok_or("no state in context")?,
+            Expr::Holder => cx
+                .holder
+                .clone()
+                .map(|h| value(&h))
+                .ok_or("no state in context")?,
         })
     }
 
     /// A receipt for `params`: what an app shows a payment or a handoff
     /// should commit to.
     pub fn receipt_of(&self, name: &str, params: &Params) -> Result<Hash, String> {
-        self.receipt(name, &Ctx { params, hop: 0, holder: None })
+        self.receipt(
+            name,
+            &Ctx {
+                params,
+                hop: 0,
+                holder: None,
+            },
+        )
     }
 
     fn receipt(&self, name: &str, cx: &Ctx) -> Result<Hash, String> {
-        let r = self.receipts.get(name).ok_or_else(|| format!("no receipt {name}"))?;
-        let parts = r.parts.iter().map(|p| self.eval(p, cx)).collect::<Result<Vec<_>, _>>()?;
+        let r = self
+            .receipts
+            .get(name)
+            .ok_or_else(|| format!("no receipt {name}"))?;
+        let parts = r
+            .parts
+            .iter()
+            .map(|p| self.eval(p, cx))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(match parts.as_slice() {
             [one] => hash_of(&r.domain, one),
             _ => hash_of(&r.domain, &Value::Array(parts)),
@@ -313,15 +357,43 @@ impl Profile {
 impl Node {
     /// Run one of a profile's actions with `params`. Returns the record.
     pub fn act(&mut self, p: &Profile, action: &str, params: &Params) -> Result<Record, String> {
-        let a = p.actions.get(action).ok_or_else(|| format!("{}: no action {action}", p.name))?;
+        let a = p
+            .actions
+            .get(action)
+            .ok_or_else(|| format!("{}: no action {action}", p.name))?;
         let coin = match &a.state {
             StateSel::Held { origin } => {
-                let origin = as_hash(&p.eval(origin, &Ctx { params, hop: 0, holder: None })?)?;
-                self.view.unspent().find(|c| c.origin == origin && self.mine.contains(&c.holder)).cloned().ok_or("this wallet doesn't hold it")?
+                let origin = as_hash(&p.eval(
+                    origin,
+                    &Ctx {
+                        params,
+                        hop: 0,
+                        holder: None,
+                    },
+                )?)?;
+                self.view
+                    .unspent()
+                    .find(|c| c.origin == origin && self.mine.contains(&c.holder))
+                    .cloned()
+                    .ok_or("this wallet doesn't hold it")?
             }
             StateSel::Budget { schema } => {
-                let id = p.schemas.get(schema).ok_or_else(|| format!("no schema {schema}"))?.schema.id();
-                self.view.unspent().find(|c| c.kind == Kind::MintBudget && c.schema == id && c.amount > 0 && self.mine.contains(&c.holder)).cloned().ok_or("no budget of that schema")?
+                let id = p
+                    .schemas
+                    .get(schema)
+                    .ok_or_else(|| format!("no schema {schema}"))?
+                    .schema
+                    .id();
+                self.view
+                    .unspent()
+                    .find(|c| {
+                        c.kind == Kind::MintBudget
+                            && c.schema == id
+                            && c.amount > 0
+                            && self.mine.contains(&c.holder)
+                    })
+                    .cloned()
+                    .ok_or("no budget of that schema")?
             }
         };
         for pred in &a.requires {
@@ -330,7 +402,11 @@ impl Node {
             }
         }
         if a.check {
-            let cx = Ctx { params, hop: coin.hops, holder: Some(coin.holder.clone()) };
+            let cx = Ctx {
+                params,
+                hop: coin.hops,
+                holder: Some(coin.holder.clone()),
+            };
             let mut trusted = vec![];
             for t in &a.trust {
                 let (c, s) = (p.eval(&t.clerk, &cx)?, p.eval(&t.sequence, &cx)?);
@@ -338,30 +414,61 @@ impl Node {
                     trusted.push((as_cred(&c)?, as_hash(&s)?));
                 }
             }
-            self.check_trusting(&coin.state, &trusted).map_err(|r| format!("{r:?}"))?;
+            self.check_trusting(&coin.state, &trusted)
+                .map_err(|r| format!("{r:?}"))?;
         }
         let target = |n: &mut Node, t: &Target| -> Result<Credential, String> {
             match t {
-                Target::Param(name) => as_cred(params.get(name).ok_or_else(|| format!("no parameter {name}"))?),
+                Target::Param(name) => as_cred(
+                    params
+                        .get(name)
+                        .ok_or_else(|| format!("no parameter {name}"))?,
+                ),
                 Target::Fresh => n.fresh(),
                 Target::KeyFrom { clerk, sequence } => {
-                    let cx = Ctx { params, hop: coin.hops, holder: Some(coin.holder.clone()) };
+                    let cx = Ctx {
+                        params,
+                        hop: coin.hops,
+                        holder: Some(coin.holder.clone()),
+                    };
                     let (c, s) = (p.eval(clerk, &cx)?, p.eval(sequence, &cx)?);
                     if c.is_null() || s.is_null() {
                         return n.fresh();
                     }
                     let (c, s) = (as_cred(&c)?, as_hash(&s)?);
-                    let i = n.shift_keys.iter().position(|k| n.know.tickets.get(k).is_some_and(|t| t.clerk == c && t.ticket.sequence == s)).ok_or("no key with a ticket from that clerk")?;
+                    let i = n
+                        .shift_keys
+                        .iter()
+                        .position(|k| {
+                            n.know
+                                .tickets
+                                .get(k)
+                                .is_some_and(|t| t.clerk == c && t.ticket.sequence == s)
+                        })
+                        .ok_or("no key with a ticket from that clerk")?;
                     Ok(n.shift_keys.remove(i))
                 }
                 Target::Holder => Ok(coin.holder.clone()),
             }
         };
-        let cx = Ctx { params, hop: coin.hops + a.hop, holder: Some(coin.holder.clone()) };
+        let cx = Ctx {
+            params,
+            hop: coin.hops + a.hop,
+            holder: Some(coin.holder.clone()),
+        };
         let op = match &a.op {
-            OpDesc::Transfer { to, receipt } => Op::Transfer { state: coin.state, to: target(self, to)?, receipt: p.receipt(receipt, &cx)? },
+            OpDesc::Transfer { to, receipt } => Op::Transfer {
+                state: coin.state,
+                to: target(self, to)?,
+                receipt: p.receipt(receipt, &cx)?,
+            },
             OpDesc::Retire => Op::Retire { state: coin.state },
-            OpDesc::Mint { to } => Op::Mint { budget: coin.state, amount: 1, to: target(self, to)?, change_to: coin.holder.clone() },
+            OpDesc::Mint { to } => Op::Mint {
+                budget: coin.state,
+                amount: 1,
+                to: target(self, to)?,
+                change_to: coin.holder.clone(),
+            },
         };
         let rec = self.signed(&coin.holder, op)?;
         apply_ok(&mut self.view, &rec)?;
@@ -369,8 +476,18 @@ impl Node {
         Ok(rec)
     }
 
-    fn holds(&self, p: &Profile, pred: &Pred, coin: &pave_kernel::Coin, params: &Params) -> Result<bool, String> {
-        let cx = Ctx { params, hop: coin.hops, holder: Some(coin.holder.clone()) };
+    fn holds(
+        &self,
+        p: &Profile,
+        pred: &Pred,
+        coin: &pave_kernel::Coin,
+        params: &Params,
+    ) -> Result<bool, String> {
+        let cx = Ctx {
+            params,
+            hop: coin.hops,
+            holder: Some(coin.holder.clone()),
+        };
         Ok(match pred {
             Pred::CreatedWith { receipt } => {
                 let want = p.receipt(receipt, &cx)?;
@@ -386,22 +503,45 @@ impl Node {
                 }
                 false
             }
-            Pred::IfPresent { value, then } => p.eval(value, &cx)?.is_null() || self.holds(p, then, coin, params)?,
-            Pred::TicketFrom { key, clerk, sequence, purpose } => {
-                let (k, c, s) = (as_cred(&p.eval(key, &cx)?)?, as_cred(&p.eval(clerk, &cx)?)?, as_hash(&p.eval(sequence, &cx)?)?);
+            Pred::IfPresent { value, then } => {
+                p.eval(value, &cx)?.is_null() || self.holds(p, then, coin, params)?
+            }
+            Pred::TicketFrom {
+                key,
+                clerk,
+                sequence,
+                purpose,
+            } => {
+                let (k, c, s) = (
+                    as_cred(&p.eval(key, &cx)?)?,
+                    as_cred(&p.eval(clerk, &cx)?)?,
+                    as_hash(&p.eval(sequence, &cx)?)?,
+                );
                 let want = match purpose {
                     Some(e) => Some(as_hash(&p.eval(e, &cx)?)?),
                     None => None,
                 };
                 self.know.tickets.get(&k).is_some_and(|t| {
-                    t.clerk == c && t.ticket.sequence == s && t.verify(self.view.scheme()) && !self.is_revoked(&s, t.ticket.group) && want.is_none_or(|w| t.ticket.tag.as_ref().is_some_and(|g| g.purpose == w))
+                    t.clerk == c
+                        && t.ticket.sequence == s
+                        && t.verify(self.view.scheme())
+                        && !self.is_revoked(&s, t.ticket.group)
+                        && want
+                            .is_none_or(|w| t.ticket.tag.as_ref().is_some_and(|g| g.purpose == w))
                 })
             }
-            Pred::LineageCurrent { lineage, generation } => {
+            Pred::LineageCurrent {
+                lineage,
+                generation,
+            } => {
                 let l = as_hash(&p.eval(lineage, &cx)?)?;
-                let g: u32 = p.eval(generation, &cx)?.deserialized().map_err(|_| "not a generation")?;
+                let g: u32 = p
+                    .eval(generation, &cx)?
+                    .deserialized()
+                    .map_err(|_| "not a generation")?;
                 let current = pave_protocol::head(&self.view, &l).is_none_or(|h| h.number <= g);
-                let used: std::collections::BTreeSet<Hash> = self.view.evidence().map(|e| e.basename).collect();
+                let used: std::collections::BTreeSet<Hash> =
+                    self.view.evidence().map(|e| e.basename).collect();
                 let mut state = l;
                 let mut twice = false;
                 for _ in 0..=crate::parcel::MAX_HOPS {
@@ -421,24 +561,54 @@ impl Node {
 
     /// Read a state's history with one of a profile's walks. Returns the
     /// steps and the current holder, if it's still held.
-    pub fn walk(&self, p: &Profile, walk: &str, params: &Params) -> Result<(Vec<Stepped>, Option<Credential>), String> {
+    pub fn walk(
+        &self,
+        p: &Profile,
+        walk: &str,
+        params: &Params,
+    ) -> Result<(Vec<Stepped>, Option<Credential>), String> {
         let w = p.walks.get(walk).ok_or_else(|| format!("no walk {walk}"))?;
-        let mut state = as_hash(&p.eval(&w.from, &Ctx { params, hop: 0, holder: None })?)?;
+        let mut state = as_hash(&p.eval(
+            &w.from,
+            &Ctx {
+                params,
+                hop: 0,
+                holder: None,
+            },
+        )?)?;
         let (mut steps, mut hop) = (vec![], 0u32);
         loop {
             if let Some(c) = self.view.coin(&state) {
                 return Ok((steps, Some(c.holder.clone())));
             }
-            let Some(rec) = self.view.spender(&state) else { return Ok((steps, None)) };
+            let Some(rec) = self.view.spender(&state) else {
+                return Ok((steps, None));
+            };
             hop += 1;
             match &rec.op {
                 Op::Transfer { to, receipt, .. } => {
-                    let cx = Ctx { params, hop, holder: None };
-                    let label = w.steps.iter().find(|s| p.receipt(&s.receipt, &cx).ok() == Some(*receipt)).map_or("other".to_string(), |s| s.label.clone());
-                    steps.push(Stepped { label, signer: rec.signer.clone(), to: Some(to.clone()) });
+                    let cx = Ctx {
+                        params,
+                        hop,
+                        holder: None,
+                    };
+                    let label = w
+                        .steps
+                        .iter()
+                        .find(|s| p.receipt(&s.receipt, &cx).ok() == Some(*receipt))
+                        .map_or("other".to_string(), |s| s.label.clone());
+                    steps.push(Stepped {
+                        label,
+                        signer: rec.signer.clone(),
+                        to: Some(to.clone()),
+                    });
                 }
                 Op::Retire { .. } => {
-                    steps.push(Stepped { label: w.retire.clone(), signer: rec.signer.clone(), to: None });
+                    steps.push(Stepped {
+                        label: w.retire.clone(),
+                        signer: rec.signer.clone(),
+                        to: None,
+                    });
                     return Ok((steps, None));
                 }
                 _ => return Ok((steps, None)),

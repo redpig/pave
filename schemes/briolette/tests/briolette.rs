@@ -3,7 +3,9 @@
 use pave_kernel::invariants::{check_all, no_false_flag};
 use pave_kernel::receipt::Receipt;
 use pave_kernel::*;
-use pave_scheme_briolette::{BrioletteV1, HolderKey, Issuer, SIGNATURE_LENGTH, SIGNATURE_WITH_NYM_LENGTH};
+use pave_scheme_briolette::{
+    BrioletteV1, HolderKey, Issuer, SIGNATURE_LENGTH, SIGNATURE_WITH_NYM_LENGTH,
+};
 use std::collections::BTreeSet;
 
 struct P {
@@ -35,16 +37,33 @@ fn holdings_are_unlinkable_but_reuse_links() {
     let y = scheme.sign(&key, &c2, b"other", Some(b1));
     let z = scheme.sign(&key, &c1, &msg, Some(b2));
     assert_eq!(x.0.len(), SIGNATURE_WITH_NYM_LENGTH);
-    assert_eq!(scheme.nym(&x), scheme.nym(&y), "same key, same basename: same pseudonym");
-    assert_ne!(scheme.nym(&x), scheme.nym(&z), "different basename: unlinkable");
-    assert!(!scheme.verify(&c2, &msg, Some(b1), &x), "bound to the signing credential");
+    assert_eq!(
+        scheme.nym(&x),
+        scheme.nym(&y),
+        "same key, same basename: same pseudonym"
+    );
+    assert_ne!(
+        scheme.nym(&x),
+        scheme.nym(&z),
+        "different basename: unlinkable"
+    );
+    assert!(
+        !scheme.verify(&c2, &msg, Some(b1), &x),
+        "bound to the signing credential"
+    );
     // Stored without the credential it was made with: 96 bytes, 144 with a
     // pseudonym, not 288 and 336.
-    assert_eq!((s_plain.0.len(), x.0.len()), (SIGNATURE_LENGTH, SIGNATURE_WITH_NYM_LENGTH));
+    assert_eq!(
+        (s_plain.0.len(), x.0.len()),
+        (SIGNATURE_LENGTH, SIGNATURE_WITH_NYM_LENGTH)
+    );
     assert_eq!((SIGNATURE_LENGTH, SIGNATURE_WITH_NYM_LENGTH), (96, 144));
     let mut short = x.clone();
     short.0.pop();
-    assert!(!scheme.verify(&c1, &msg, Some(b1), &short), "a malformed signature is refused");
+    assert!(
+        !scheme.verify(&c1, &msg, Some(b1), &short),
+        "a malformed signature is refused"
+    );
 }
 
 #[test]
@@ -52,29 +71,97 @@ fn offline_double_spend_with_ecdaa() {
     let issuer = Issuer::new();
     let scheme = issuer.scheme();
     let root = holder(&issuer, &scheme);
-    let (minter, m, a, b) = (holder(&issuer, &scheme), holder(&issuer, &scheme), holder(&issuer, &scheme), holder(&issuer, &scheme));
-    let genesis = Genesis { label: "ecdaa town".into(), root_rules: ScopeRules::default(), rooting: root.cred.clone() };
+    let (minter, m, a, b) = (
+        holder(&issuer, &scheme),
+        holder(&issuer, &scheme),
+        holder(&issuer, &scheme),
+        holder(&issuer, &scheme),
+    );
+    let genesis = Genesis {
+        label: "ecdaa town".into(),
+        root_rules: ScopeRules::default(),
+        rooting: root.cred.clone(),
+    };
     let mut base = View::new(scheme.clone(), genesis);
-    let schema = Schema { label: "test credit".into(), divisible: true, soft_expiry: Some(4), hard_expiry: Some(8), offline_transfers: Some(3), max_per_holder: None, sequence: None };
-    let issue = sign(&scheme, &root.key, &root.cred, Op::IssueBudget { authority: base.genesis().rooting_capability(), schema, amount: 10, to: minter.cred.clone() });
+    let schema = Schema {
+        label: "test credit".into(),
+        divisible: true,
+        soft_expiry: Some(4),
+        hard_expiry: Some(8),
+        offline_transfers: Some(3),
+        max_per_holder: None,
+        sequence: None,
+    };
+    let issue = sign(
+        &scheme,
+        &root.key,
+        &root.cred,
+        Op::IssueBudget {
+            authority: base.genesis().rooting_capability(),
+            schema,
+            amount: 10,
+            to: minter.cred.clone(),
+        },
+    );
     assert_eq!(base.apply(&issue), Ok(Applied::Accepted));
-    let mint = sign(&scheme, &minter.key, &minter.cred, Op::Mint { budget: issue.output(0), amount: 10, to: m.cred.clone(), change_to: minter.cred.clone() });
+    let mint = sign(
+        &scheme,
+        &minter.key,
+        &minter.cred,
+        Op::Mint {
+            budget: issue.output(0),
+            amount: 10,
+            to: m.cred.clone(),
+            change_to: minter.cred.clone(),
+        },
+    );
     assert_eq!(base.apply(&mint), Ok(Applied::Accepted));
     let coin = mint.output(0);
 
     let (mut x, mut y) = (base.clone(), base);
     let rcpt = Receipt::leaf(b"lunch".to_vec()).root();
-    assert_eq!(x.apply(&sign(&scheme, &m.key, &m.cred, Op::Transfer { state: coin, to: a.cred.clone(), receipt: rcpt })), Ok(Applied::Accepted));
-    assert_eq!(y.apply(&sign(&scheme, &m.key, &m.cred, Op::Transfer { state: coin, to: b.cred.clone(), receipt: rcpt })), Ok(Applied::Accepted));
+    assert_eq!(
+        x.apply(&sign(
+            &scheme,
+            &m.key,
+            &m.cred,
+            Op::Transfer {
+                state: coin,
+                to: a.cred.clone(),
+                receipt: rcpt
+            }
+        )),
+        Ok(Applied::Accepted)
+    );
+    assert_eq!(
+        y.apply(&sign(
+            &scheme,
+            &m.key,
+            &m.cred,
+            Op::Transfer {
+                state: coin,
+                to: b.cred.clone(),
+                receipt: rcpt
+            }
+        )),
+        Ok(Applied::Accepted)
+    );
     assert_eq!(x.merge_from(&y), vec![coin]);
 
-    let honest: BTreeSet<_> = [&a, &b, &minter, &root].iter().map(|p| p.cred.clone()).collect();
+    let honest: BTreeSet<_> = [&a, &b, &minter, &root]
+        .iter()
+        .map(|p| p.cred.clone())
+        .collect();
     no_false_flag(&x, &honest).unwrap();
     assert_eq!(x.flagged(), [m.cred.clone()].into_iter().collect());
     check_all(&x).unwrap();
     let ev = x.evidence().next().unwrap();
     assert!(verify_evidence(&scheme, ev));
-    println!("evidence: nym {} B, two records with signatures of {} B each", ev.nym.len(), ev.first.sigs[0].0.len());
+    println!(
+        "evidence: nym {} B, two records with signatures of {} B each",
+        ev.nym.len(),
+        ev.first.sigs[0].0.len()
+    );
 }
 
 #[test]
@@ -106,7 +193,11 @@ fn join_keeps_the_secret_key_with_the_holder() {
 fn anyone_can_prove_they_are_not_the_cheat_except_the_cheat() {
     let issuer = Issuer::new();
     let scheme = issuer.scheme();
-    let (cheat, honest, other) = (issuer.join_locally(), issuer.join_locally(), issuer.join_locally());
+    let (cheat, honest, other) = (
+        issuer.join_locally(),
+        issuer.join_locally(),
+        issuer.join_locally(),
+    );
 
     // The cheat signs one state twice; that is what evidence holds.
     let state = b"state-7";
@@ -116,25 +207,39 @@ fn anyone_can_prove_they_are_not_the_cheat_except_the_cheat() {
 
     // An honest holder proves it, for any of its credentials.
     let h = scheme.credential(&honest);
-    let proof = scheme.prove_not_cheat(&honest, &h, &list, b"pay alice").unwrap();
-    assert_eq!(proof.len(), pave_scheme_briolette::nonrevoked::ENTRY_PROOF_LENGTH);
+    let proof = scheme
+        .prove_not_cheat(&honest, &h, &list, b"pay alice")
+        .unwrap();
+    assert_eq!(
+        proof.len(),
+        pave_scheme_briolette::nonrevoked::ENTRY_PROOF_LENGTH
+    );
     assert!(scheme.verify_not_cheat(&h, &list, b"pay alice", &proof));
     // Bound to its use, its credential and its list.
     assert!(!scheme.verify_not_cheat(&h, &list, b"pay carol", &proof));
     assert!(!scheme.verify_not_cheat(&scheme.credential(&honest), &list, b"pay alice", &proof));
-    assert!(!scheme.verify_not_cheat(&h, &[(b"state-8".to_vec(), list[0].1.clone())], b"pay alice", &proof));
+    assert!(!scheme.verify_not_cheat(
+        &h,
+        &[(b"state-8".to_vec(), list[0].1.clone())],
+        b"pay alice",
+        &proof
+    ));
     let mut bad = proof.clone();
     bad[60] ^= 1;
     assert!(!scheme.verify_not_cheat(&h, &list, b"pay alice", &bad));
     // Two proofs by the same holder share nothing: no linking.
-    let again = scheme.prove_not_cheat(&honest, &h, &list, b"pay alice").unwrap();
+    let again = scheme
+        .prove_not_cheat(&honest, &h, &list, b"pay alice")
+        .unwrap();
     assert_ne!(proof[..48], again[..48]);
 
     // The cheat can't, under any of its unlinkable credentials, and can't
     // borrow someone else's proof.
     for _ in 0..3 {
         let c = scheme.credential(&cheat);
-        assert!(scheme.prove_not_cheat(&cheat, &c, &list, b"pay alice").is_none());
+        assert!(scheme
+            .prove_not_cheat(&cheat, &c, &list, b"pay alice")
+            .is_none());
         assert!(!scheme.verify_not_cheat(&c, &list, b"pay alice", &proof));
     }
     // Nor with a credential that isn't its own.
@@ -145,5 +250,10 @@ fn anyone_can_prove_they_are_not_the_cheat_except_the_cheat() {
     let sc = Issuer::new().scheme().credential(&stranger);
     assert!(!scheme.verify_not_cheat(&sc, &list, b"x", &[]));
     // An empty list needs an empty proof.
-    assert!(scheme.verify_not_cheat(&h, &[], b"x", &scheme.prove_not_cheat(&honest, &h, &[], b"x").unwrap()));
+    assert!(scheme.verify_not_cheat(
+        &h,
+        &[],
+        b"x",
+        &scheme.prove_not_cheat(&honest, &h, &[], b"x").unwrap()
+    ));
 }

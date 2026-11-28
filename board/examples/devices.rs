@@ -16,7 +16,9 @@ fn join(town: &mut Node, name: &str, dir: &std::path::Path, credits: &[u64]) -> 
     let e = town.enroll(&req, "hardware", credits).unwrap();
     let mut n = Node::finish_enrollment(pending, &e, name, &dir.join(name)).unwrap();
     for _ in 0..2 {
-        let t = town.answer_refill(&n.refill_request(&town.refill_terms().unwrap(), 16).unwrap()).unwrap();
+        let t = town
+            .answer_refill(&n.refill_request(&town.refill_terms().unwrap(), 16).unwrap())
+            .unwrap();
         n.take_tickets(t);
     }
     n
@@ -53,7 +55,9 @@ fn pay(a: &mut Node, b: &mut Node, amount: u64) -> Result<(usize, f64), String> 
     a.check_invoice(&inv).map_err(|e| format!("{e:?}"))?;
     let offer = a.offer(&inv)?;
     let lacks = b.lacks(&offer);
-    let mut p = a.propose(&offer, &lacks, &pave_protocol::cheat_list(&a.view)).unwrap();
+    let mut p = a
+        .propose(&offer, &lacks, &pave_protocol::cheat_list(&a.view))
+        .unwrap();
     let t = Instant::now();
     let mut v = b.judge(&p);
     if let PayVerdict::NeedStanding(list) = v {
@@ -73,7 +77,16 @@ fn main() {
     let dir = std::env::temp_dir().join(format!("pave-devices-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut town = Node::init_town(&dir.join("town"), "test").unwrap();
-    let mut w: Vec<Node> = (0..6).map(|i| join(&mut town, &format!("w{i}"), &dir, if i == 0 { &[1000] } else { &[] })).collect();
+    let mut w: Vec<Node> = (0..6)
+        .map(|i| {
+            join(
+                &mut town,
+                &format!("w{i}"),
+                &dir,
+                if i == 0 { &[1000] } else { &[] },
+            )
+        })
+        .collect();
 
     // Primitives.
     let s = w[0].view.scheme().clone();
@@ -98,7 +111,9 @@ fn main() {
         let (a, b) = w.split_at_mut(i + 1);
         meet(&mut a[i], &mut town);
         match pay(&mut a[i], &mut b[0], 100 - 10 * i as u64) {
-            Ok((size, judge)) => hops.push(json!({ "hop": i + 1, "bytes": size, "ms_payee_checks": judge })),
+            Ok((size, judge)) => {
+                hops.push(json!({ "hop": i + 1, "bytes": size, "ms_payee_checks": judge }))
+            }
             Err(e) => {
                 hops.push(json!({ "hop": i + 1, "refused": e }));
                 break;
@@ -108,7 +123,10 @@ fn main() {
 
     // Meets: first between two wallets that know only the town, then again
     // after one more payment.
-    let (mut a, mut b) = (join(&mut town, "a", &dir, &[500]), join(&mut town, "b", &dir, &[]));
+    let (mut a, mut b) = (
+        join(&mut town, "a", &dir, &[500]),
+        join(&mut town, "b", &dir, &[]),
+    );
     let first = meet(&mut a, &mut b);
     pay(&mut a, &mut b, 50).unwrap();
     let again = meet(&mut a, &mut b);
@@ -127,7 +145,9 @@ fn main() {
     let to = a.receive().unwrap();
     let m = b.ship("order", "dn5bpsb", "dn5bpth", to, 400).unwrap();
     let m = b.name_dispatch(&m.parcel, d.clone()).unwrap();
-    let job = b.post_known("Deliver", 10, Known::Badge(d.roster.clone())).unwrap();
+    let job = b
+        .post_known("Deliver", 10, Known::Badge(d.roster.clone()))
+        .unwrap();
     b.sync_with(&mut town);
     a.sync_with(&mut town);
     a.reply(job, "here").unwrap();
@@ -147,14 +167,20 @@ fn main() {
     // In person: the invite's QR code, and each payload sealed and cut into
     // QR-only frames.
     use pave_board::link::{frames, Invite, Link, Radio, Side, FRAME_BYTES};
-    let inv = Invite::new(vec![Radio::WifiAware("pave".into()), Radio::Ble([7; 16])], 120);
+    let inv = Invite::new(
+        vec![Radio::WifiAware("pave".into()), Radio::Ble([7; 16])],
+        120,
+    );
     let mut l = Link::new(&inv, Side::Shower);
     let mut framed = |kind: &str, body: Vec<u8>| {
         let sealed = l.seal(kind, &body);
         let f = frames(inv.token, &sealed, FRAME_BYTES);
         json!({ "sealed_bytes": sealed.len(), "frames": f.len(), "longest_frame_chars": f.iter().map(|x| x.len()).max() })
     };
-    let fresh = (join(&mut town, "c", &dir, &[]), join(&mut town, "e", &dir, &[]));
+    let fresh = (
+        join(&mut town, "c", &dir, &[]),
+        join(&mut town, "e", &dir, &[]),
+    );
     let first_bundle = encode(&fresh.0.bundle_for(&fresh.1.have()));
     let link = json!({
         "invite_chars": inv.to_qr().len(),

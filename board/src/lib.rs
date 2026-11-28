@@ -26,23 +26,24 @@
 //! - [`swap`]: old coins in, fresh coins out
 //! - [`vault`]: sealing a wallet's state, and making old copies useless
 
-pub mod board;
 pub mod attest;
+pub mod board;
 pub mod bulletin;
 pub mod commands;
 pub mod dispatch;
 pub mod dispute;
 pub mod election;
+pub mod evidence;
 pub mod food;
 pub mod link;
-pub mod evidence;
 pub mod media;
 pub mod nac;
 pub mod net;
 pub mod node;
 pub mod parcel;
-pub mod profile;
 pub mod pay;
+pub mod profile;
+pub mod ramp;
 pub mod report;
 pub mod request;
 pub mod slots;

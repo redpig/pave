@@ -55,41 +55,120 @@ fn apply(site: &mut Site, rec: &Record) {
 
 fn start_sequence(site: &mut Site, root: &P, clerk: &P, label: &str) -> Hash {
     let auth = site.view.genesis().rooting_capability();
-    let issue = sign(&DevScheme, &root.key, &root.cred, Op::IssueBudget { authority: auth, schema: epoch_schema(label), amount: 1, to: clerk.cred.clone() });
+    let issue = sign(
+        &DevScheme,
+        &root.key,
+        &root.cred,
+        Op::IssueBudget {
+            authority: auth,
+            schema: epoch_schema(label),
+            amount: 1,
+            to: clerk.cred.clone(),
+        },
+    );
     apply(site, &issue);
-    let mint = sign(&DevScheme, &clerk.key, &clerk.cred, Op::Mint { budget: issue.output(0), amount: 1, to: clerk.cred.clone(), change_to: clerk.cred.clone() });
+    let mint = sign(
+        &DevScheme,
+        &clerk.key,
+        &clerk.cred,
+        Op::Mint {
+            budget: issue.output(0),
+            amount: 1,
+            to: clerk.cred.clone(),
+            change_to: clerk.cred.clone(),
+        },
+    );
     apply(site, &mint);
     mint.output(0)
 }
 
 fn world() -> World {
     let (root, clerk_x, clerk_y, minter) = (person(), person(), person(), person());
-    let genesis = Genesis { label: "test town".into(), root_rules: ScopeRules::default(), rooting: root.cred.clone() };
-    let mut site = Site { view: View::new(DevScheme, genesis), know: Knowledge::default() };
+    let genesis = Genesis {
+        label: "test town".into(),
+        root_rules: ScopeRules::default(),
+        rooting: root.cred.clone(),
+    };
+    let mut site = Site {
+        view: View::new(DevScheme, genesis),
+        know: Knowledge::default(),
+    };
     let seq_x = start_sequence(&mut site, &root, &clerk_x, "x");
     let seq_y = start_sequence(&mut site, &root, &clerk_y, "y");
     let auth = site.view.genesis().rooting_capability();
-    let issue = sign(&DevScheme, &root.key, &root.cred, Op::IssueBudget { authority: auth, schema: cash(), amount: 1_000, to: minter.cred.clone() });
+    let issue = sign(
+        &DevScheme,
+        &root.key,
+        &root.cred,
+        Op::IssueBudget {
+            authority: auth,
+            schema: cash(),
+            amount: 1_000,
+            to: minter.cred.clone(),
+        },
+    );
     apply(&mut site, &issue);
-    World { root, clerk_x, clerk_y, minter, seq_x, seq_y, cash_budget: issue.output(0), site }
+    World {
+        root,
+        clerk_x,
+        clerk_y,
+        minter,
+        seq_x,
+        seq_y,
+        cash_budget: issue.output(0),
+        site,
+    }
 }
 
 impl World {
     fn policy(&self) -> Policy {
-        Policy::wallet([(self.clerk_x.cred.clone(), self.seq_x), (self.clerk_y.cred.clone(), self.seq_y)].into_iter().collect())
+        Policy::wallet(
+            [
+                (self.clerk_x.cred.clone(), self.seq_x),
+                (self.clerk_y.cred.clone(), self.seq_y),
+            ]
+            .into_iter()
+            .collect(),
+        )
     }
     fn clerk(&self, seq: Hash) -> &P {
-        if seq == self.seq_x { &self.clerk_x } else { &self.clerk_y }
+        if seq == self.seq_x {
+            &self.clerk_x
+        } else {
+            &self.clerk_y
+        }
     }
     /// A clerk issues `p` a ticket at its sequence's current epoch.
     fn ticket(&mut self, p: &P, seq: Hash, group: u32) {
         let epoch = head(&self.site.view, &seq).unwrap().number;
         let clerk = self.clerk(seq);
-        let t = SignedTicket::issue(&DevScheme, &clerk.key, &clerk.cred, Ticket { credential: p.cred.clone(), sequence: seq, epoch, group, max_spend: None, tag: None });
+        let t = SignedTicket::issue(
+            &DevScheme,
+            &clerk.key,
+            &clerk.cred,
+            Ticket {
+                credential: p.cred.clone(),
+                sequence: seq,
+                epoch,
+                group,
+                max_spend: None,
+                tag: None,
+            },
+        );
         assert!(self.site.know.add_ticket(&DevScheme, t));
     }
     fn mint_to(&mut self, p: &P, amount: u64) -> Hash {
-        let m = sign(&DevScheme, &self.minter.key, &self.minter.cred, Op::Mint { budget: self.cash_budget, amount, to: p.cred.clone(), change_to: self.minter.cred.clone() });
+        let m = sign(
+            &DevScheme,
+            &self.minter.key,
+            &self.minter.cred,
+            Op::Mint {
+                budget: self.cash_budget,
+                amount,
+                to: p.cred.clone(),
+                change_to: self.minter.cred.clone(),
+            },
+        );
         apply(&mut self.site, &m);
         self.cash_budget = m.output(1);
         m.output(0)
@@ -103,18 +182,43 @@ fn roll_on(site: &mut Site, clerk: &P, seq: Hash, revoked: &[u32]) -> Record {
     roll_with(site, clerk, seq, revoked.iter().map(|g| (*g, at)).collect())
 }
 
-fn roll_with(site: &mut Site, clerk: &P, seq: Hash, revoked: std::collections::BTreeMap<u32, u32>) -> Record {
+fn roll_with(
+    site: &mut Site,
+    clerk: &P,
+    seq: Hash,
+    revoked: std::collections::BTreeMap<u32, u32>,
+) -> Record {
     let h = head(&site.view, &seq).unwrap();
     let coin = site.view.coin(&h.state).unwrap().clone();
-    let data = EpochData { sequence: seq, number: h.number + 1, revoked };
-    let rec = roll(&DevScheme, &clerk.key, &clerk.cred, &coin, &clerk.cred, &data);
+    let data = EpochData {
+        sequence: seq,
+        number: h.number + 1,
+        revoked,
+    };
+    let rec = roll(
+        &DevScheme,
+        &clerk.key,
+        &clerk.cred,
+        &coin,
+        &clerk.cred,
+        &data,
+    );
     apply(site, &rec);
     assert!(site.know.add_epoch_data(&site.view, data));
     rec
 }
 
 fn pay(site: &mut Site, from: &P, state: Hash, to: &P) -> Hash {
-    let rec = sign(&DevScheme, &from.key, &from.cred, Op::Transfer { state, to: to.cred.clone(), receipt: Hash([0; 32]) });
+    let rec = sign(
+        &DevScheme,
+        &from.key,
+        &from.cred,
+        Op::Transfer {
+            state,
+            to: to.cred.clone(),
+            receipt: Hash([0; 32]),
+        },
+    );
     apply(site, &rec);
     rec.output(0)
 }
@@ -130,7 +234,11 @@ fn epochs_roll_and_commit_their_data() {
     let d = &w.site.know.epoch_data[&h.data.unwrap()];
     assert_eq!((d.number, d.revoked.contains_key(&3)), (2, true));
     // Data a roll didn't commit to is refused (fault "forge" for epoch data).
-    let fake = EpochData { sequence: w.seq_x, number: 2, revoked: Default::default() };
+    let fake = EpochData {
+        sequence: w.seq_x,
+        number: 2,
+        revoked: Default::default(),
+    };
     assert!(!w.site.know.add_epoch_data(&w.site.view, fake));
 }
 
@@ -144,8 +252,15 @@ fn epoch_equivocation_is_a_kernel_conflict() {
     roll_on(&mut a, &w.clerk_x, w.seq_x, &[]);
     roll_on(&mut b, &w.clerk_x, w.seq_x, &[9]);
     a.view.merge_from(&b.view);
-    assert_eq!(a.view.flagged(), [w.clerk_x.cred.clone()].into_iter().collect());
-    assert_eq!(head(&a.view, &w.seq_x).unwrap().number, 1, "first seen wins");
+    assert_eq!(
+        a.view.flagged(),
+        [w.clerk_x.cred.clone()].into_iter().collect()
+    );
+    assert_eq!(
+        head(&a.view, &w.seq_x).unwrap().number,
+        1,
+        "first seen wins"
+    );
 }
 
 /// `HonestAcceptsInDate` / fault `ignoreexpiry`, and the witness: the kernel
@@ -157,13 +272,26 @@ fn recipients_honor_soft_expiry_and_the_kernel_doesnt() {
     w.ticket(&a, w.seq_x, 1);
     w.ticket(&b, w.seq_x, 1);
     let coin = w.mint_to(&a, 10);
-    assert_eq!(check(&w.site.view, &w.site.know, &coin, &a.cred, &w.policy()), Ok(()));
+    assert_eq!(
+        check(&w.site.view, &w.site.know, &coin, &a.cred, &w.policy()),
+        Ok(())
+    );
     roll_on(&mut w.site, &w.clerk_x, w.seq_x, &[]);
     roll_on(&mut w.site, &w.clerk_x, w.seq_x, &[]);
-    assert!(matches!(check(&w.site.view, &w.site.know, &coin, &a.cred, &w.policy()), Err(Refusal::Expired { issued: 0, now: 2, .. })));
+    assert!(matches!(
+        check(&w.site.view, &w.site.know, &coin, &a.cred, &w.policy()),
+        Err(Refusal::Expired {
+            issued: 0,
+            now: 2,
+            ..
+        })
+    ));
     let mut lax = w.policy();
     lax.honor_expiry = false;
-    assert_eq!(check(&w.site.view, &w.site.know, &coin, &a.cred, &lax), Ok(()));
+    assert_eq!(
+        check(&w.site.view, &w.site.know, &coin, &a.cred, &lax),
+        Ok(())
+    );
     pay(&mut w.site, &a, coin, &b); // the kernel moves it anyway
 }
 
@@ -185,15 +313,24 @@ fn expiry_follows_the_last_hop_and_the_mint() {
     roll_on(&mut w.site, &w.clerk_y, w.seq_y, &[]);
     // a's ticket is past soft expiry on its own sequence, but a is no longer
     // on the last hop: the coin stays good while b and c are fresh.
-    assert_eq!(check(&w.site.view, &w.site.know, &coin, &b.cred, &w.policy()), Ok(()));
+    assert_eq!(
+        check(&w.site.view, &w.site.know, &coin, &b.cred, &w.policy()),
+        Ok(())
+    );
     // Until the coin's hard expiry, counted from a's ticket on clerk y.
     roll_on(&mut w.site, &w.clerk_y, w.seq_y, &[]);
     roll_on(&mut w.site, &w.clerk_y, w.seq_y, &[]);
-    assert_eq!(check(&w.site.view, &w.site.know, &coin, &b.cred, &w.policy()), Err(Refusal::CoinExpired { issued: 0, now: 4 }));
+    assert_eq!(
+        check(&w.site.view, &w.site.know, &coin, &b.cred, &w.policy()),
+        Err(Refusal::CoinExpired { issued: 0, now: 4 })
+    );
     // The last hop's soft expiry is on clerk x, which hasn't moved enough.
     let mut no_hard = w.policy();
     no_hard.honor_expiry = false;
-    assert_eq!(check(&w.site.view, &w.site.know, &coin, &b.cred, &no_hard), Ok(()));
+    assert_eq!(
+        check(&w.site.view, &w.site.know, &coin, &b.cred, &no_hard),
+        Ok(())
+    );
 }
 
 /// Decision D1: a stale sender is refused, whatever came before.
@@ -207,7 +344,14 @@ fn a_stale_sender_is_refused() {
     roll_on(&mut w.site, &w.clerk_x, w.seq_x, &[]);
     roll_on(&mut w.site, &w.clerk_x, w.seq_x, &[]);
     let coin = pay(&mut w.site, &a, coin, &b);
-    assert_eq!(check(&w.site.view, &w.site.know, &coin, &a.cred, &w.policy()), Err(Refusal::Expired { credential: a.cred.clone(), issued: 0, now: 2 }));
+    assert_eq!(
+        check(&w.site.view, &w.site.know, &coin, &a.cred, &w.policy()),
+        Err(Refusal::Expired {
+            credential: a.cred.clone(),
+            issued: 0,
+            now: 2
+        })
+    );
 }
 
 /// Fault `nolimit`.
@@ -220,10 +364,16 @@ fn transfer_limit_is_honored() {
     }
     let mut coin = w.mint_to(&ps[0], 10);
     for i in 0..3 {
-        assert_eq!(check(&w.site.view, &w.site.know, &coin, &ps[i].cred, &w.policy()), Ok(()));
+        assert_eq!(
+            check(&w.site.view, &w.site.know, &coin, &ps[i].cred, &w.policy()),
+            Ok(())
+        );
         coin = pay(&mut w.site, &ps[i], coin, &ps[i + 1]);
     }
-    assert_eq!(check(&w.site.view, &w.site.know, &coin, &ps[3].cred, &w.policy()), Err(Refusal::OverTransferLimit));
+    assert_eq!(
+        check(&w.site.view, &w.site.know, &coin, &ps[3].cred, &w.policy()),
+        Err(Refusal::OverTransferLimit)
+    );
 }
 
 #[test]
@@ -233,9 +383,18 @@ fn revoked_groups_are_refused_per_issuer() {
     w.ticket(&a, w.seq_x, 42);
     let coin = w.mint_to(&a, 10);
     roll_on(&mut w.site, &w.clerk_y, w.seq_y, &[42]); // another issuer's list doesn't apply
-    assert_eq!(check(&w.site.view, &w.site.know, &coin, &a.cred, &w.policy()), Ok(()));
+    assert_eq!(
+        check(&w.site.view, &w.site.know, &coin, &a.cred, &w.policy()),
+        Ok(())
+    );
     roll_on(&mut w.site, &w.clerk_x, w.seq_x, &[42]);
-    assert_eq!(check(&w.site.view, &w.site.know, &coin, &a.cred, &w.policy()), Err(Refusal::Revoked { credential: a.cred.clone(), group: 42 }));
+    assert_eq!(
+        check(&w.site.view, &w.site.know, &coin, &a.cred, &w.policy()),
+        Err(Refusal::Revoked {
+            credential: a.cred.clone(),
+            group: 42
+        })
+    );
 }
 
 /// `HonestNoKnownCheat` / fault `ignoreevidence`.
@@ -252,7 +411,10 @@ fn known_cheats_are_refused() {
     pay(&mut s1, &m, coin, &a);
     pay(&mut s2, &m, coin, &b);
     s1.view.merge_from(&s2.view);
-    assert_eq!(check(&s1.view, &s1.know, &coin2, &m.cred, &w.policy()), Err(Refusal::KnownCheat));
+    assert_eq!(
+        check(&s1.view, &s1.know, &coin2, &m.cred, &w.policy()),
+        Err(Refusal::KnownCheat)
+    );
 }
 
 /// Fault `forge` for tickets: untrusted clerks and tampered tickets.
@@ -261,11 +423,34 @@ fn tickets_must_come_from_a_trusted_clerk() {
     let mut w = world();
     let (a, rogue) = (person(), person());
     let coin = w.mint_to(&a, 10);
-    assert_eq!(check(&w.site.view, &w.site.know, &coin, &a.cred, &w.policy()), Err(Refusal::NoTicket(a.cred.clone())));
-    let t = SignedTicket::issue(&DevScheme, &rogue.key, &rogue.cred, Ticket { credential: a.cred.clone(), sequence: w.seq_x, epoch: 0, group: 1, max_spend: None, tag: None });
+    assert_eq!(
+        check(&w.site.view, &w.site.know, &coin, &a.cred, &w.policy()),
+        Err(Refusal::NoTicket(a.cred.clone()))
+    );
+    let t = SignedTicket::issue(
+        &DevScheme,
+        &rogue.key,
+        &rogue.cred,
+        Ticket {
+            credential: a.cred.clone(),
+            sequence: w.seq_x,
+            epoch: 0,
+            group: 1,
+            max_spend: None,
+            tag: None,
+        },
+    );
     w.site.know.add_ticket(&DevScheme, t.clone());
-    assert_eq!(check(&w.site.view, &w.site.know, &coin, &a.cred, &w.policy()), Err(Refusal::UntrustedClerk(rogue.cred.clone())));
-    let mut tampered = SignedTicket::issue(&DevScheme, &w.clerk_x.key, &w.clerk_x.cred, t.ticket.clone());
+    assert_eq!(
+        check(&w.site.view, &w.site.know, &coin, &a.cred, &w.policy()),
+        Err(Refusal::UntrustedClerk(rogue.cred.clone()))
+    );
+    let mut tampered = SignedTicket::issue(
+        &DevScheme,
+        &w.clerk_x.key,
+        &w.clerk_x.cred,
+        t.ticket.clone(),
+    );
     tampered.ticket.epoch = 99;
     assert!(!w.site.know.add_ticket(&DevScheme, tampered));
 }
@@ -273,12 +458,17 @@ fn tickets_must_come_from_a_trusted_clerk() {
 #[test]
 fn compressed_frames_fit_a_packet() {
     let w = world();
-    let mut hints: Vec<Hint> = (0..6u8).map(|i| Hint::head(&Hash([i; 32]), 7, &Hash([i + 1; 32]))).collect();
+    let mut hints: Vec<Hint> = (0..6u8)
+        .map(|i| Hint::head(&Hash([i; 32]), 7, &Hash([i + 1; 32])))
+        .collect();
     hints.extend((0..3u8).map(|i| Hint::fork(&Hash([100 + i; 32]))));
     let frames = compressed_frames(&hints);
     assert_eq!(frames.len(), 1, "6 heads and 3 fork hints fit one packet");
     assert!(frames.iter().all(|f| f.len() <= PACKET_BYTES));
-    let back: Vec<Hint> = frames.iter().flat_map(|f| decode_frame(f).unwrap()).collect();
+    let back: Vec<Hint> = frames
+        .iter()
+        .flat_map(|f| decode_frame(f).unwrap())
+        .collect();
     assert_eq!(back, hints);
     let _ = w;
 }
@@ -301,7 +491,10 @@ fn false_head_hints_never_advance_an_epoch() {
     assert!(proofs.is_empty());
     gossip::absorb(&mut me.view, &mut me.know, proofs);
     assert_eq!(head(&me.view, &w.seq_x).unwrap().number, 0);
-    assert_eq!(check(&me.view, &me.know, &coin, &a.cred, &w.policy()), Ok(()));
+    assert_eq!(
+        check(&me.view, &me.know, &coin, &a.cred, &w.policy()),
+        Ok(())
+    );
 }
 
 /// Fault `trusthint`, and the witness `NoFalseHintDelay`: a false fork hint
@@ -314,13 +507,22 @@ fn false_fork_hints_only_delay() {
     w.ticket(&b, w.seq_x, 1);
     let coin = w.mint_to(&a, 10);
     let coin = pay(&mut w.site, &a, coin, &b);
-    let ancestor = *ancestry(&w.site.view, &coin).iter().find(|s| **s != coin).unwrap();
+    let ancestor = *ancestry(&w.site.view, &coin)
+        .iter()
+        .find(|s| **s != coin)
+        .unwrap();
     gossip::absorb_hints(&mut w.site.know, &[Hint::fork(&ancestor)]);
     assert!(w.site.view.flagged().is_empty());
-    assert_eq!(check(&w.site.view, &w.site.know, &coin, &b.cred, &w.policy()), Ok(()));
+    assert_eq!(
+        check(&w.site.view, &w.site.know, &coin, &b.cred, &w.policy()),
+        Ok(())
+    );
     let mut careful = w.policy();
     careful.wait_on_hints = true;
-    assert_eq!(check(&w.site.view, &w.site.know, &coin, &b.cred, &careful), Err(Refusal::HintPending(ancestor)));
+    assert_eq!(
+        check(&w.site.view, &w.site.know, &coin, &b.cred, &careful),
+        Err(Refusal::HintPending(ancestor))
+    );
 }
 
 /// `HintsSuffice` / fault `notrigger`: evidence and a newer epoch at A reach C
@@ -353,14 +555,20 @@ fn hints_suffice_across_a_relay() {
     let watch: BTreeSet<Hash> = [coin].into_iter().collect();
     let wants = gossip::wants(&site_c.view, &site_c.know, &relies, &watch);
     assert_eq!(wants.len(), 2, "one for the epoch, one for the evidence");
-    assert!(gossip::serve(&site_b.view, &site_b.know, &relies, &wants).is_empty(), "B can't prove a hint");
+    assert!(
+        gossip::serve(&site_b.view, &site_b.know, &relies, &wants).is_empty(),
+        "B can't prove a hint"
+    );
     let proofs = gossip::serve(&site_a.view, &site_a.know, &relies, &wants);
     // Fault `gossiprecords`: the only records served are epoch rolls.
     for p in &proofs {
         if let Proof::Records(recs) = p {
             for r in recs {
                 assert!(matches!(r.op, Op::Transfer { .. }));
-                assert_eq!(r.signer, w.clerk_x.cred, "only the clerk's epoch rolls travel");
+                assert_eq!(
+                    r.signer, w.clerk_x.cred,
+                    "only the clerk's epoch rolls travel"
+                );
             }
         }
     }
@@ -370,7 +578,10 @@ fn hints_suffice_across_a_relay() {
     assert_eq!(site_c.view.flagged(), site_a.view.flagged());
     assert_eq!(head(&site_c.view, &w.seq_x), head(&site_a.view, &w.seq_x));
     // C now refuses a's ticket group as A's epoch revoked it.
-    assert!(gossip::wants(&site_c.view, &site_c.know, &relies, &watch).is_empty(), "quiet once proofs arrive");
+    assert!(
+        gossip::wants(&site_c.view, &site_c.know, &relies, &watch).is_empty(),
+        "quiet once proofs arrive"
+    );
     let _ = (&w.root, &w.minter);
 }
 
@@ -390,7 +601,10 @@ fn senders_show_standing_once_cheats_are_known() {
     let mut site = w.site.clone();
     // No cheats known: no proof needed.
     let to_a = pay(&mut site, &h, honest_coin, &a);
-    assert_eq!(check(&site.view, &site.know, &to_a, &h.cred, &w.policy()), Ok(()));
+    assert_eq!(
+        check(&site.view, &site.know, &to_a, &h.cred, &w.policy()),
+        Ok(())
+    );
 
     let (mut s1, mut s2) = (site.clone(), site.clone());
     pay(&mut s1, &m, coin, &a);
@@ -401,15 +615,25 @@ fn senders_show_standing_once_cheats_are_known() {
 
     // Now the honest sender needs standing, and has it.
     let policy = w.policy();
-    assert_eq!(check(&s1.view, &s1.know, &to_a, &h.cred, &policy), Err(Refusal::NoStanding(h.cred.clone())));
+    assert_eq!(
+        check(&s1.view, &s1.know, &to_a, &h.cred, &policy),
+        Err(Refusal::NoStanding(h.cred.clone()))
+    );
     let st = Standing::prove(&DevScheme, &h.key, &h.cred, &list).unwrap();
     assert!(s1.know.add_standing(&DevScheme, st.clone()));
-    assert!(!s1.know.add_standing(&DevScheme, st), "no gain, not replaced");
+    assert!(
+        !s1.know.add_standing(&DevScheme, st),
+        "no gain, not replaced"
+    );
     assert_eq!(check(&s1.view, &s1.know, &to_a, &h.cred, &policy), Ok(()));
 
     // The cheat can't prove it, and a forged one doesn't verify.
     assert!(Standing::prove(&DevScheme, &m.key, &m.cred, &list).is_none());
-    let forged = Standing { credential: m.cred.clone(), cheats: list.clone(), proof: vec![] };
+    let forged = Standing {
+        credential: m.cred.clone(),
+        cheats: list.clone(),
+        proof: vec![],
+    };
     assert!(!s1.know.add_standing(&DevScheme, forged));
 
     // A standing that predates a newer cheat doesn't cover it.
@@ -423,10 +647,16 @@ fn senders_show_standing_once_cheats_are_known() {
     pay(&mut s4, &m2, coin3, &a);
     pay(&mut s5, &m2, coin3, &c);
     s4.view.merge_from(&s5.view);
-    assert_eq!(check(&s4.view, &s4.know, &to_a, &h.cred, &policy), Err(Refusal::NoStanding(h.cred.clone())));
+    assert_eq!(
+        check(&s4.view, &s4.know, &to_a, &h.cred, &policy),
+        Err(Refusal::NoStanding(h.cred.clone()))
+    );
 
     // Mutation `nostanding`: without the rule the old standing is never asked for.
-    let lax = Policy { require_standing: false, ..policy };
+    let lax = Policy {
+        require_standing: false,
+        ..policy
+    };
     assert_eq!(check(&s4.view, &s4.know, &to_a, &h.cred, &lax), Ok(()));
 }
 
@@ -439,21 +669,52 @@ fn ticket_caps_are_honored() {
     w.ticket(&m, w.seq_x, 1);
     w.ticket(&a, w.seq_x, 1);
     let epoch = head(&w.site.view, &w.seq_x).unwrap().number;
-    let t = SignedTicket::issue(&DevScheme, &w.clerk_x.key, &w.clerk_x.cred, Ticket { credential: small.cred.clone(), sequence: w.seq_x, epoch, group: 2, max_spend: Some(50), tag: None });
+    let t = SignedTicket::issue(
+        &DevScheme,
+        &w.clerk_x.key,
+        &w.clerk_x.cred,
+        Ticket {
+            credential: small.cred.clone(),
+            sequence: w.seq_x,
+            epoch,
+            group: 2,
+            max_spend: Some(50),
+            tag: None,
+        },
+    );
     assert!(w.site.know.add_ticket(&DevScheme, t));
     let big = w.mint_to(&m, 80);
     let ok = w.mint_to(&m, 40);
     let policy = w.policy();
     let mut site = w.site.clone();
     let to_small = pay(&mut site, &m, big, &small);
-    assert_eq!(check(&site.view, &site.know, &to_small, &m.cred, &policy), Err(Refusal::OverMaxSpend { credential: small.cred.clone(), amount: 80, max: 50 }));
+    assert_eq!(
+        check(&site.view, &site.know, &to_small, &m.cred, &policy),
+        Err(Refusal::OverMaxSpend {
+            credential: small.cred.clone(),
+            amount: 80,
+            max: 50
+        })
+    );
     let fine = pay(&mut site, &m, ok, &small);
-    assert_eq!(check(&site.view, &site.know, &fine, &m.cred, &policy), Ok(()));
+    assert_eq!(
+        check(&site.view, &site.know, &fine, &m.cred, &policy),
+        Ok(())
+    );
     // And from it: the capped holder can't pass on more than its cap.
     let onward = pay(&mut site, &small, to_small, &a);
-    assert!(matches!(check(&site.view, &site.know, &onward, &small.cred, &policy), Err(Refusal::OverMaxSpend { .. })));
-    let lax = Policy { honor_ticket_caps: false, ..policy };
-    assert_eq!(check(&site.view, &site.know, &onward, &small.cred, &lax), Ok(()));
+    assert!(matches!(
+        check(&site.view, &site.know, &onward, &small.cred, &policy),
+        Err(Refusal::OverMaxSpend { .. })
+    ));
+    let lax = Policy {
+        honor_ticket_caps: false,
+        ..policy
+    };
+    assert_eq!(
+        check(&site.view, &site.know, &onward, &small.cred, &lax),
+        Ok(())
+    );
 }
 
 /// Decision D2 (fault `nowindow`): a revoked group always stops the last hop,
@@ -472,20 +733,48 @@ fn revocation_taints_history_only_within_its_window() {
     let coin = pay(&mut w.site, &a, coin, &b);
     let coin = pay(&mut w.site, &b, coin, &c);
     // Group 42 revoked at epoch 3.
-    roll_with(&mut w.site, &w.clerk_x, w.seq_x, [(42, 3)].into_iter().collect());
+    roll_with(
+        &mut w.site,
+        &w.clerk_x,
+        w.seq_x,
+        [(42, 3)].into_iter().collect(),
+    );
     // Window 2: a's epoch-0 ticket is older than 3 - 2 = 1, so the honest
     // coin that passed through a long ago is fine.
     assert_eq!(w.policy().revocation_window, 2);
-    assert_eq!(check(&w.site.view, &w.site.know, &coin, &b.cred, &w.policy()), Ok(()));
+    assert_eq!(
+        check(&w.site.view, &w.site.know, &coin, &b.cred, &w.policy()),
+        Ok(())
+    );
     // Window 3 reaches back to epoch 0: the coin is refused.
-    let wide = Policy { revocation_window: 3, ..w.policy() };
-    assert_eq!(check(&w.site.view, &w.site.know, &coin, &b.cred, &wide), Err(Refusal::Revoked { credential: a.cred.clone(), group: 42 }));
+    let wide = Policy {
+        revocation_window: 3,
+        ..w.policy()
+    };
+    assert_eq!(
+        check(&w.site.view, &w.site.know, &coin, &b.cred, &wide),
+        Err(Refusal::Revoked {
+            credential: a.cred.clone(),
+            group: 42
+        })
+    );
 
     // But the last hop is always stopped, however narrow the window.
     let d = person();
     w.ticket(&d, w.seq_x, 7);
     let fresh = w.mint_to(&d, 5);
-    roll_with(&mut w.site, &w.clerk_x, w.seq_x, [(42, 3), (7, 4)].into_iter().collect());
-    let none = Policy { revocation_window: 0, ..w.policy() };
-    assert!(matches!(check(&w.site.view, &w.site.know, &fresh, &d.cred, &none), Err(Refusal::Revoked { group: 7, .. })));
+    roll_with(
+        &mut w.site,
+        &w.clerk_x,
+        w.seq_x,
+        [(42, 3), (7, 4)].into_iter().collect(),
+    );
+    let none = Policy {
+        revocation_window: 0,
+        ..w.policy()
+    };
+    assert!(matches!(
+        check(&w.site.view, &w.site.know, &fresh, &d.cred, &none),
+        Err(Refusal::Revoked { group: 7, .. })
+    ));
 }

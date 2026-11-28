@@ -10,7 +10,10 @@ use serde::{Deserialize, Serialize};
 /// A receipt tree.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Receipt {
-    Leaf { salt: [u8; 16], data: Vec<u8> },
+    Leaf {
+        salt: [u8; 16],
+        data: Vec<u8>,
+    },
     /// A labelled branch, e.g. "public", "parties", "private".
     Node(Vec<(String, Receipt)>),
 }
@@ -19,7 +22,10 @@ impl Receipt {
     pub fn leaf(data: impl Into<Vec<u8>>) -> Self {
         let mut salt = [0u8; 16];
         rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut salt);
-        Receipt::Leaf { salt, data: data.into() }
+        Receipt::Leaf {
+            salt,
+            data: data.into(),
+        }
     }
 
     pub fn root(&self) -> Hash {

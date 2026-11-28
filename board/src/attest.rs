@@ -93,7 +93,12 @@ pub fn challenge(join: &crate::node::Join) -> [u8; 32] {
 
 /// Verify `a` against `challenge` and the town's policy, at `now` (seconds
 /// since 1970).
-pub fn verify(p: &Policy, a: &Attestation, challenge: &[u8; 32], now: u64) -> Result<Attested, String> {
+pub fn verify(
+    p: &Policy,
+    a: &Attestation,
+    challenge: &[u8; 32],
+    now: u64,
+) -> Result<Attested, String> {
     match a {
         Attestation::Android { chain } => android(p, chain, challenge, now),
         Attestation::Apple { object, key_id } => apple(p, object, key_id, challenge, now),
@@ -121,7 +126,10 @@ fn chain(ders: &[&[u8]], roots: &[ByteBuf], now: u64) -> Result<Vec<Certificate>
     if ders.is_empty() {
         return Err("empty certificate chain".into());
     }
-    let mut certs = ders.iter().map(|d| Certificate::from_der(d).map_err(|e| format!("certificate: {e}"))).collect::<Result<Vec<_>, _>>()?;
+    let mut certs = ders
+        .iter()
+        .map(|d| Certificate::from_der(d).map_err(|e| format!("certificate: {e}")))
+        .collect::<Result<Vec<_>, _>>()?;
     let last = ders.last().unwrap();
     if !roots.iter().any(|r| r.as_slice() == *last) {
         let issuer = &certs.last().unwrap().tbs_certificate.issuer;
@@ -150,7 +158,10 @@ fn chain(ders: &[&[u8]], roots: &[ByteBuf], now: u64) -> Result<Vec<Certificate>
 
 fn valid_at(c: &Certificate, now: u64) -> Result<(), String> {
     let v = &c.tbs_certificate.validity;
-    let (from, to) = (v.not_before.to_unix_duration().as_secs(), v.not_after.to_unix_duration().as_secs());
+    let (from, to) = (
+        v.not_before.to_unix_duration().as_secs(),
+        v.not_after.to_unix_duration().as_secs(),
+    );
     if now < from || now > to {
         return Err("a certificate in the chain is outside its validity period".into());
     }
@@ -158,33 +169,58 @@ fn valid_at(c: &Certificate, now: u64) -> Result<(), String> {
 }
 
 fn is_ca(c: &Certificate) -> bool {
-    let Some(exts) = &c.tbs_certificate.extensions else { return false };
-    exts.iter().filter(|e| e.extn_id.to_string() == BASIC_CONSTRAINTS).any(|e| {
-        x509_cert::ext::pkix::BasicConstraints::from_der(e.extn_value.as_bytes()).is_ok_and(|b| b.ca)
-    })
+    let Some(exts) = &c.tbs_certificate.extensions else {
+        return false;
+    };
+    exts.iter()
+        .filter(|e| e.extn_id.to_string() == BASIC_CONSTRAINTS)
+        .any(|e| {
+            x509_cert::ext::pkix::BasicConstraints::from_der(e.extn_value.as_bytes())
+                .is_ok_and(|b| b.ca)
+        })
 }
 
 fn signed_by(subject: &Certificate, issuer: &Certificate) -> Result<(), String> {
-    let tbs = subject.tbs_certificate.to_der().map_err(|e| e.to_string())?;
-    let sig = subject.signature.as_bytes().ok_or("signature isn't whole bytes")?;
+    let tbs = subject
+        .tbs_certificate
+        .to_der()
+        .map_err(|e| e.to_string())?;
+    let sig = subject
+        .signature
+        .as_bytes()
+        .ok_or("signature isn't whole bytes")?;
     let spki = &issuer.tbs_certificate.subject_public_key_info;
-    let key = spki.subject_public_key.as_bytes().ok_or("key isn't whole bytes")?;
+    let key = spki
+        .subject_public_key
+        .as_bytes()
+        .ok_or("key isn't whole bytes")?;
     let alg = subject.signature_algorithm.oid.to_string();
     let key_alg = spki.algorithm.oid.to_string();
-    let curve = spki.algorithm.parameters.as_ref().and_then(|p| p.decode_as::<der::asn1::ObjectIdentifier>().ok()).map(|o| o.to_string());
+    let curve = spki
+        .algorithm
+        .parameters
+        .as_ref()
+        .and_then(|p| p.decode_as::<der::asn1::ObjectIdentifier>().ok())
+        .map(|o| o.to_string());
     let bad = |e: &dyn std::fmt::Display| format!("a signature in the chain doesn't verify: {e}");
     match (alg.as_str(), key_alg.as_str(), curve.as_deref()) {
         (ECDSA_SHA256 | ECDSA_SHA384, EC_PUBLIC_KEY, Some(c)) => {
-            let digest: Vec<u8> = if alg == ECDSA_SHA256 { Sha256::digest(&tbs).to_vec() } else { Sha384::digest(&tbs).to_vec() };
+            let digest: Vec<u8> = if alg == ECDSA_SHA256 {
+                Sha256::digest(&tbs).to_vec()
+            } else {
+                Sha384::digest(&tbs).to_vec()
+            };
             use p256::ecdsa::signature::hazmat::PrehashVerifier;
             match c {
                 P256 => {
-                    let vk = p256::ecdsa::VerifyingKey::from_sec1_bytes(key).map_err(|e| bad(&e))?;
+                    let vk =
+                        p256::ecdsa::VerifyingKey::from_sec1_bytes(key).map_err(|e| bad(&e))?;
                     let s = p256::ecdsa::DerSignature::try_from(sig).map_err(|e| bad(&e))?;
                     vk.verify_prehash(&digest, &s).map_err(|e| bad(&e))
                 }
                 P384 => {
-                    let vk = p384::ecdsa::VerifyingKey::from_sec1_bytes(key).map_err(|e| bad(&e))?;
+                    let vk =
+                        p384::ecdsa::VerifyingKey::from_sec1_bytes(key).map_err(|e| bad(&e))?;
                     let s = p384::ecdsa::DerSignature::try_from(sig).map_err(|e| bad(&e))?;
                     vk.verify_prehash(&digest, &s).map_err(|e| bad(&e))
                 }
@@ -204,7 +240,12 @@ fn signed_by(subject: &Certificate, issuer: &Certificate) -> Result<(), String> 
 }
 
 fn extension<'a>(c: &'a Certificate, oid: &str) -> Option<&'a [u8]> {
-    c.tbs_certificate.extensions.as_ref()?.iter().find(|e| e.extn_id.to_string() == oid).map(|e| e.extn_value.as_bytes())
+    c.tbs_certificate
+        .extensions
+        .as_ref()?
+        .iter()
+        .find(|e| e.extn_id.to_string() == oid)
+        .map(|e| e.extn_value.as_bytes())
 }
 
 // ---- A small DER reader, for the attestation extensions ---------------------
@@ -250,7 +291,14 @@ fn tlv(b: &[u8]) -> Result<(Tlv<'_>, &[u8]), String> {
         l
     };
     let content = b.get(i..i + len).ok_or_else(short)?;
-    Ok((Tlv { class: first >> 6, number, content }, &b[i + len..]))
+    Ok((
+        Tlv {
+            class: first >> 6,
+            number,
+            content,
+        },
+        &b[i + len..],
+    ))
 }
 
 fn items(mut b: &[u8]) -> Result<Vec<Tlv<'_>>, String> {
@@ -276,10 +324,16 @@ const ANDROID_KEY_DESCRIPTION: &str = "1.3.6.1.4.1.11129.2.1.17";
 const ROOT_OF_TRUST: u32 = 704;
 const APPLICATION_ID: u32 = 709;
 
-fn android(p: &Policy, chain_der: &[ByteBuf], challenge: &[u8; 32], now: u64) -> Result<Attested, String> {
+fn android(
+    p: &Policy,
+    chain_der: &[ByteBuf],
+    challenge: &[u8; 32],
+    now: u64,
+) -> Result<Attested, String> {
     let ders: Vec<&[u8]> = chain_der.iter().map(|d| d.as_slice()).collect();
     let certs = chain(&ders, &p.android_roots, now)?;
-    let ext = extension(&certs[0], ANDROID_KEY_DESCRIPTION).ok_or("no key attestation in the leaf certificate")?;
+    let ext = extension(&certs[0], ANDROID_KEY_DESCRIPTION)
+        .ok_or("no key attestation in the leaf certificate")?;
     let (desc, _) = tlv(ext)?;
     let f = items(desc.content)?;
     if f.len() < 8 {
@@ -295,7 +349,10 @@ fn android(p: &Policy, chain_der: &[ByteBuf], challenge: &[u8; 32], now: u64) ->
     let (software, hardware) = (items(f[6].content)?, items(f[7].content)?);
 
     // The boot: verified, and the bootloader locked.
-    let rot = hardware.iter().find(|t| t.class == 2 && t.number == ROOT_OF_TRUST).ok_or("no root of trust in hardware")?;
+    let rot = hardware
+        .iter()
+        .find(|t| t.class == 2 && t.number == ROOT_OF_TRUST)
+        .ok_or("no root of trust in hardware")?;
     let (rot, _) = tlv(rot.content)?;
     let rot = items(rot.content)?;
     if rot.len() < 3 {
@@ -311,20 +368,34 @@ fn android(p: &Policy, chain_der: &[ByteBuf], challenge: &[u8; 32], now: u64) ->
     if p.android_apps.is_empty() {
         return Err("the town trusts no Android app".into());
     }
-    let app = software.iter().chain(hardware.iter()).find(|t| t.class == 2 && t.number == APPLICATION_ID).ok_or("no application id in the attestation")?;
+    let app = software
+        .iter()
+        .chain(hardware.iter())
+        .find(|t| t.class == 2 && t.number == APPLICATION_ID)
+        .ok_or("no application id in the attestation")?;
     let (octets, _) = tlv(app.content)?;
     let (aid, _) = tlv(octets.content)?;
     let parts = items(aid.content)?;
     if parts.len() < 2 {
         return Err("short application id".into());
     }
-    let packages: Vec<Vec<u8>> = items(parts[0].content)?.iter().filter_map(|pi| items(pi.content).ok()?.first().map(|n| n.content.to_vec())).collect();
+    let packages: Vec<Vec<u8>> = items(parts[0].content)?
+        .iter()
+        .filter_map(|pi| items(pi.content).ok()?.first().map(|n| n.content.to_vec()))
+        .collect();
     let digests: Vec<&[u8]> = items(parts[1].content)?.iter().map(|d| d.content).collect();
-    let trusted = p.android_apps.iter().any(|a| packages.iter().any(|n| n == a.package.as_bytes()) && digests.contains(&a.signer_sha256.as_slice()));
+    let trusted = p.android_apps.iter().any(|a| {
+        packages.iter().any(|n| n == a.package.as_bytes())
+            && digests.contains(&a.signer_sha256.as_slice())
+    });
     if !trusted {
         return Err("the attestation is for an app the town doesn't trust".into());
     }
-    Ok(if attest_level == 2 { Attested::AndroidStrongBox } else { Attested::AndroidTee })
+    Ok(if attest_level == 2 {
+        Attested::AndroidStrongBox
+    } else {
+        Attested::AndroidTee
+    })
 }
 
 // ---- Apple App Attest ------------------------------------------------------
@@ -334,17 +405,39 @@ const AAGUID_PRODUCTION: &[u8; 16] = b"appattest\0\0\0\0\0\0\0";
 const AAGUID_DEVELOPMENT: &[u8; 16] = b"appattestdevelop";
 
 fn cbor_field<'a>(m: &'a ciborium::Value, k: &str) -> Option<&'a ciborium::Value> {
-    m.as_map()?.iter().find(|(f, _)| f.as_text() == Some(k)).map(|(_, v)| v)
+    m.as_map()?
+        .iter()
+        .find(|(f, _)| f.as_text() == Some(k))
+        .map(|(_, v)| v)
 }
 
-fn apple(p: &Policy, object: &[u8], key_id: &[u8], challenge: &[u8; 32], now: u64) -> Result<Attested, String> {
-    let v: ciborium::Value = ciborium::from_reader(object).map_err(|e| format!("attestation object: {e}"))?;
+fn apple(
+    p: &Policy,
+    object: &[u8],
+    key_id: &[u8],
+    challenge: &[u8; 32],
+    now: u64,
+) -> Result<Attested, String> {
+    let v: ciborium::Value =
+        ciborium::from_reader(object).map_err(|e| format!("attestation object: {e}"))?;
     if cbor_field(&v, "fmt").and_then(|f| f.as_text()) != Some("apple-appattest") {
         return Err("not an App Attest attestation".into());
     }
-    let x5c = cbor_field(&v, "attStmt").and_then(|s| cbor_field(s, "x5c")).and_then(|x| x.as_array()).ok_or("no certificate chain")?;
-    let ders: Vec<&[u8]> = x5c.iter().map(|c| c.as_bytes().map(|b| b.as_slice()).ok_or("a certificate isn't bytes")).collect::<Result<_, _>>()?;
-    let auth = cbor_field(&v, "authData").and_then(|a| a.as_bytes()).ok_or("no auth data")?;
+    let x5c = cbor_field(&v, "attStmt")
+        .and_then(|s| cbor_field(s, "x5c"))
+        .and_then(|x| x.as_array())
+        .ok_or("no certificate chain")?;
+    let ders: Vec<&[u8]> = x5c
+        .iter()
+        .map(|c| {
+            c.as_bytes()
+                .map(|b| b.as_slice())
+                .ok_or("a certificate isn't bytes")
+        })
+        .collect::<Result<_, _>>()?;
+    let auth = cbor_field(&v, "authData")
+        .and_then(|a| a.as_bytes())
+        .ok_or("no auth data")?;
     let certs = chain(&ders, &p.apple_roots, now)?;
 
     // The nonce binds the auth data and the join.
@@ -358,7 +451,12 @@ fn apple(p: &Policy, object: &[u8], key_id: &[u8], challenge: &[u8; 32], now: u6
     }
 
     // The key id is the attested key's.
-    let leaf_key = certs[0].tbs_certificate.subject_public_key_info.subject_public_key.as_bytes().ok_or("key isn't whole bytes")?;
+    let leaf_key = certs[0]
+        .tbs_certificate
+        .subject_public_key_info
+        .subject_public_key
+        .as_bytes()
+        .ok_or("key isn't whole bytes")?;
     if Sha256::digest(leaf_key).as_slice() != key_id {
         return Err("the key id isn't the attested key's".into());
     }
@@ -367,7 +465,12 @@ fn apple(p: &Policy, object: &[u8], key_id: &[u8], challenge: &[u8; 32], now: u6
     if auth.len() < 55 {
         return Err("short auth data".into());
     }
-    if p.apple_app_ids.is_empty() || !p.apple_app_ids.iter().any(|id| Sha256::digest(id.as_bytes()).as_slice() == &auth[..32]) {
+    if p.apple_app_ids.is_empty()
+        || !p
+            .apple_app_ids
+            .iter()
+            .any(|id| Sha256::digest(id.as_bytes()).as_slice() == &auth[..32])
+    {
         return Err("the attestation is for an app the town doesn't trust".into());
     }
     if auth[33..37] != [0, 0, 0, 0] {

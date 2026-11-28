@@ -36,9 +36,9 @@
 
 use crate::bulletin::{purpose, Copy};
 use crate::dispatch::Roster;
-use pave_protocol::SignedTicket;
 use pave_kernel::hash::{hash_of, Hash};
 use pave_kernel::{Credential, Op, Record, Scheme, Sig};
+use pave_protocol::SignedTicket;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -98,7 +98,11 @@ pub enum BoardMsg {
         due: Option<u64>,
     },
     /// `trade` is set when the replier wants vouches for this job.
-    Reply { job: Hash, note: String, trade: Option<Trade> },
+    Reply {
+        job: Hash,
+        note: String,
+        trade: Option<Trade>,
+    },
     /// `assignment` is the poster's transfer of the job's zero-value state
     /// (the second output of its proof of means) to the worker: a job can
     /// be given once, and the worker holds the record.
@@ -111,10 +115,17 @@ pub enum BoardMsg {
         #[serde(default)]
         badge: Option<Box<Shown>>,
     },
-    Done { job: Hash },
+    Done {
+        job: Hash,
+    },
     /// The poster closes an accepted job its worker didn't finish by `due`.
-    Release { job: Hash },
-    Paid { job: Hash, payment: Hash },
+    Release {
+        job: Hash,
+    },
+    Paid {
+        job: Hash,
+        payment: Hash,
+    },
     /// A dispute: see [`crate::dispute`].
     Dispute {
         subject: Hash,
@@ -131,22 +142,48 @@ pub enum BoardMsg {
         filer_deposit: Option<Box<Record>>,
     },
     /// Funding for a first-round dispute, into escrow.
-    Fund { dispute: Hash, deposit: Box<Record> },
+    Fund {
+        dispute: Hash,
+        deposit: Box<Record>,
+    },
     /// A counterparty's terms for filers against it, signed by its trade key.
-    Terms { min_losses: u32, deposit: u64, pay_to: Credential, trade: Trade },
+    Terms {
+        min_losses: u32,
+        deposit: u64,
+        pay_to: Credential,
+        trade: Trade,
+    },
     /// A panelist's answer to a dispute.
-    Ruling { dispute: Hash, answer: crate::dispute::Answer },
+    Ruling {
+        dispute: Hash,
+        answer: crate::dispute::Answer,
+    },
     /// A courier's note on an unattended drop: see [`crate::parcel`].
-    Dropped { parcel: Hash, cell: String, photo: Hash },
+    Dropped {
+        parcel: Hash,
+        cell: String,
+        photo: Hash,
+    },
     /// A courier's note that it took a parcel, signed with an identity.
-    Took { parcel: Hash, hop: u32 },
+    Took {
+        parcel: Hash,
+        hop: u32,
+    },
     /// The shipper reminted a parcel to whoever has the package and its
     /// label code: the old token is void.
     /// `roll` is the shipper's move of the parcel's lineage coin.
-    Replaced { parcel: Hash, with: Hash, roll: pave_kernel::Record },
+    Replaced {
+        parcel: Hash,
+        with: Hash,
+        roll: pave_kernel::Record,
+    },
     /// Evidence was submitted about a subject: its kind and hash. The
     /// evidence itself goes only to the host, for the panel.
-    EvidenceNote { subject: Hash, kind: String, hash: Hash },
+    EvidenceNote {
+        subject: Hash,
+        kind: String,
+        hash: Hash,
+    },
     /// In the contractor's thread, from the job's poster: the payment
     /// record, whose second output is the vouch coin.
     Vouch {
@@ -190,11 +227,18 @@ impl BoardMsg {
             BoardMsg::Post { .. } => None,
             BoardMsg::Dispute { against, .. } => *against,
             BoardMsg::Ruling { dispute, .. } => Some(*dispute),
-            BoardMsg::Dropped { parcel, .. } | BoardMsg::Took { parcel, .. } | BoardMsg::Replaced { parcel, .. } => Some(*parcel),
+            BoardMsg::Dropped { parcel, .. }
+            | BoardMsg::Took { parcel, .. }
+            | BoardMsg::Replaced { parcel, .. } => Some(*parcel),
             BoardMsg::Fund { dispute, .. } => Some(*dispute),
             BoardMsg::EvidenceNote { subject, .. } => Some(*subject),
             BoardMsg::Terms { trade, .. } => Some(contractor(&trade.key)),
-            BoardMsg::Reply { job, .. } | BoardMsg::Accept { job, .. } | BoardMsg::Done { job } | BoardMsg::Release { job } | BoardMsg::Paid { job, .. } | BoardMsg::Vouch { job, .. } => Some(*job),
+            BoardMsg::Reply { job, .. }
+            | BoardMsg::Accept { job, .. }
+            | BoardMsg::Done { job }
+            | BoardMsg::Release { job }
+            | BoardMsg::Paid { job, .. }
+            | BoardMsg::Vouch { job, .. } => Some(*job),
         }
     }
 }
@@ -235,8 +279,20 @@ pub fn accept_receipt(job: &Hash, worker: &Credential) -> Hash {
 fn assigns(copy: &Copy, job: &Job, worker: &Credential, rec: &pave_kernel::Record) -> bool {
     let state = job_state(&job.means);
     rec.signer == job.poster
-        && rec.op == pave_kernel::Op::Transfer { state, to: worker.clone(), receipt: accept_receipt(&job.id, worker) }
-        && rec.sigs.first().is_some_and(|sig| copy.scheme().verify(&rec.signer, &rec.op.signing_bytes(), Some(state.as_bytes()), sig))
+        && rec.op
+            == pave_kernel::Op::Transfer {
+                state,
+                to: worker.clone(),
+                receipt: accept_receipt(&job.id, worker),
+            }
+        && rec.sigs.first().is_some_and(|sig| {
+            copy.scheme().verify(
+                &rec.signer,
+                &rec.op.signing_bytes(),
+                Some(state.as_bytes()),
+                sig,
+            )
+        })
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -272,49 +328,80 @@ pub struct Job {
 pub fn jobs(copy: &Copy) -> BTreeMap<Hash, Job> {
     let mut jobs: BTreeMap<Hash, Job> = BTreeMap::new();
     for item in copy.items() {
-        let Some(msg) = BoardMsg::decode(item.content) else { continue };
-        if item.post.kind != msg.kind() || matches!(msg, BoardMsg::Vouch { .. }) || item.post.thread != msg.job() {
+        let Some(msg) = BoardMsg::decode(item.content) else {
+            continue;
+        };
+        if item.post.kind != msg.kind()
+            || matches!(msg, BoardMsg::Vouch { .. })
+            || item.post.thread != msg.job()
+        {
             continue;
         }
         let (id, signer) = (item.id, item.signer);
         match msg {
-            BoardMsg::Post { title, pay, means, known, about, due, .. } => {
-                jobs.insert(id, Job {
+            BoardMsg::Post {
+                title,
+                pay,
+                means,
+                known,
+                about,
+                due,
+                ..
+            } => {
+                jobs.insert(
                     id,
-                    title,
-                    pay,
-                    poster: signer.clone(),
-                    means,
-                    known: known.map(|k| *k),
-                    about,
-                    due,
-                    known_key: None,
-                    known_as: None,
-                    replies: vec![],
-                    contractors: BTreeMap::new(),
-                    worker: None,
-                    assignment: None,
-                    status: Status::Open,
-                    payment: None,
-                });
+                    Job {
+                        id,
+                        title,
+                        pay,
+                        poster: signer.clone(),
+                        means,
+                        known: known.map(|k| *k),
+                        about,
+                        due,
+                        known_key: None,
+                        known_as: None,
+                        replies: vec![],
+                        contractors: BTreeMap::new(),
+                        worker: None,
+                        assignment: None,
+                        status: Status::Open,
+                        payment: None,
+                    },
+                );
             }
             BoardMsg::Reply { job, note, trade } => {
                 if let Some(j) = jobs.get_mut(&job) {
                     j.replies.push((signer.clone(), note));
                     if let Some(t) = trade {
-                        if copy.scheme().verify(&t.key, &trade_bytes(&job, signer), None, &t.sig) {
+                        if copy
+                            .scheme()
+                            .verify(&t.key, &trade_bytes(&job, signer), None, &t.sig)
+                        {
                             j.contractors.insert(signer.clone(), contractor(&t.key));
                         }
                     }
                 }
             }
-            BoardMsg::Accept { job, worker, assignment, badge } => {
+            BoardMsg::Accept {
+                job,
+                worker,
+                assignment,
+                badge,
+            } => {
                 if let Some(j) = jobs.get_mut(&job) {
-                    let Some(rec) = assignment.filter(|r| &j.poster == signer && assigns(copy, j, &worker, r)) else { continue };
+                    let Some(rec) =
+                        assignment.filter(|r| &j.poster == signer && assigns(copy, j, &worker, r))
+                    else {
+                        continue;
+                    };
                     // A job whose worker must be known counts only an accept showing it.
                     let known = match &j.known {
                         None => None,
-                        Some(k) => match badge.as_deref().and_then(|b| shown_by(copy.scheme(), k, &job, &worker, b)) {
+                        Some(k) => match badge
+                            .as_deref()
+                            .and_then(|b| shown_by(copy.scheme(), k, &job, &worker, b))
+                        {
                             Some(k) => Some(k),
                             None => continue,
                         },
@@ -346,12 +433,23 @@ pub fn jobs(copy: &Copy) -> BTreeMap<Hash, Job> {
                 if let Some(j) = jobs.get_mut(&job) {
                     // Only past the job's due time, by the board's clock on
                     // the release: the worker had until then.
-                    if &j.poster == signer && j.status == Status::Accepted && j.due.is_some_and(|d| item.post.clock > d) {
+                    if &j.poster == signer
+                        && j.status == Status::Accepted
+                        && j.due.is_some_and(|d| item.post.clock > d)
+                    {
                         j.status = Status::Released;
                     }
                 }
             }
-            BoardMsg::Vouch { .. } | BoardMsg::Dispute { .. } | BoardMsg::Ruling { .. } | BoardMsg::Dropped { .. } | BoardMsg::Took { .. } | BoardMsg::Replaced { .. } | BoardMsg::Fund { .. } | BoardMsg::Terms { .. } | BoardMsg::EvidenceNote { .. } => {}
+            BoardMsg::Vouch { .. }
+            | BoardMsg::Dispute { .. }
+            | BoardMsg::Ruling { .. }
+            | BoardMsg::Dropped { .. }
+            | BoardMsg::Took { .. }
+            | BoardMsg::Replaced { .. }
+            | BoardMsg::Fund { .. }
+            | BoardMsg::Terms { .. }
+            | BoardMsg::EvidenceNote { .. } => {}
             BoardMsg::Paid { job, payment } => {
                 if let Some(j) = jobs.get_mut(&job) {
                     if &j.poster == signer && j.status == Status::Done {
@@ -367,14 +465,23 @@ pub fn jobs(copy: &Copy) -> BTreeMap<Hash, Job> {
 
 /// The stable key `b` shows, and its badge id when `known` needs a badge,
 /// if the key signed for `worker` on `job` and carries what `known` needs.
-pub fn shown_by(s: &impl Scheme, known: &Known, job: &Hash, worker: &Credential, b: &Shown) -> Option<(Option<String>, Credential)> {
+pub fn shown_by(
+    s: &impl Scheme,
+    known: &Known,
+    job: &Hash,
+    worker: &Credential,
+    b: &Shown,
+) -> Option<(Option<String>, Credential)> {
     if !s.verify(&b.trade.key, &trade_bytes(job, worker), None, &b.trade.sig) {
         return None;
     }
     let id = match known {
         Known::Stable => None,
         Known::Badge(d) => {
-            let t = b.ticket.as_ref().filter(|t| t.ticket.credential == b.trade.key)?;
+            let t = b
+                .ticket
+                .as_ref()
+                .filter(|t| t.ticket.credential == b.trade.key)?;
             Some(d.badge_of(s, t)?)
         }
     };
@@ -406,7 +513,11 @@ pub struct Vouched {
 /// post counts its author for this contractor. Each job counts once, and each person once per
 /// type.
 /// `contacts` are the reader's: names for the stable credentials it was given.
-pub fn reputation(copy: &Copy, contacts: &BTreeMap<String, Credential>, who: &Hash) -> (BTreeMap<String, usize>, Vec<Vouched>) {
+pub fn reputation(
+    copy: &Copy,
+    contacts: &BTreeMap<String, Credential>,
+    who: &Hash,
+) -> (BTreeMap<String, usize>, Vec<Vouched>) {
     let jobs = jobs(copy);
     let scope = copy.info.scope;
     let mut seen_jobs: BTreeSet<Hash> = BTreeSet::new();
@@ -416,30 +527,64 @@ pub fn reputation(copy: &Copy, contacts: &BTreeMap<String, Credential>, who: &Ha
         if item.post.kind != "vouch" || item.post.thread != Some(*who) {
             continue;
         }
-        let Some(BoardMsg::Vouch { job, category, note, payment }) = BoardMsg::decode(item.content) else { continue };
+        let Some(BoardMsg::Vouch {
+            job,
+            category,
+            note,
+            payment,
+        }) = BoardMsg::decode(item.content)
+        else {
+            continue;
+        };
         let Some(j) = jobs.get(&job) else { continue };
-        let Some(worker) = j.worker.as_ref() else { continue };
+        let Some(worker) = j.worker.as_ref() else {
+            continue;
+        };
         let paid = j.status == Status::Paid && j.payment == Some(payment.output(0));
         let named = j.contractors.get(worker) == Some(who);
         let pays = match &payment.op {
-            Op::Split { state, parts, receipt } => {
+            Op::Split {
+                state,
+                parts,
+                receipt,
+            } => {
                 parts.len() >= 2
                     && parts[0] == (j.pay, worker.clone())
                     && parts[1] == (0, worker.clone())
                     && *receipt == vouch_receipt(&job, who, &category)
                     && payment.sigs.len() == 1
-                    && copy.scheme().verify(&payment.signer, &payment.op.signing_bytes(), Some(state.as_bytes()), &payment.sigs[0])
+                    && copy.scheme().verify(
+                        &payment.signer,
+                        &payment.op.signing_bytes(),
+                        Some(state.as_bytes()),
+                        &payment.sigs[0],
+                    )
             }
             _ => false,
         };
         if item.signer != &j.poster || !paid || !named || !pays || !seen_jobs.insert(job) {
             continue;
         }
-        let Some((class, nym)) = item.counted(&purpose(&scope, "vouch", who)) else { continue };
+        let Some((class, nym)) = item.counted(&purpose(&scope, "vouch", who)) else {
+            continue;
+        };
         people.entry(category.clone()).or_default().insert(nym);
         let by = item.by.clone();
-        let known_by = by.as_ref().and_then(|c| contacts.iter().find(|(_, k)| *k == c).map(|(n, _)| n.clone()));
-        out.push(Vouched { job, category, note, coin: payment.output(1), class, by, known_by });
+        let known_by = by.as_ref().and_then(|c| {
+            contacts
+                .iter()
+                .find(|(_, k)| *k == c)
+                .map(|(n, _)| n.clone())
+        });
+        out.push(Vouched {
+            job,
+            category,
+            note,
+            coin: payment.output(1),
+            class,
+            by,
+            known_by,
+        });
     }
     (people.into_iter().map(|(c, n)| (c, n.len())).collect(), out)
 }

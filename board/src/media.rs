@@ -72,7 +72,8 @@ pub fn strip_metadata(bytes: &[u8]) -> Vec<u8> {
         let mut out = bytes[..8].to_vec();
         let mut i = 8;
         while i + 12 <= bytes.len() {
-            let len = u32::from_be_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]) as usize;
+            let len =
+                u32::from_be_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]) as usize;
             let end = (i + 12 + len).min(bytes.len());
             let kind = &bytes[i + 4..i + 8];
             if !matches!(kind, b"tEXt" | b"zTXt" | b"iTXt" | b"eXIf" | b"caBX") {
@@ -146,7 +147,10 @@ mod tests {
         v.extend(seg(0xE0, b"JFIF\0\x01\x01"));
         v.extend(seg(0xE1, b"Exif\0\0GPS 36.16,-86.78 2026-11-24T14:02"));
         v.extend(seg(0xE1, b"http://ns.adobe.com/xap/1.0/\0<x:xmpmeta/>"));
-        v.extend(seg(0xEB, b"JP\0\x01jumb c2pa manifest: captured by camera app"));
+        v.extend(seg(
+            0xEB,
+            b"JP\0\x01jumb c2pa manifest: captured by camera app",
+        ));
         v.extend(seg(0xFE, b"comment"));
         v.extend(seg(0xDB, b"quant tables"));
         v.extend(seg(0xDA, b"scan header"));
@@ -158,11 +162,17 @@ mod tests {
     #[test]
     fn jpeg() {
         let j = sample_jpeg();
-        assert_eq!(metadata_kinds(&j), ["Exif", "XMP", "C2PA (JUMBF)", "comment"]);
+        assert_eq!(
+            metadata_kinds(&j),
+            ["Exif", "XMP", "C2PA (JUMBF)", "comment"]
+        );
         let s = strip_metadata(&j);
         assert!(metadata_kinds(&s).is_empty());
         assert!(s.windows(4).any(|w| w == b"JFIF"), "keeps the JFIF header");
-        assert!(s.ends_with(b"pixel data \xFF\x00 more\xFF\xD9"), "keeps the image data");
+        assert!(
+            s.ends_with(b"pixel data \xFF\x00 more\xFF\xD9"),
+            "keeps the image data"
+        );
         assert!(!s.windows(3).any(|w| w == b"GPS"));
     }
 

@@ -80,8 +80,21 @@ impl PendingKey {
     /// join request for it.
     pub fn generate(nonce: &[u8]) -> (PendingKey, JoinRequest) {
         let (mut sk, mut pk) = (Vec::new(), Vec::new());
-        assert!(v1::generate_wallet_keypair(&nonce.to_vec(), &mut sk, &mut pk));
-        (PendingKey { secret_key: sk, public_key: pk.clone() }, JoinRequest { public_key: pk, nonce: nonce.to_vec() })
+        assert!(v1::generate_wallet_keypair(
+            &nonce.to_vec(),
+            &mut sk,
+            &mut pk
+        ));
+        (
+            PendingKey {
+                secret_key: sk,
+                public_key: pk.clone(),
+            },
+            JoinRequest {
+                public_key: pk,
+                nonce: nonce.to_vec(),
+            },
+        )
     }
 
     /// Holder side, step 2: accept the issued credential, checking that it is
@@ -94,26 +107,43 @@ impl PendingKey {
         if !v1::credential_in_group(cred, &scheme.group_public_key) {
             return Err("credential is not in the issuer's group".into());
         }
-        Ok(HolderKey { secret_key: self.secret_key, credential: cred.clone() })
+        Ok(HolderKey {
+            secret_key: self.secret_key,
+            credential: cred.clone(),
+        })
     }
 }
 
 impl Issuer {
     pub fn new() -> Self {
         let (mut secret_key, mut group_public_key) = (Vec::new(), Vec::new());
-        assert!(v1::generate_issuer_keypair(&mut secret_key, &mut group_public_key));
-        Issuer { secret_key, group_public_key }
+        assert!(v1::generate_issuer_keypair(
+            &mut secret_key,
+            &mut group_public_key
+        ));
+        Issuer {
+            secret_key,
+            group_public_key,
+        }
     }
 
     pub fn scheme(&self) -> BrioletteV1 {
-        BrioletteV1 { group_public_key: self.group_public_key.clone() }
+        BrioletteV1 {
+            group_public_key: self.group_public_key.clone(),
+        }
     }
 
     /// Issue a credential on a join request. Fails unless the request proves
     /// knowledge of the key's secret.
     pub fn issue(&self, req: &JoinRequest) -> Result<JoinReply, String> {
         let (mut cred, mut cred_sig) = (Vec::new(), Vec::new());
-        if !v1::issue_credential(&req.public_key, &self.secret_key, &req.nonce, &mut cred, &mut cred_sig) {
+        if !v1::issue_credential(
+            &req.public_key,
+            &self.secret_key,
+            &req.nonce,
+            &mut cred,
+            &mut cred_sig,
+        ) {
             return Err("join request has no valid proof of key".into());
         }
         Ok(JoinReply { credential: cred })
@@ -174,23 +204,46 @@ impl Scheme for BrioletteV1 {
     }
 
     fn verify(&self, cred: &Credential, msg: &[u8], basename: Option<&[u8]>, sig: &Sig) -> bool {
-        if msg.is_empty() || cred.0.len() != CREDENTIAL_LENGTH || (sig.0.len() != SIGNATURE_LENGTH && sig.0.len() != SIGNATURE_WITH_NYM_LENGTH) {
+        if msg.is_empty()
+            || cred.0.len() != CREDENTIAL_LENGTH
+            || (sig.0.len() != SIGNATURE_LENGTH && sig.0.len() != SIGNATURE_WITH_NYM_LENGTH)
+        {
             return false;
         }
         let mut full = sig.0.clone();
         v1::inflate_signature(&cred.0, &mut full);
-        v1::verify(&self.group_public_key, &basename.map(|b| b.to_vec()), &Some(cred.0.clone()), &full, &msg.to_vec())
+        v1::verify(
+            &self.group_public_key,
+            &basename.map(|b| b.to_vec()),
+            &Some(cred.0.clone()),
+            &full,
+            &msg.to_vec(),
+        )
     }
 
     fn nym(&self, sig: &Sig) -> Option<Vec<u8>> {
-        (sig.0.len() >= SIGNATURE_WITH_NYM_LENGTH).then(|| sig.0[sig.0.len() - G1_LENGTH..].to_vec())
+        (sig.0.len() >= SIGNATURE_WITH_NYM_LENGTH)
+            .then(|| sig.0[sig.0.len() - G1_LENGTH..].to_vec())
     }
 
-    fn prove_not_cheat(&self, key: &HolderKey, cred: &Credential, cheats: &[(Vec<u8>, Vec<u8>)], ctx: &[u8]) -> Option<Vec<u8>> {
+    fn prove_not_cheat(
+        &self,
+        key: &HolderKey,
+        cred: &Credential,
+        cheats: &[(Vec<u8>, Vec<u8>)],
+        ctx: &[u8],
+    ) -> Option<Vec<u8>> {
         nonrevoked::prove(&key.secret_key, &cred.0, cheats, ctx)
     }
 
-    fn verify_not_cheat(&self, cred: &Credential, cheats: &[(Vec<u8>, Vec<u8>)], ctx: &[u8], proof: &[u8]) -> bool {
-        v1::credential_in_group(&cred.0, &self.group_public_key) && nonrevoked::verify(&cred.0, cheats, ctx, proof)
+    fn verify_not_cheat(
+        &self,
+        cred: &Credential,
+        cheats: &[(Vec<u8>, Vec<u8>)],
+        ctx: &[u8],
+        proof: &[u8],
+    ) -> bool {
+        v1::credential_in_group(&cred.0, &self.group_public_key)
+            && nonrevoked::verify(&cred.0, cheats, ctx, proof)
     }
 }

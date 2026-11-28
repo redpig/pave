@@ -92,7 +92,9 @@ pub struct Verified {
 
 /// Milliseconds since 1970.
 pub fn now_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
 }
 
 impl RequestSpec {
@@ -105,8 +107,24 @@ impl RequestSpec {
         }
     }
 
-    fn bytes<B: Serialize>(&self, period: u64, slot: u32, at: u64, body: &B, standing: &Standing) -> Vec<u8> {
-        encode(&("pave/request/v1", &self.domain, self.scope, period, slot, at, body, standing))
+    fn bytes<B: Serialize>(
+        &self,
+        period: u64,
+        slot: u32,
+        at: u64,
+        body: &B,
+        standing: &Standing,
+    ) -> Vec<u8> {
+        encode(&(
+            "pave/request/v1",
+            &self.domain,
+            self.scope,
+            period,
+            slot,
+            at,
+            body,
+            standing,
+        ))
     }
 
     /// Sign a request with `key`, a member of the group `group`, proving
@@ -114,34 +132,93 @@ impl RequestSpec {
     /// credential under other basenames; `shown` adds signatures by
     /// credentials of other groups, each a (key, group key).
     #[allow(clippy::too_many_arguments)]
-    pub fn sign<B: Serialize>(&self, key: &HolderKey, group: &[u8], period: u64, slot: u32, body: B, ruled: &[Cheat], basenames: &[Vec<u8>], shown: &[(&HolderKey, &[u8])]) -> Result<Request<B>, String> {
-        self.sign_at(now_ms(), key, group, period, slot, body, ruled, basenames, shown)
+    pub fn sign<B: Serialize>(
+        &self,
+        key: &HolderKey,
+        group: &[u8],
+        period: u64,
+        slot: u32,
+        body: B,
+        ruled: &[Cheat],
+        basenames: &[Vec<u8>],
+        shown: &[(&HolderKey, &[u8])],
+    ) -> Result<Request<B>, String> {
+        self.sign_at(
+            now_ms(),
+            key,
+            group,
+            period,
+            slot,
+            body,
+            ruled,
+            basenames,
+            shown,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn sign_at<B: Serialize>(&self, at: u64, key: &HolderKey, group: &[u8], period: u64, slot: u32, body: B, ruled: &[Cheat], basenames: &[Vec<u8>], shown: &[(&HolderKey, &[u8])]) -> Result<Request<B>, String> {
-        let a = BrioletteV1 { group_public_key: group.to_vec() };
+    fn sign_at<B: Serialize>(
+        &self,
+        at: u64,
+        key: &HolderKey,
+        group: &[u8],
+        period: u64,
+        slot: u32,
+        body: B,
+        ruled: &[Cheat],
+        basenames: &[Vec<u8>],
+        shown: &[(&HolderKey, &[u8])],
+    ) -> Result<Request<B>, String> {
+        let a = BrioletteV1 {
+            group_public_key: group.to_vec(),
+        };
         let signer = a.credential(key);
-        let standing = Standing::prove(&a, key, &signer, ruled).ok_or("ruled out: no standing against the mint's list")?;
+        let standing = Standing::prove(&a, key, &signer, ruled)
+            .ok_or("ruled out: no standing against the mint's list")?;
         let msg = self.bytes(period, slot, at, &body, &standing);
         let sig = a.sign(key, &signer, &msg, Some(&self.basename(period, slot)));
-        let mut also: Vec<Also> = basenames.iter().map(|b| Also::Basename { basename: b.clone(), sig: a.sign(key, &signer, &msg, Some(b)) }).collect();
+        let mut also: Vec<Also> = basenames
+            .iter()
+            .map(|b| Also::Basename {
+                basename: b.clone(),
+                sig: a.sign(key, &signer, &msg, Some(b)),
+            })
+            .collect();
         for (k, g) in shown {
-            let s = BrioletteV1 { group_public_key: g.to_vec() };
+            let s = BrioletteV1 {
+                group_public_key: g.to_vec(),
+            };
             let credential = s.credential(k);
             let sig = s.sign(k, &credential, &msg, None);
             also.push(Also::Shown { credential, sig });
         }
-        Ok(Request { period, slot, at, body, signer, standing, sig, also })
+        Ok(Request {
+            period,
+            slot,
+            at,
+            body,
+            signer,
+            standing,
+            sig,
+            also,
+        })
     }
 
     /// Check a request at the mint: the slot within the budget, fresh if the
     /// spec asks, signed by a member of one of `groups` (name, group key),
     /// standing against `ruled`, and each extra signature as `expect` says.
-    pub fn verify<'a, B: Serialize>(&self, req: &Request<B>, groups: impl IntoIterator<Item = (&'a String, &'a Vec<u8>)>, ruled: &[Cheat], expect: &[Expect]) -> Result<Verified, String> {
+    pub fn verify<'a, B: Serialize>(
+        &self,
+        req: &Request<B>,
+        groups: impl IntoIterator<Item = (&'a String, &'a Vec<u8>)>,
+        ruled: &[Cheat],
+        expect: &[Expect],
+    ) -> Result<Verified, String> {
         match self.linkage {
             Linkage::Slots(n) if req.slot >= n => return Err(format!("slots are 0 to {}", n - 1)),
-            Linkage::Period | Linkage::Scope if req.slot != 0 => return Err("this request has no slots".into()),
+            Linkage::Period | Linkage::Scope if req.slot != 0 => {
+                return Err("this request has no slots".into())
+            }
             _ => {}
         }
         if let Some(skew) = self.max_skew_ms {
@@ -153,7 +230,14 @@ impl RequestSpec {
         let bsn = self.basename(req.period, req.slot);
         let (group, a) = groups
             .into_iter()
-            .map(|(name, g)| (name.clone(), BrioletteV1 { group_public_key: g.clone() }))
+            .map(|(name, g)| {
+                (
+                    name.clone(),
+                    BrioletteV1 {
+                        group_public_key: g.clone(),
+                    },
+                )
+            })
             .find(|(_, a)| a.verify(&req.signer, &msg, Some(&bsn), &req.sig))
             .ok_or("not signed by a member")?;
         let nym = a.nym(&req.sig).ok_or("no pseudonym")?;
@@ -167,8 +251,19 @@ impl RequestSpec {
         let mut also = vec![];
         for (x, e) in req.also.iter().zip(expect) {
             match (x, e) {
-                (Also::Basename { basename, sig }, Expect::Basename(want)) if basename == want && a.verify(&req.signer, &msg, Some(basename), sig) => also.push(Some(a.nym(sig).ok_or("no pseudonym")?)),
-                (Also::Shown { credential, sig }, Expect::Shown(g)) if (BrioletteV1 { group_public_key: g.to_vec() }).verify(credential, &msg, None, sig) => also.push(None),
+                (Also::Basename { basename, sig }, Expect::Basename(want))
+                    if basename == want && a.verify(&req.signer, &msg, Some(basename), sig) =>
+                {
+                    also.push(Some(a.nym(sig).ok_or("no pseudonym")?))
+                }
+                (Also::Shown { credential, sig }, Expect::Shown(g))
+                    if (BrioletteV1 {
+                        group_public_key: g.to_vec(),
+                    })
+                    .verify(credential, &msg, None, sig) =>
+                {
+                    also.push(None)
+                }
                 _ => return Err("an extra signature doesn't check out".into()),
             }
         }
@@ -183,11 +278,22 @@ mod tests {
 
     fn member(i: &Issuer) -> HolderKey {
         let (p, req) = PendingKey::generate(&pave_scheme_briolette::join_nonce());
-        p.finish(&BrioletteV1 { group_public_key: i.group_public_key.clone() }, &i.issue(&req).unwrap()).unwrap()
+        p.finish(
+            &BrioletteV1 {
+                group_public_key: i.group_public_key.clone(),
+            },
+            &i.issue(&req).unwrap(),
+        )
+        .unwrap()
     }
 
     fn spec(linkage: Linkage, skew: Option<u64>) -> RequestSpec {
-        RequestSpec { domain: "test/v1".into(), scope: Hash([7; 32]), linkage, max_skew_ms: skew }
+        RequestSpec {
+            domain: "test/v1".into(),
+            scope: Hash([7; 32]),
+            linkage,
+            max_skew_ms: skew,
+        }
     }
 
     #[test]
@@ -200,36 +306,151 @@ mod tests {
         // Slots: within the budget, the same holder's slots give unrelated
         // pseudonyms; one slot twice gives the same one.
         let s = spec(Linkage::Slots(2), None);
-        let a = s.verify(&s.sign(&k, &roll.group_public_key, 1, 0, 1u8, &[], &[], &[]).unwrap(), g(), &[], &[]).unwrap();
-        let b = s.verify(&s.sign(&k, &roll.group_public_key, 1, 1, 1u8, &[], &[], &[]).unwrap(), g(), &[], &[]).unwrap();
-        let c = s.verify(&s.sign(&k, &roll.group_public_key, 1, 0, 2u8, &[], &[], &[]).unwrap(), g(), &[], &[]).unwrap();
+        let a = s
+            .verify(
+                &s.sign(&k, &roll.group_public_key, 1, 0, 1u8, &[], &[], &[])
+                    .unwrap(),
+                g(),
+                &[],
+                &[],
+            )
+            .unwrap();
+        let b = s
+            .verify(
+                &s.sign(&k, &roll.group_public_key, 1, 1, 1u8, &[], &[], &[])
+                    .unwrap(),
+                g(),
+                &[],
+                &[],
+            )
+            .unwrap();
+        let c = s
+            .verify(
+                &s.sign(&k, &roll.group_public_key, 1, 0, 2u8, &[], &[], &[])
+                    .unwrap(),
+                g(),
+                &[],
+                &[],
+            )
+            .unwrap();
         assert_ne!(a.nym, b.nym);
         assert_eq!(a.nym, c.nym);
-        assert!(s.verify(&s.sign(&k, &roll.group_public_key, 1, 2, 1u8, &[], &[], &[]).unwrap(), g(), &[], &[]).is_err());
+        assert!(s
+            .verify(
+                &s.sign(&k, &roll.group_public_key, 1, 2, 1u8, &[], &[], &[])
+                    .unwrap(),
+                g(),
+                &[],
+                &[]
+            )
+            .is_err());
 
         // A request without slots takes only slot 0.
         let p = spec(Linkage::Period, None);
-        assert!(p.verify(&p.sign(&k, &roll.group_public_key, 1, 3, 1u8, &[], &[], &[]).unwrap(), g(), &[], &[]).unwrap_err().contains("no slots"));
+        assert!(p
+            .verify(
+                &p.sign(&k, &roll.group_public_key, 1, 3, 1u8, &[], &[], &[])
+                    .unwrap(),
+                g(),
+                &[],
+                &[]
+            )
+            .unwrap_err()
+            .contains("no slots"));
 
         // Freshness, when the spec asks for it.
         let f = spec(Linkage::Scope, Some(1000));
-        let old = f.sign_at(now_ms() - 5000, &k, &roll.group_public_key, 0, 0, 1u8, &[], &[], &[]).unwrap();
+        let old = f
+            .sign_at(
+                now_ms() - 5000,
+                &k,
+                &roll.group_public_key,
+                0,
+                0,
+                1u8,
+                &[],
+                &[],
+                &[],
+            )
+            .unwrap();
         assert!(f.verify(&old, g(), &[], &[]).unwrap_err().contains("stale"));
-        assert!(f.verify(&f.sign(&k, &roll.group_public_key, 0, 0, 1u8, &[], &[], &[]).unwrap(), g(), &[], &[]).is_ok());
+        assert!(f
+            .verify(
+                &f.sign(&k, &roll.group_public_key, 0, 0, 1u8, &[], &[], &[])
+                    .unwrap(),
+                g(),
+                &[],
+                &[]
+            )
+            .is_ok());
 
         // Extra signatures: exactly what the mint expects, under the basename
         // it expects, or by a member of the group it names.
         let want = b"purpose one".to_vec();
-        let r = s.sign(&k, &roll.group_public_key, 1, 0, 1u8, &[], std::slice::from_ref(&want), &[]).unwrap();
-        assert!(s.verify(&r, g(), &[], &[Expect::Basename(want.clone())]).unwrap().also[0].is_some());
-        assert!(s.verify(&r, g(), &[], &[]).unwrap_err().contains("missing or extra"));
-        let wrong = s.sign(&k, &roll.group_public_key, 1, 0, 1u8, &[], &[b"purpose two".to_vec()], &[]).unwrap();
-        assert!(s.verify(&wrong, g(), &[], &[Expect::Basename(want)]).is_err());
-        let shown = s.sign(&k, &roll.group_public_key, 1, 0, 1u8, &[], &[], &[(&o, &other.group_public_key)]).unwrap();
-        assert!(s.verify(&shown, g(), &[], &[Expect::Shown(&other.group_public_key)]).is_ok());
-        assert!(s.verify(&shown, g(), &[], &[Expect::Shown(&roll.group_public_key)]).is_err());
+        let r = s
+            .sign(
+                &k,
+                &roll.group_public_key,
+                1,
+                0,
+                1u8,
+                &[],
+                std::slice::from_ref(&want),
+                &[],
+            )
+            .unwrap();
+        assert!(s
+            .verify(&r, g(), &[], &[Expect::Basename(want.clone())])
+            .unwrap()
+            .also[0]
+            .is_some());
+        assert!(s
+            .verify(&r, g(), &[], &[])
+            .unwrap_err()
+            .contains("missing or extra"));
+        let wrong = s
+            .sign(
+                &k,
+                &roll.group_public_key,
+                1,
+                0,
+                1u8,
+                &[],
+                &[b"purpose two".to_vec()],
+                &[],
+            )
+            .unwrap();
+        assert!(s
+            .verify(&wrong, g(), &[], &[Expect::Basename(want)])
+            .is_err());
+        let shown = s
+            .sign(
+                &k,
+                &roll.group_public_key,
+                1,
+                0,
+                1u8,
+                &[],
+                &[],
+                &[(&o, &other.group_public_key)],
+            )
+            .unwrap();
+        assert!(s
+            .verify(&shown, g(), &[], &[Expect::Shown(&other.group_public_key)])
+            .is_ok());
+        assert!(s
+            .verify(&shown, g(), &[], &[Expect::Shown(&roll.group_public_key)])
+            .is_err());
 
         // Not a member: another group's key.
-        assert!(s.verify(&s.sign(&o, &other.group_public_key, 1, 0, 1u8, &[], &[], &[]).unwrap(), g(), &[], &[]).is_err());
+        assert!(s
+            .verify(
+                &s.sign(&o, &other.group_public_key, 1, 0, 1u8, &[], &[], &[])
+                    .unwrap(),
+                g(),
+                &[],
+                &[]
+            )
+            .is_err());
     }
 }

@@ -25,11 +25,21 @@ fn bytes(v: &Value, k: &str) -> Result<Vec<u8>, String> {
 
 fn open(n: &mut Node, inv: &Invite, side: Side) -> String {
     let token = hex::encode(inv.token);
-    n.links.insert(token.clone(), Session { link: Link::new(inv, side), frames: Frames::new(inv.token) });
+    n.links.insert(
+        token.clone(),
+        Session {
+            link: Link::new(inv, side),
+            frames: Frames::new(inv.token),
+        },
+    );
     token
 }
 
-fn with<T>(n: &mut Node, v: &Value, f: impl FnOnce(&mut Session) -> Result<T, String>) -> Result<T, String> {
+fn with<T>(
+    n: &mut Node,
+    v: &Value,
+    f: impl FnOnce(&mut Session) -> Result<T, String>,
+) -> Result<T, String> {
     let id = v["link"].as_str().ok_or("missing link")?;
     f(n.links.get_mut(id).ok_or("no such link")?)
 }
@@ -40,7 +50,9 @@ fn radio(r: &Value) -> Result<Radio, String> {
     }
     if let Some(uuid) = r["ble"].as_str() {
         let b = hex::decode(uuid.replace('-', "")).map_err(|e| e.to_string())?;
-        return Ok(Radio::Ble(b.try_into().map_err(|_| "a BLE service UUID is 16 bytes")?));
+        return Ok(Radio::Ble(
+            b.try_into().map_err(|_| "a BLE service UUID is 16 bytes")?,
+        ));
     }
     Err(format!("unknown radio {r}"))
 }
@@ -59,30 +71,46 @@ pub fn command(n: &mut Node, cmd: &str, v: &Value) -> Option<Result<Value, Strin
     let r = match cmd {
         "have" => Ok(json!({ "have": hex::encode(pave_kernel::hash::encode(&n.have())) })),
         "bundle_for" => (|| {
-            let have: Have = ciborium::from_reader(bytes(v, "have")?.as_slice()).map_err(|e| e.to_string())?;
+            let have: Have =
+                ciborium::from_reader(bytes(v, "have")?.as_slice()).map_err(|e| e.to_string())?;
             Ok(json!({ "bundle": hex::encode(pave_kernel::hash::encode(&n.bundle_for(&have))) }))
         })(),
         "absorb" => (|| {
-            let b: Bundle = ciborium::from_reader(bytes(v, "bundle")?.as_slice()).map_err(|e| e.to_string())?;
+            let b: Bundle =
+                ciborium::from_reader(bytes(v, "bundle")?.as_slice()).map_err(|e| e.to_string())?;
             let new = n.absorb_bundle(&b);
             n.outbox.clear();
             Ok(json!({ "new_evidence": new.iter().map(super::hx).collect::<Vec<_>>() }))
         })(),
         "link_show" => (|| {
-            let rs = v["radios"].as_array().map(|a| a.iter().map(radio).collect::<Result<Vec<_>, _>>()).transpose()?.unwrap_or_default();
+            let rs = v["radios"]
+                .as_array()
+                .map(|a| a.iter().map(radio).collect::<Result<Vec<_>, _>>())
+                .transpose()?
+                .unwrap_or_default();
             let inv = Invite::new(rs, v["ttl"].as_u64().unwrap_or(120));
-            Ok(json!({ "link": open(n, &inv, Side::Shower), "code": inv.to_qr(), "expires": inv.expires }))
+            Ok(
+                json!({ "link": open(n, &inv, Side::Shower), "code": inv.to_qr(), "expires": inv.expires }),
+            )
         })(),
         "link_scan" => (|| {
             let inv = Invite::from_qr(v["code"].as_str().ok_or("missing code")?)?;
-            Ok(json!({ "link": open(n, &inv, Side::Scanner), "radios": radios(&inv.radios), "expires": inv.expires }))
+            Ok(
+                json!({ "link": open(n, &inv, Side::Scanner), "radios": radios(&inv.radios), "expires": inv.expires }),
+            )
         })(),
-        "link_seal" => with(n, v, |s| Ok(json!({ "sealed": hex::encode(s.link.seal(v["kind"].as_str().unwrap_or(""), &bytes(v, "body")?)) }))),
+        "link_seal" => with(n, v, |s| {
+            Ok(
+                json!({ "sealed": hex::encode(s.link.seal(v["kind"].as_str().unwrap_or(""), &bytes(v, "body")?)) }),
+            )
+        }),
         "link_open" => with(n, v, |s| {
             let (kind, body) = s.link.open(&bytes(v, "sealed")?)?;
             Ok(json!({ "kind": kind, "body": hex::encode(body) }))
         }),
-        "link_frames" => with(n, v, |s| Ok(json!({ "frames": frames(s.link.token(), &bytes(v, "sealed")?, FRAME_BYTES) }))),
+        "link_frames" => with(n, v, |s| {
+            Ok(json!({ "frames": frames(s.link.token(), &bytes(v, "sealed")?, FRAME_BYTES) }))
+        }),
         "link_collect" => with(n, v, |s| {
             let got = s.frames.add(v["frame"].as_str().ok_or("missing frame")?)?;
             Ok(json!({ "sealed": got.map(hex::encode), "missing": s.frames.missing() }))

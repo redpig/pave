@@ -54,9 +54,18 @@ pub struct SignedTicket {
 }
 
 impl SignedTicket {
-    pub fn issue<S: Scheme>(scheme: &S, clerk_key: &S::HolderKey, clerk: &Credential, ticket: Ticket) -> Self {
+    pub fn issue<S: Scheme>(
+        scheme: &S,
+        clerk_key: &S::HolderKey,
+        clerk: &Credential,
+        ticket: Ticket,
+    ) -> Self {
         let sig = scheme.sign(clerk_key, clerk, &ticket.signing_bytes(), None);
-        SignedTicket { ticket, clerk: clerk.clone(), sig }
+        SignedTicket {
+            ticket,
+            clerk: clerk.clone(),
+            sig,
+        }
     }
 
     pub fn verify<S: Scheme>(&self, scheme: &S) -> bool {

@@ -43,7 +43,11 @@ pub fn cell(lat: f64, lon: f64, precision: usize) -> String {
     let (mut lat_r, mut lon_r) = ((-90.0, 90.0), (-180.0, 180.0));
     let (mut out, mut bits, mut ch, mut even) = (String::new(), 0, 0usize, true);
     while out.len() < precision {
-        let (r, v): (&mut (f64, f64), f64) = if even { (&mut lon_r, lon) } else { (&mut lat_r, lat) };
+        let (r, v): (&mut (f64, f64), f64) = if even {
+            (&mut lon_r, lon)
+        } else {
+            (&mut lat_r, lat)
+        };
         let mid = (r.0 + r.1) / 2.0;
         ch <<= 1;
         if v >= mid {
@@ -82,7 +86,12 @@ impl IssueKey {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReportMsg {
     /// A report of an issue (counted). The first one opens it.
-    Report { key: IssueKey, observed: String, note: String, photo: Option<Hash> },
+    Report {
+        key: IssueKey,
+        observed: String,
+        note: String,
+        photo: Option<Hash>,
+    },
     /// Someone confirms the issue is cleared (counted).
     Cleared,
     /// A reply, such as from whoever the issue is about, optionally pointing
@@ -91,7 +100,14 @@ pub enum ReportMsg {
     /// The issue was sent on through another channel, with its receipt.
     Forwarded { channel: String, receipt: String },
     /// From the mirror role: a permit from the city's published data.
-    Permit { source: String, source_id: String, kind: String, cell: String, start: String, end: String },
+    Permit {
+        source: String,
+        source_id: String,
+        kind: String,
+        cell: String,
+        start: String,
+        end: String,
+    },
     /// From the moderator role: a ruling on one report.
     Ruling { report: Hash, malicious: bool },
 }
@@ -166,7 +182,9 @@ fn messages(copy: &Copy) -> Vec<Msg<'_>> {
             let msg = ReportMsg::decode(item.content)?;
             let thread_ok = match &msg {
                 ReportMsg::Report { key, .. } => item.post.thread == Some(key.id()),
-                ReportMsg::Cleared | ReportMsg::Reply { .. } | ReportMsg::Forwarded { .. } => item.post.thread.is_some(),
+                ReportMsg::Cleared | ReportMsg::Reply { .. } | ReportMsg::Forwarded { .. } => {
+                    item.post.thread.is_some()
+                }
                 ReportMsg::Permit { .. } | ReportMsg::Ruling { .. } => true,
             };
             (item.post.kind == msg.kind() && thread_ok).then_some(Msg { item, msg })
@@ -177,22 +195,36 @@ fn messages(copy: &Copy) -> Vec<Msg<'_>> {
 /// Every report the moderator ruled malicious.
 fn ruled_reports(copy: &Copy) -> BTreeSet<Hash> {
     let moderator = copy.info.role("moderator");
-    messages(copy).iter().filter(|m| Some(m.item.signer) == moderator).filter_map(|m| match m.msg {
-        ReportMsg::Ruling { report, malicious: true } => Some(report),
-        _ => None,
-    }).collect()
+    messages(copy)
+        .iter()
+        .filter(|m| Some(m.item.signer) == moderator)
+        .filter_map(|m| match m.msg {
+            ReportMsg::Ruling {
+                report,
+                malicious: true,
+            } => Some(report),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The board mint's ruled list from this board: the tag of every report
 /// ruled malicious. A token request needs standing against all of them.
 pub fn ruled(copy: &Copy) -> Vec<Cheat> {
     let ruled = ruled_reports(copy);
-    copy.items().iter().filter(|i| i.post.kind == "report" && ruled.contains(&i.id)).filter_map(|i| i.cheat()).collect()
+    copy.items()
+        .iter()
+        .filter(|i| i.post.kind == "report" && ruled.contains(&i.id))
+        .filter_map(|i| i.cheat())
+        .collect()
 }
 
 /// The ticket groups of reports ruled malicious, revoked at the next roll.
 pub fn ruled_groups(copy: &Copy) -> Vec<u32> {
-    ruled_reports(copy).iter().filter_map(|r| copy.group(r)).collect()
+    ruled_reports(copy)
+        .iter()
+        .filter_map(|r| copy.group(r))
+        .collect()
 }
 
 /// What a report or clearing on `issue` counts for.
@@ -207,7 +239,10 @@ pub fn issues(copy: &Copy) -> BTreeMap<Hash, Issue> {
     let ruled = ruled_reports(copy);
     let mut permits: BTreeMap<Hash, (String, String, String)> = BTreeMap::new();
     for m in &msgs {
-        if let ReportMsg::Permit { cell, start, end, .. } = &m.msg {
+        if let ReportMsg::Permit {
+            cell, start, end, ..
+        } = &m.msg
+        {
             if Some(m.item.signer) == mirror {
                 permits.insert(m.item.id, (cell.clone(), start.clone(), end.clone()));
             }
@@ -218,10 +253,32 @@ pub fn issues(copy: &Copy) -> BTreeMap<Hash, Issue> {
     let mut clearers: BTreeMap<Hash, BTreeSet<Vec<u8>>> = BTreeMap::new();
     for m in &msgs {
         match &m.msg {
-            ReportMsg::Report { key, observed, note, photo } => {
+            ReportMsg::Report {
+                key,
+                observed,
+                note,
+                photo,
+            } => {
                 let issue = key.id();
-                let entry = out.entry(issue).or_insert_with(|| Issue { id: issue, key: key.clone(), reporters: 0, classes: BTreeMap::new(), notes: vec![], photos: 0, permit: permit_status(&permits, key, observed), replies: vec![], forwarded: vec![], cleared: 0, discounted: 0, identified: BTreeSet::new(), known_by: vec![] });
-                let counted = m.item.counted(&counts_for(copy, "report", &issue)).filter(|_| !ruled.contains(&m.item.id));
+                let entry = out.entry(issue).or_insert_with(|| Issue {
+                    id: issue,
+                    key: key.clone(),
+                    reporters: 0,
+                    classes: BTreeMap::new(),
+                    notes: vec![],
+                    photos: 0,
+                    permit: permit_status(&permits, key, observed),
+                    replies: vec![],
+                    forwarded: vec![],
+                    cleared: 0,
+                    discounted: 0,
+                    identified: BTreeSet::new(),
+                    known_by: vec![],
+                });
+                let counted = m
+                    .item
+                    .counted(&counts_for(copy, "report", &issue))
+                    .filter(|_| !ruled.contains(&m.item.id));
                 match counted {
                     Some((class, nym)) => {
                         if nyms.entry(issue).or_default().insert(nym) {
@@ -239,7 +296,10 @@ pub fn issues(copy: &Copy) -> BTreeMap<Hash, Issue> {
                 }
             }
             ReportMsg::Cleared => {
-                if let Some((_, nym)) = m.item.counted(&counts_for(copy, "cleared", &m.item.thread())) {
+                if let Some((_, nym)) =
+                    m.item
+                        .counted(&counts_for(copy, "cleared", &m.item.thread()))
+                {
                     clearers.entry(m.item.thread()).or_default().insert(nym);
                 }
             }
@@ -251,7 +311,15 @@ pub fn issues(copy: &Copy) -> BTreeMap<Hash, Issue> {
             ReportMsg::Reply { text, permit } => {
                 if let Some(i) = out.get_mut(&m.item.thread()) {
                     // A permit counts only if it covers the issue's area on the day it opened.
-                    let covers = |p: &Hash| permits.get(p).is_some_and(|(cell, start, end)| cell.len() >= 6 && i.key.cell.len() >= 6 && cell[..6] == i.key.cell[..6] && start.as_str() <= i.key.opened.as_str() && i.key.opened.as_str() <= end.as_str());
+                    let covers = |p: &Hash| {
+                        permits.get(p).is_some_and(|(cell, start, end)| {
+                            cell.len() >= 6
+                                && i.key.cell.len() >= 6
+                                && cell[..6] == i.key.cell[..6]
+                                && start.as_str() <= i.key.opened.as_str()
+                                && i.key.opened.as_str() <= end.as_str()
+                        })
+                    };
                     let shown = permit.filter(covers);
                     if let Some(p) = shown {
                         if !matches!(i.permit, PermitStatus::Found(_)) {
@@ -277,7 +345,11 @@ pub fn issues(copy: &Copy) -> BTreeMap<Hash, Issue> {
     out
 }
 
-fn permit_status(permits: &BTreeMap<Hash, (String, String, String)>, key: &IssueKey, observed: &str) -> PermitStatus {
+fn permit_status(
+    permits: &BTreeMap<Hash, (String, String, String)>,
+    key: &IssueKey,
+    observed: &str,
+) -> PermitStatus {
     let in_date = |start: &str, end: &str| start <= observed && observed <= end;
     let mut nearby = None;
     for (id, (cell, start, end)) in permits {
@@ -316,14 +388,25 @@ impl Node {
     pub fn issues(&self) -> BTreeMap<Hash, Issue> {
         let mut out = self.reports().map(issues).unwrap_or_default();
         for i in out.values_mut() {
-            i.known_by = self.contacts.iter().filter(|(_, c)| i.identified.contains(*c)).map(|(n, _)| n.clone()).collect();
+            i.known_by = self
+                .contacts
+                .iter()
+                .filter(|(_, c)| i.identified.contains(*c))
+                .map(|(n, _)| n.clone())
+                .collect();
         }
         out
     }
 
     /// Post to the reports board under a fresh credential, counted once per
     /// person on its issue when `count`, and signed with `identity` if given.
-    fn post_report(&mut self, thread: Option<Hash>, msg: ReportMsg, count: bool, identity: Option<&str>) -> Result<Hash, String> {
+    fn post_report(
+        &mut self,
+        thread: Option<Hash>,
+        msg: ReportMsg,
+        count: bool,
+        identity: Option<&str>,
+    ) -> Result<Hash, String> {
         let signer = self.view.scheme().credential(&self.key);
         let scope = self.town.reports.scope;
         let count = match (count, thread) {
@@ -331,26 +414,66 @@ impl Node {
             (true, None) => return Err("a counted report needs its issue".into()),
             _ => None,
         };
-        self.compose_as(&scope, &signer, msg.kind(), thread, msg.encode(), count, identity)
+        self.compose_as(
+            &scope,
+            &signer,
+            msg.kind(),
+            thread,
+            msg.encode(),
+            count,
+            identity,
+        )
     }
 
     /// Report an issue, or add this wallet's report to one already open.
     /// The report goes out at the next sync. Returns the issue id.
-    pub fn report(&mut self, key: IssueKey, observed: &str, note: &str, photo: Option<Hash>) -> Result<Hash, String> {
+    pub fn report(
+        &mut self,
+        key: IssueKey,
+        observed: &str,
+        note: &str,
+        photo: Option<Hash>,
+    ) -> Result<Hash, String> {
         self.report_as(key, observed, note, photo, None)
     }
 
     /// Report, signed with one of this wallet's identities, so whoever
     /// holds that identity knows the report is this wallet's.
-    pub fn report_as(&mut self, key: IssueKey, observed: &str, note: &str, photo: Option<Hash>, identity: Option<&str>) -> Result<Hash, String> {
+    pub fn report_as(
+        &mut self,
+        key: IssueKey,
+        observed: &str,
+        note: &str,
+        photo: Option<Hash>,
+        identity: Option<&str>,
+    ) -> Result<Hash, String> {
         let issue = key.id();
-        self.post_report(Some(issue), ReportMsg::Report { key, observed: observed.into(), note: note.into(), photo }, true, identity)?;
+        self.post_report(
+            Some(issue),
+            ReportMsg::Report {
+                key,
+                observed: observed.into(),
+                note: note.into(),
+                photo,
+            },
+            true,
+            identity,
+        )?;
         Ok(issue)
     }
 
     /// Add this wallet's report to an open issue.
-    pub fn corroborate(&mut self, issue: &Hash, observed: &str, note: &str) -> Result<Hash, String> {
-        let key = self.issues().get(issue).map(|i| i.key.clone()).ok_or("unknown issue")?;
+    pub fn corroborate(
+        &mut self,
+        issue: &Hash,
+        observed: &str,
+        note: &str,
+    ) -> Result<Hash, String> {
+        let key = self
+            .issues()
+            .get(issue)
+            .map(|i| i.key.clone())
+            .ok_or("unknown issue")?;
         self.report(key, observed, note, None)
     }
 
@@ -358,12 +481,38 @@ impl Node {
         self.post_report(Some(*issue), ReportMsg::Cleared, true, None)
     }
 
-    pub fn reply_issue(&mut self, issue: &Hash, text: &str, permit: Option<Hash>) -> Result<Hash, String> {
-        self.post_report(Some(*issue), ReportMsg::Reply { text: text.into(), permit }, false, None)
+    pub fn reply_issue(
+        &mut self,
+        issue: &Hash,
+        text: &str,
+        permit: Option<Hash>,
+    ) -> Result<Hash, String> {
+        self.post_report(
+            Some(*issue),
+            ReportMsg::Reply {
+                text: text.into(),
+                permit,
+            },
+            false,
+            None,
+        )
     }
 
-    pub fn forward_issue(&mut self, issue: &Hash, channel: &str, receipt: &str) -> Result<Hash, String> {
-        self.post_report(Some(*issue), ReportMsg::Forwarded { channel: channel.into(), receipt: receipt.into() }, false, None)
+    pub fn forward_issue(
+        &mut self,
+        issue: &Hash,
+        channel: &str,
+        receipt: &str,
+    ) -> Result<Hash, String> {
+        self.post_report(
+            Some(*issue),
+            ReportMsg::Forwarded {
+                channel: channel.into(),
+                receipt: receipt.into(),
+            },
+            false,
+            None,
+        )
     }
 
     fn post_as_role(&mut self, role: &str, msg: ReportMsg) -> Result<Hash, String> {
@@ -385,7 +534,9 @@ impl Node {
             .iter()
             .filter(|i| Some(i.signer) == mirror.as_ref())
             .filter_map(|i| match ReportMsg::decode(i.content) {
-                Some(ReportMsg::Permit { source, source_id, .. }) => Some((source, source_id)),
+                Some(ReportMsg::Permit {
+                    source, source_id, ..
+                }) => Some((source, source_id)),
                 _ => None,
             })
             .collect();
@@ -394,7 +545,14 @@ impl Node {
             if have.contains(&(p.source.clone(), p.id.clone())) {
                 continue;
             }
-            let msg = ReportMsg::Permit { source: p.source.clone(), source_id: p.id.clone(), kind: p.kind.clone(), cell: cell(p.lat, p.lon, CELL_PRECISION), start: p.start.clone(), end: p.end.clone() };
+            let msg = ReportMsg::Permit {
+                source: p.source.clone(),
+                source_id: p.id.clone(),
+                kind: p.kind.clone(),
+                cell: cell(p.lat, p.lon, CELL_PRECISION),
+                start: p.start.clone(),
+                end: p.end.clone(),
+            };
             self.post_as_role("mirror", msg)?;
             n += 1;
         }
@@ -411,6 +569,10 @@ impl Node {
         let Ok(copy) = self.reports() else {
             return vec![];
         };
-        messages(copy).into_iter().filter(|m| matches!(&m.msg, ReportMsg::Report { key, .. } if key.id() == *issue)).map(|m| m.item.id).collect()
+        messages(copy)
+            .into_iter()
+            .filter(|m| matches!(&m.msg, ReportMsg::Report { key, .. } if key.id() == *issue))
+            .map(|m| m.item.id)
+            .collect()
     }
 }

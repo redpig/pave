@@ -13,7 +13,9 @@ fn join(town: &mut Node, name: &str, dir: &std::path::Path, credits: &[u64]) -> 
     let e = town.enroll(&req, "hardware", credits).unwrap();
     let mut n = Node::finish_enrollment(pending, &e, name, &dir.join(name)).unwrap();
     for _ in 0..2 {
-        let t = town.answer_refill(&n.refill_request(&town.refill_terms().unwrap(), 16).unwrap()).unwrap();
+        let t = town
+            .answer_refill(&n.refill_request(&town.refill_terms().unwrap(), 16).unwrap())
+            .unwrap();
         n.take_tickets(t);
     }
     n
@@ -36,7 +38,11 @@ fn meet(a: &mut Node, b: &mut Node) {
 
 /// The poster's view of who replied, by reply order.
 fn repliers(n: &Node, job: &Hash) -> Vec<pave_kernel::Credential> {
-    n.jobs()[job].replies.iter().map(|(c, _)| c.clone()).collect()
+    n.jobs()[job]
+        .replies
+        .iter()
+        .map(|(c, _)| c.clone())
+        .collect()
 }
 
 #[test]
@@ -53,13 +59,19 @@ fn lifeguards_are_known_before_the_job() {
     // who it hires, not a certificate. Ana replies anonymously, then shows
     // her trade key, and the work counts toward it.
     let key = ana.trade_key().unwrap();
-    let helper = camp.post_known("Swim lesson helper", 20, Known::Stable).unwrap();
+    let helper = camp
+        .post_known("Swim lesson helper", 20, Known::Stable)
+        .unwrap();
     sync(&mut town, &mut [&mut camp, &mut ana]);
     ana.reply(helper, "happy to").unwrap();
     sync(&mut town, &mut [&mut camp, &mut ana]);
     let w = repliers(&camp, &helper)[0].clone();
-    assert!(camp.accept(helper, w.clone()).unwrap_err().contains("must be known"));
-    camp.accept_shown(helper, w, ana.show_known(helper).unwrap()).unwrap();
+    assert!(camp
+        .accept(helper, w.clone())
+        .unwrap_err()
+        .contains("must be known"));
+    camp.accept_shown(helper, w, ana.show_known(helper).unwrap())
+        .unwrap();
     sync(&mut town, &mut [&mut camp, &mut ana]);
     ana.done(helper).unwrap();
     sync(&mut town, &mut [&mut camp, &mut ana]);
@@ -75,7 +87,9 @@ fn lifeguards_are_known_before_the_job() {
     ana.take_badge(&d, badge).unwrap();
     let guard = Known::Badge(d.roster.clone());
 
-    let job = pool.post_known("Lifeguard, Saturday 10-4", 40, guard.clone()).unwrap();
+    let job = pool
+        .post_known("Lifeguard, Saturday 10-4", 40, guard.clone())
+        .unwrap();
     sync(&mut town, &mut [&mut pool, &mut ana, &mut bea]);
     assert_eq!(ana.jobs()[&job].known, Some(guard.clone()));
     // Both reply anonymously: nothing in a reply links to a badge.
@@ -89,32 +103,63 @@ fn lifeguards_are_known_before_the_job() {
     let bea_w = r.iter().find(|c| bea.mine.contains(*c)).unwrap().clone();
 
     // The pool can't just give it to someone: the job needs a badge.
-    assert!(pool.accept(job, bea_w.clone()).unwrap_err().contains("must be known"));
+    assert!(pool
+        .accept(job, bea_w.clone())
+        .unwrap_err()
+        .contains("must be known"));
     assert!(bea.show_known(job).unwrap_err().contains("no badge"));
     // Ana's badge, signed for Bea's reply, isn't Bea's; nor is Ana's ticket
     // with Bea's own key signing for her.
     let shown = ana.show_known(job).unwrap();
-    assert!(pool.accept_shown(job, bea_w.clone(), shown.clone()).is_err());
+    assert!(pool
+        .accept_shown(job, bea_w.clone(), shown.clone())
+        .is_err());
     let bea_key = bea.trade_key().unwrap();
-    let sig = bea.view.scheme().sign(&bea.key, &bea_key, &pave_board::board::trade_bytes(&job, &bea_w), None);
-    let mixed = Shown { ticket: shown.ticket.clone(), trade: Trade { key: bea_key, sig } };
+    let sig = bea.view.scheme().sign(
+        &bea.key,
+        &bea_key,
+        &pave_board::board::trade_bytes(&job, &bea_w),
+        None,
+    );
+    let mixed = Shown {
+        ticket: shown.ticket.clone(),
+        trade: Trade { key: bea_key, sig },
+    };
     assert!(pool.accept_shown(job, bea_w.clone(), mixed).is_err());
     // A badge from another roster (the swim club's) isn't a lifeguard badge.
     let club = town.open_dispatch("Swim club").unwrap();
     let bea_key = bea.trade_key().unwrap();
     let other = town.issue_badge(&club.id, "swim-3", &bea_key).unwrap();
-    let sig = bea.view.scheme().sign(&bea.key, &bea_key, &pave_board::board::trade_bytes(&job, &bea_w), None);
-    let wrong_roster = Shown { ticket: Some(other), trade: Trade { key: bea_key, sig } };
+    let sig = bea.view.scheme().sign(
+        &bea.key,
+        &bea_key,
+        &pave_board::board::trade_bytes(&job, &bea_w),
+        None,
+    );
+    let wrong_roster = Shown {
+        ticket: Some(other),
+        trade: Trade { key: bea_key, sig },
+    };
     assert!(pool.accept_shown(job, bea_w.clone(), wrong_roster).is_err());
-    pool.accept_shown(job, ana_w.clone(), shown.clone()).unwrap();
+    pool.accept_shown(job, ana_w.clone(), shown.clone())
+        .unwrap();
     sync(&mut town, &mut [&mut pool, &mut ana, &mut bea]);
     let j = bea.jobs()[&job].clone();
-    assert_eq!((j.status, j.known_as.as_deref()), (Status::Accepted, Some("guard-12")));
-    assert_eq!(j.contractors.get(&ana_w), Some(&contractor(&key)), "the work counts toward the badge key");
+    assert_eq!(
+        (j.status, j.known_as.as_deref()),
+        (Status::Accepted, Some("guard-12"))
+    );
+    assert_eq!(
+        j.contractors.get(&ana_w),
+        Some(&contractor(&key)),
+        "the work counts toward the badge key"
+    );
 
     // Readers ignore an accept for a badged job without a good badge, even
     // from the poster with a good assignment.
-    let job2 = pool.post_known("Lifeguard, Sunday 10-4", 40, guard.clone()).unwrap();
+    let job2 = pool
+        .post_known("Lifeguard, Sunday 10-4", 40, guard.clone())
+        .unwrap();
     sync(&mut town, &mut [&mut pool, &mut ana, &mut bea]);
     bea.reply(job2, "Sunday works").unwrap();
     sync(&mut town, &mut [&mut pool, &mut ana, &mut bea]);
@@ -122,10 +167,32 @@ fn lifeguards_are_known_before_the_job() {
     let j2 = pool.jobs()[&job2].clone();
     let s = pool.view.scheme().clone();
     let state = pave_board::board::job_state(&j2.means);
-    let rec = pave_kernel::sign(&s, &pool.key, &j2.poster, pave_kernel::Op::Transfer { state, to: w2.clone(), receipt: pave_board::board::accept_receipt(&job2, &w2) });
+    let rec = pave_kernel::sign(
+        &s,
+        &pool.key,
+        &j2.poster,
+        pave_kernel::Op::Transfer {
+            state,
+            to: w2.clone(),
+            receipt: pave_board::board::accept_receipt(&job2, &w2),
+        },
+    );
     for badge in [None, Some(Box::new(shown.clone()))] {
-        let msg = BoardMsg::Accept { job: job2, worker: w2.clone(), assignment: Some(rec.clone()), badge };
-        pool.compose(&pool.town.jobs.scope.clone(), &j2.poster, msg.kind(), msg.job(), msg.encode(), None).unwrap();
+        let msg = BoardMsg::Accept {
+            job: job2,
+            worker: w2.clone(),
+            assignment: Some(rec.clone()),
+            badge,
+        };
+        pool.compose(
+            &pool.town.jobs.scope.clone(),
+            &j2.poster,
+            msg.kind(),
+            msg.job(),
+            msg.encode(),
+            None,
+        )
+        .unwrap();
     }
     sync(&mut town, &mut [&mut pool, &mut bea]);
     assert_eq!(bea.jobs()[&job2].status, Status::Open);
@@ -134,43 +201,60 @@ fn lifeguards_are_known_before_the_job() {
     // her badge key's thread.
     ana.done(job).unwrap();
     sync(&mut town, &mut [&mut pool, &mut ana]);
-    pool.pay_and_vouch(job, "lifeguard", "on time, sharp", None).unwrap();
+    pool.pay_and_vouch(job, "lifeguard", "on time, sharp", None)
+        .unwrap();
     sync(&mut town, &mut [&mut pool, &mut ana, &mut camp]);
-    assert_eq!(camp.reputation(&contractor(&key)).0.get("lifeguard"), Some(&1));
+    assert_eq!(
+        camp.reputation(&contractor(&key)).0.get("lifeguard"),
+        Some(&1)
+    );
 
     // A camp posts another badged job. Ana replies under a fresh key again,
     // shows the same badge, and her reputation grows on the same stable id.
-    let job3 = camp.post_known("Lifeguard, swim lessons", 30, guard.clone()).unwrap();
+    let job3 = camp
+        .post_known("Lifeguard, swim lessons", 30, guard.clone())
+        .unwrap();
     sync(&mut town, &mut [&mut camp, &mut ana]);
     ana.reply(job3, "I can").unwrap();
     sync(&mut town, &mut [&mut camp, &mut ana]);
     let w3 = repliers(&camp, &job3)[0].clone();
     assert_ne!(w3, ana_w, "replies don't link to each other");
-    camp.accept_shown(job3, w3, ana.show_known(job3).unwrap()).unwrap();
+    camp.accept_shown(job3, w3, ana.show_known(job3).unwrap())
+        .unwrap();
     sync(&mut town, &mut [&mut camp, &mut ana]);
     ana.done(job3).unwrap();
     sync(&mut town, &mut [&mut camp, &mut ana]);
-    camp.pay_and_vouch(job3, "lifeguard", "great with kids", None).unwrap();
+    camp.pay_and_vouch(job3, "lifeguard", "great with kids", None)
+        .unwrap();
     sync(&mut town, &mut [&mut pool, &mut ana, &mut camp]);
     let rep = pool.reputation(&contractor(&key)).0;
-    assert_eq!((rep.get("lifeguard"), rep.get("swim")), (Some(&2), Some(&1)));
+    assert_eq!(
+        (rep.get("lifeguard"), rep.get("swim")),
+        (Some(&2), Some(&1))
+    );
 
     // The roster revokes guard-12: a poster who has heard won't accept her.
     town.revoke_badge(&d.id, "guard-12").unwrap();
     meet(&mut pool, &mut town);
-    let job4 = pool.post_known("Lifeguard, next Saturday", 40, guard.clone()).unwrap();
+    let job4 = pool
+        .post_known("Lifeguard, next Saturday", 40, guard.clone())
+        .unwrap();
     sync(&mut town, &mut [&mut pool, &mut ana]);
     ana.reply(job4, "again?").unwrap();
     sync(&mut town, &mut [&mut pool, &mut ana]);
     let w4 = repliers(&pool, &job4)[0].clone();
-    assert!(pool.accept_shown(job4, w4, ana.show_known(job4).unwrap()).unwrap_err().contains("revoked"));
+    assert!(pool
+        .accept_shown(job4, w4, ana.show_known(job4).unwrap())
+        .unwrap_err()
+        .contains("revoked"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Post `msg` as `signer` without the wallet's own checks.
 fn raw(n: &mut Node, signer: &pave_kernel::Credential, msg: BoardMsg) {
     let scope = n.town.jobs.scope;
-    n.compose(&scope, signer, msg.kind(), msg.job(), msg.encode(), None).unwrap();
+    n.compose(&scope, signer, msg.kind(), msg.job(), msg.encode(), None)
+        .unwrap();
 }
 
 #[test]
@@ -184,11 +268,17 @@ fn a_no_show_is_released_only_after_due() {
 
     // A job due in an hour: the pool can't release Bea before then, and
     // readers ignore a release posted anyway.
-    let later = pool.post_about("Lifeguard, tomorrow", 40, None, None, Some(now + 3600)).unwrap();
+    let later = pool
+        .post_about("Lifeguard, tomorrow", 40, None, None, Some(now + 3600))
+        .unwrap();
     // A job that was due a minute ago, which Bea didn't finish; and another
     // she did.
-    let missed = pool.post_about("Lifeguard, this morning", 40, None, None, Some(now - 60)).unwrap();
-    let finished = pool.post_about("Lifeguard, early shift", 40, None, None, Some(now - 60)).unwrap();
+    let missed = pool
+        .post_about("Lifeguard, this morning", 40, None, None, Some(now - 60))
+        .unwrap();
+    let finished = pool
+        .post_about("Lifeguard, early shift", 40, None, None, Some(now - 60))
+        .unwrap();
     sync(&mut town, &mut [&mut pool, &mut bea]);
     for j in [later, missed, finished] {
         bea.reply(j, "yes").unwrap();
@@ -202,7 +292,10 @@ fn a_no_show_is_released_only_after_due() {
     bea.done(finished).unwrap();
     sync(&mut town, &mut [&mut pool, &mut bea]);
 
-    assert!(pool.release(later).unwrap_err().contains("not yet past due"));
+    assert!(pool
+        .release(later)
+        .unwrap_err()
+        .contains("not yet past due"));
     assert!(pool.release(finished).unwrap_err().contains("not Accepted"));
     let poster = pool.jobs()[&later].poster.clone();
     raw(&mut pool, &poster, BoardMsg::Release { job: later });
@@ -213,7 +306,14 @@ fn a_no_show_is_released_only_after_due() {
     raw(&mut bea, &w, BoardMsg::Release { job: missed });
     sync(&mut town, &mut [&mut pool, &mut bea]);
     let status = |n: &Node, j: &Hash| n.jobs()[j].status.clone();
-    assert_eq!((status(&bea, &later), status(&bea, &finished), status(&bea, &missed)), (Status::Accepted, Status::Done, Status::Accepted));
+    assert_eq!(
+        (
+            status(&bea, &later),
+            status(&bea, &finished),
+            status(&bea, &missed)
+        ),
+        (Status::Accepted, Status::Done, Status::Accepted)
+    );
 
     pool.release(missed).unwrap();
     sync(&mut town, &mut [&mut pool, &mut bea]);

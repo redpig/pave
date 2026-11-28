@@ -55,7 +55,7 @@ We do not assume that any role behaves well (principle 10), that devices are tam
 11. Recovery
 12. Boards and the job board
 13. Operator state and role keys
-14. Payment bridge and redemption
+14. Ramps
 15. Cross-cutting: the class break
 16. Civic reports
 17. Parcels
@@ -203,6 +203,7 @@ We do not assume that any role behaves well (principle 10), that devices are tam
 | A7 | Redirect a payment at a point of sale | Merchant identity tickets; receive-only tickets for points of sale | n/a | Same | Gap |
 | A8 | Large offline exposure | `max_per_holder`, `max_spend`, validation thresholds published in epoch data | Validate online above a threshold | Validation thresholds; incentives for high value | Partial: `max_per_holder` in schemas; Gap: thresholds |
 | A9 | A payment reveals the payer's other coins, or coins before the payer has seen the invoice | The invoice comes first; the offer names one coin, and only that coin's provenance travels, as id prefixes the payee can decline | n/a | 3-tap private mode | Built **+** (payee learns no other coins; the change output of a split is visible to it, as in Briolette) |
+| A10 | Pay an invoice with a coin in another credit, such as a ramp's credit for the town's cash, or the reverse | An invoice names its credit (none for the town's cash); the payer offers a coin in it and the payee refuses any other when judging and when taking the payment | n/a | n/a | **Fixed**: before, any value coin covered any invoice (mutations `judge: credit`, `take: credit`) |
 
 ---
 
@@ -328,9 +329,25 @@ Specified as a holder-created capability (spec C9), not yet built
 
 ---
 
-## 14. Payment bridge and redemption
+## 14. Ramps
 
-Not built, by design. Test credit only until there is an accountable operator (principle 24). Briolette's bridge (Ethereum and Bitcoin deposits) was flagged for separate review (audit I-4); pave will need the same.
+`board/src/ramp.rs`, `ramp/` ([spec/ramps.md](../spec/ramps.md))
+
+**Attack surface:** deposits to the pool and the claims they commit to; the ramp's mints and splits; withdrawal invoices and the payments against them; the payout transaction and its co-signatures; the epoch anchors.
+
+| # | Attack | Prevent | React | Briolette | Status |
+|---|---|---|---|---|---|
+| RP1 | A deposit credited twice | The ramp credits each outpoint once | Each credit's receipt names its deposit, so a second split off a mint with the same receipt is in anyone's `ramp_ledger`, and what's outstanding then exceeds the pool | Deposit nullifiers | Built (mutations `scan: credited once`, `scan: remember`, `ledger: double`) |
+| RP2 | Credit for a deposit that isn't final | `min_conf` confirmations before crediting | A ruling against the ramp | Confirmations | Built (mutation `scan: min_conf`); Gap: a reorg deeper than `min_conf` isn't handled, and the in-memory chain has no reorgs |
+| RP3 | Someone else claims a deposit | The deposit's `OP_RETURN` commits to the ramp's schema, the depositor's fresh credential and a nonce; only the matching claim credits, and only to that credential | n/a | Same | Built |
+| RP4 | The ramp pays itself out of the pool | The pool's co-signed leaf needs the ramp and `k` of the `n` co-signers; the key path is unspendable (NUMS internal key) | The co-signers alone can move the pool after the recovery timelock (4,320 blocks) | Same Taproot scripts | Built (mutations `verify: *`, `script: k`); Gap: the recovery leaf is in the tree but not exercised |
+| RP5 | Withdraw with a coin also spent elsewhere | The challenge period, counted from when the ramp took the payment; each co-signer checks its own view for evidence or a conflict on the coin before signing | A dispute against the holder, by the evidence | Challenge period, fraud proofs | Built (mutations `review: challenge`, `review: evidence`, `review: conflicts`); the period must cover the town's detection window |
+| RP6 | The ramp redirects a payout: another address or amount, change to itself, or inputs from outside the pool | The withdrawal's payment commits to the address, amount and a nonce; each co-signer checks the payout's first output pays that address its share, and every other input and output is the pool's | Refused signatures | n/a | Built (mutations `review: memo`, `review: address`, `review: value`, `review: change`, `review: prevouts`) |
+| RP7 | Withdraw by paying in another credit, such as the town's cash | Invoices name their credit and wallets refuse a coin in any other (A10); each co-signer also checks the paid coin is the ramp's | n/a | n/a | Built (mutations `review: credit`, `judge: credit`, `take: credit`) |
+| RP8 | The ramp issues more than its pool holds | Its budget caps the credit; the ledger (minted less retired) is public in the records, the pool's balance on the chain, and each epoch's anchor commits to the ledger and the town's tick head | A ruling against the ramp; its credit is its own schema, so the town's cash is unaffected | Anchors | Built (detection) |
+| RP9 | Dust or uneconomic withdrawals | A withdrawal must leave at least 330 sats after the fee and the miners' share | n/a | n/a | Built (mutation `dust floor`) |
+| RP10 | The ramp and enough co-signers collude | The co-signers are elected and accountable; the threshold is public | Members stop accepting the ramp's credit | Same | Gap: BitVM or a fraud proof on chain |
+| RP11 | The pool's script check here differs from Bitcoin's | — | — | — | Gap: spends are checked by our own reading of the leaf (`Pool::verify_spend`), not Bitcoin's interpreter; a regtest bitcoind behind the same `L1` trait would settle it |
 
 ---
 
