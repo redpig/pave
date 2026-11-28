@@ -22,7 +22,7 @@
 use crate::node::{apply_ok, Node};
 use pave_kernel::{Credential, Hash, Op, Record, Scheme, Sig};
 use pave_protocol::accept::ancestry;
-use pave_protocol::{cheat_list, check, head, SignedTicket, Standing};
+use pave_protocol::{check, cheat_list, head, SignedTicket, Standing};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -91,21 +91,10 @@ impl Node {
     /// of an order's binding.
     pub fn invoice_for(&mut self, amount: u64, memo: Hash) -> Result<Invoice, String> {
         let to = self.fresh()?;
-        let ticket = self
-            .know
-            .tickets
-            .get(&to)
-            .cloned()
-            .ok_or("no ticket for a fresh credential")?;
+        let ticket = self.know.tickets.get(&to).cloned().ok_or("no ticket for a fresh credential")?;
         self.invoices.insert(to.clone(), (amount, memo));
         self.save()?;
-        Ok(Invoice {
-            amount,
-            memo,
-            to,
-            ticket,
-            credit: None,
-        })
+        Ok(Invoice { amount, memo, to, ticket, credit: None })
     }
 
     /// Payee: an invoice to be paid in another credit than the town's cash,
@@ -122,10 +111,7 @@ impl Node {
 
     /// Payee: the credit an open invoice to `to` is in.
     fn invoiced_credit(&self, to: &Credential) -> Hash {
-        self.invoice_credit
-            .get(to)
-            .copied()
-            .unwrap_or(self.town.cash)
+        self.invoice_credit.get(to).copied().unwrap_or(self.town.cash)
     }
 
     /// Payer: is the payee's ticket one this wallet would pay to?
@@ -135,18 +121,12 @@ impl Node {
             return Err("the invoice's ticket isn't for its credential, or isn't signed".into());
         }
         let policy = self.policy();
-        let seq = policy
-            .trusted_clerks
-            .get(&inv.ticket.clerk)
-            .ok_or("the invoice's ticket is from a clerk this wallet doesn't trust")?;
+        let seq = policy.trusted_clerks.get(&inv.ticket.clerk).ok_or("the invoice's ticket is from a clerk this wallet doesn't trust")?;
         if *seq != inv.ticket.ticket.sequence {
             return Err("the invoice's ticket counts by another sequence".into());
         }
         let h = head(&self.view, seq).ok_or("no epoch for the clerk's sequence")?;
-        let schema = self
-            .view
-            .schema(&self.town.cash)
-            .ok_or("unknown cash schema")?;
+        let schema = self.view.schema(&self.town.cash).ok_or("unknown cash schema")?;
         if let Some(soft) = schema.soft_expiry {
             if h.number >= inv.ticket.ticket.epoch.saturating_add(soft) {
                 return Err("the invoice's ticket has expired".into());
@@ -167,97 +147,38 @@ impl Node {
     /// Every record in a coin's provenance.
     pub(crate) fn provenance(&self, state: &Hash) -> Vec<Record> {
         // In the view's order, so a receiver can apply them one by one.
-        let ids: BTreeSet<Hash> = ancestry(&self.view, state)
-            .iter()
-            .filter_map(|s| self.view.creator(s))
-            .map(|r| r.id())
-            .collect();
-        self.view
-            .records()
-            .iter()
-            .filter(|r| ids.contains(&r.id()))
-            .cloned()
-            .collect()
+        let ids: BTreeSet<Hash> = ancestry(&self.view, state).iter().filter_map(|s| self.view.creator(s)).map(|r| r.id()).collect();
+        self.view.records().iter().filter(|r| ids.contains(&r.id())).cloned().collect()
     }
 
     /// Payer: offer a coin that covers the invoice.
     pub fn offer(&self, inv: &Invoice) -> Result<Offer, String> {
-        let coin = self
-            .my_coins_in(&inv.credit.unwrap_or(self.town.cash))
-            .into_iter()
-            .find(|c| c.amount >= inv.amount)
-            .ok_or("no single coin covers it")?;
-        let ids = self
-            .provenance(&coin.state)
-            .iter()
-            .map(|r| prefix(&r.id()))
-            .collect();
-        Ok(Offer {
-            to: inv.to.clone(),
-            state: coin.state,
-            ids,
-        })
+        let coin = self.my_coins_in(&inv.credit.unwrap_or(self.town.cash)).into_iter().find(|c| c.amount >= inv.amount).ok_or("no single coin covers it")?;
+        let ids = self.provenance(&coin.state).iter().map(|r| prefix(&r.id())).collect();
+        Ok(Offer { to: inv.to.clone(), state: coin.state, ids })
     }
 
     /// Payee: the offered ids this wallet lacks.
     pub fn lacks(&self, offer: &Offer) -> Vec<Prefix> {
-        let have: BTreeSet<Prefix> = self
-            .view
-            .records()
-            .iter()
-            .map(|r| prefix(&r.id()))
-            .collect();
-        offer
-            .ids
-            .iter()
-            .filter(|p| !have.contains(*p))
-            .copied()
-            .collect()
+        let have: BTreeSet<Prefix> = self.view.records().iter().map(|r| prefix(&r.id())).collect();
+        offer.ids.iter().filter(|p| !have.contains(*p)).copied().collect()
     }
 
     /// Payer: the records the payee lacks, the tickets they name, and standing
     /// against `cheats`.
-    pub fn propose(
-        &self,
-        offer: &Offer,
-        lacks: &[Prefix],
-        cheats: &[(Vec<u8>, Vec<u8>)],
-    ) -> Result<Proposal, String> {
+    pub fn propose(&self, offer: &Offer, lacks: &[Prefix], cheats: &[(Vec<u8>, Vec<u8>)]) -> Result<Proposal, String> {
         let want: BTreeSet<&Prefix> = lacks.iter().collect();
-        let records: Vec<Record> = self
-            .provenance(&offer.state)
-            .into_iter()
-            .filter(|r| want.contains(&prefix(&r.id())))
-            .collect();
+        let records: Vec<Record> = self.provenance(&offer.state).into_iter().filter(|r| want.contains(&prefix(&r.id()))).collect();
         let coin = self.view.coin(&offer.state).ok_or("the coin is gone")?;
-        let named: BTreeSet<&Credential> = records
-            .iter()
-            .flat_map(|r| std::iter::once(&r.signer).chain(crate::node::op_recipients(&r.op)))
-            .chain(coin.history.iter())
-            .collect();
-        let tickets = self
-            .know
-            .tickets
-            .values()
-            .filter(|t| named.contains(&t.ticket.credential))
-            .cloned()
-            .collect();
-        let standing = Standing::prove(self.view.scheme(), &self.key, &coin.holder, cheats)
-            .ok_or("this wallet is a known cheat")?;
-        Ok(Proposal {
-            to: offer.to.clone(),
-            state: offer.state,
-            records,
-            tickets,
-            standing,
-        })
+        let named: BTreeSet<&Credential> = records.iter().flat_map(|r| std::iter::once(&r.signer).chain(crate::node::op_recipients(&r.op))).chain(coin.history.iter()).collect();
+        let tickets = self.know.tickets.values().filter(|t| named.contains(&t.ticket.credential)).cloned().collect();
+        let standing = Standing::prove(self.view.scheme(), &self.key, &coin.holder, cheats).ok_or("this wallet is a known cheat")?;
+        Ok(Proposal { to: offer.to.clone(), state: offer.state, records, tickets, standing })
     }
 
     /// Payee: judge the coin as it stands.
     pub fn judge(&mut self, p: &Proposal) -> PayVerdict {
-        let Some(&(amount, _)) = self.invoices.get(&p.to) else {
-            return PayVerdict::Refuse("no such invoice".into());
-        };
+        let Some(&(amount, _)) = self.invoices.get(&p.to) else { return PayVerdict::Refuse("no such invoice".into()) };
         let s = self.view.scheme().clone();
         for r in &p.records {
             let _ = self.view.apply(r);
@@ -268,9 +189,7 @@ impl Node {
         if p.standing.verify(&s) {
             self.know.add_standing(&s, p.standing.clone());
         }
-        let Some(coin) = self.view.coin(&p.state).cloned() else {
-            return PayVerdict::Refuse("unknown coin, or already spent".into());
-        };
+        let Some(coin) = self.view.coin(&p.state).cloned() else { return PayVerdict::Refuse("unknown coin, or already spent".into()) };
         if coin.amount < amount {
             return PayVerdict::Refuse("the coin doesn't cover the invoice".into());
         }
@@ -278,21 +197,10 @@ impl Node {
             return PayVerdict::Refuse("the coin is in another credit than the invoice".into());
         }
         let cheats = cheat_list(&self.view);
-        if !self
-            .know
-            .standing
-            .get(&coin.holder)
-            .is_some_and(|st| st.covers(&cheats))
-        {
+        if !self.know.standing.get(&coin.holder).is_some_and(|st| st.covers(&cheats)) {
             return PayVerdict::NeedStanding(cheats);
         }
-        match check(
-            &self.view,
-            &self.know,
-            &p.state,
-            &coin.holder,
-            &self.policy(),
-        ) {
+        match check(&self.view, &self.know, &p.state, &coin.holder, &self.policy()) {
             Ok(()) => PayVerdict::Accept,
             Err(e) => PayVerdict::Refuse(format!("{e:?}")),
         }
@@ -300,28 +208,12 @@ impl Node {
 
     /// Payer: sign the payment, keeping it pending until acknowledged.
     pub fn pay_invoice(&mut self, inv: &Invoice, state: Hash) -> Result<Record, String> {
-        let coin = self
-            .view
-            .coin(&state)
-            .filter(|c| self.mine.contains(&c.holder))
-            .cloned()
-            .ok_or("not a coin this wallet holds")?;
+        let coin = self.view.coin(&state).filter(|c| self.mine.contains(&c.holder)).cloned().ok_or("not a coin this wallet holds")?;
         let op = if coin.amount == inv.amount {
-            Op::Transfer {
-                state,
-                to: inv.to.clone(),
-                receipt: inv.memo,
-            }
+            Op::Transfer { state, to: inv.to.clone(), receipt: inv.memo }
         } else {
             let change = self.fresh()?;
-            Op::Split {
-                state,
-                parts: vec![
-                    (inv.amount, inv.to.clone()),
-                    (coin.amount - inv.amount, change),
-                ],
-                receipt: inv.memo,
-            }
+            Op::Split { state, parts: vec![(inv.amount, inv.to.clone()), (coin.amount - inv.amount, change)], receipt: inv.memo }
         };
         let rec = pave_kernel::sign(self.view.scheme(), &self.key, &coin.holder, op);
         let rec = self.guard(rec)?;
@@ -337,10 +229,7 @@ impl Node {
     pub fn take_payment(&mut self, rec: &Record) -> Result<Ack, String> {
         let (to, out) = match &rec.op {
             Op::Transfer { to, receipt, .. } => (to.clone(), (0u32, *receipt)),
-            Op::Split { parts, receipt, .. } => (
-                parts.first().ok_or("empty split")?.1.clone(),
-                (0u32, *receipt),
-            ),
+            Op::Split { parts, receipt, .. } => (parts.first().ok_or("empty split")?.1.clone(), (0u32, *receipt)),
             _ => return Err("not a payment".into()),
         };
         let &(amount, memo) = self.invoices.get(&to).ok_or("no such invoice")?;
@@ -349,44 +238,27 @@ impl Node {
         }
         apply_ok(&mut self.view, rec)?;
         let state = rec.output(out.0);
-        let coin = self
-            .view
-            .coin(&state)
-            .cloned()
-            .ok_or("the payment's coin is missing")?;
+        let coin = self.view.coin(&state).cloned().ok_or("the payment's coin is missing")?;
         if coin.amount != amount {
             return Err(format!("paid {}, invoiced {amount}", coin.amount));
         }
         if coin.schema != self.invoiced_credit(&to) {
             return Err("paid in another credit than the invoice".into());
         }
-        check(&self.view, &self.know, &state, &rec.signer, &self.policy())
-            .map_err(|e| format!("{e:?}"))?;
+        check(&self.view, &self.know, &state, &rec.signer, &self.policy()).map_err(|e| format!("{e:?}"))?;
         self.invoices.remove(&to);
         self.invoice_credit.remove(&to);
         self.paid.insert(rec.id(), to.clone());
-        let sig = self
-            .view
-            .scheme()
-            .sign(&self.key, &to, &ack_bytes(&rec.id()), None);
+        let sig = self.view.scheme().sign(&self.key, &to, &ack_bytes(&rec.id()), None);
         self.save()?;
-        Ok(Ack {
-            record: rec.id(),
-            sig,
-        })
+        Ok(Ack { record: rec.id(), sig })
     }
 
     /// Payee: acknowledge a payment taken before (a resend after a dropped
     /// connection).
     pub fn re_ack(&self, rec: &Record) -> Option<Ack> {
         let to = self.paid.get(&rec.id())?;
-        Some(Ack {
-            record: rec.id(),
-            sig: self
-                .view
-                .scheme()
-                .sign(&self.key, to, &ack_bytes(&rec.id()), None),
-        })
+        Some(Ack { record: rec.id(), sig: self.view.scheme().sign(&self.key, to, &ack_bytes(&rec.id()), None) })
     }
 
     /// Payer: check the payee's acknowledgment and settle the payment.
@@ -396,12 +268,7 @@ impl Node {
             Op::Split { parts, .. } => &parts[0].1,
             _ => return Err("not a payment".into()),
         };
-        if ack.record != rec.id()
-            || !self
-                .view
-                .scheme()
-                .verify(to, &ack_bytes(&ack.record), None, &ack.sig)
-        {
+        if ack.record != rec.id() || !self.view.scheme().verify(to, &ack_bytes(&ack.record), None, &ack.sig) {
             return Err("the acknowledgment isn't the payee's".into());
         }
         self.pending.retain(|r| r != rec);

@@ -81,15 +81,7 @@ pub const CLOCK_SLACK: u64 = 600;
 
 /// The post token schema: one post each, not passed on.
 pub fn post_schema() -> Schema {
-    Schema {
-        label: "board post token".into(),
-        divisible: false,
-        soft_expiry: Some(4),
-        hard_expiry: Some(8),
-        offline_transfers: Some(1),
-        max_per_holder: Some(1),
-        sequence: None,
-    }
+    Schema { label: "board post token".into(), divisible: false, soft_expiry: Some(4), hard_expiry: Some(8), offline_transfers: Some(1), max_per_holder: Some(1), sequence: None }
 }
 
 /// What a member knows about one board: its scope (the board's name), the
@@ -147,29 +139,12 @@ impl Post {
     /// The post's name: fixed when written, before a server proposes the
     /// epoch and clock.
     pub fn name(&self, signer: &Credential) -> Hash {
-        name(
-            &self.board,
-            &self.kind,
-            &self.thread,
-            &self.content,
-            &self.nonce,
-            signer,
-        )
+        name(&self.board, &self.kind, &self.thread, &self.content, &self.nonce, signer)
     }
 }
 
-fn name(
-    board: &Hash,
-    kind: &str,
-    thread: &Option<Hash>,
-    content: &Hash,
-    nonce: &[u8; 16],
-    signer: &Credential,
-) -> Hash {
-    hash_of(
-        "pave/board/name/v1",
-        &(board, kind, thread, content, nonce, signer),
-    )
+fn name(board: &Hash, kind: &str, thread: &Option<Hash>, content: &Hash, nonce: &[u8; 16], signer: &Credential) -> Hash {
+    hash_of("pave/board/name/v1", &(board, kind, thread, content, nonce, signer))
 }
 
 pub fn content_hash(content: &[u8]) -> Hash {
@@ -191,6 +166,7 @@ pub fn count_basename(purpose: &Hash) -> Vec<u8> {
     encode(&("pave/board/count/v1", purpose))
 }
 
+
 /// A post written and waiting for a server.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Draft {
@@ -209,14 +185,7 @@ pub struct Draft {
 
 impl Draft {
     pub fn name(&self) -> Hash {
-        name(
-            &self.board,
-            &self.kind,
-            &self.thread,
-            &content_hash(&self.content),
-            &self.nonce,
-            &self.signer,
-        )
+        name(&self.board, &self.kind, &self.thread, &content_hash(&self.content), &self.nonce, &self.signer)
     }
 }
 
@@ -316,14 +285,11 @@ impl Item<'_> {
     /// The author's class and pseudonym for `purpose`, if the post counts one
     /// person for it.
     pub fn counted(&self, purpose: &Hash) -> Option<(String, Vec<u8>)> {
-        self.tag
-            .filter(|t| &t.purpose == purpose)
-            .map(|t| (t.class.clone(), t.nym.clone()))
+        self.tag.filter(|t| &t.purpose == purpose).map(|t| (t.class.clone(), t.nym.clone()))
     }
     /// The ruled-list entry that would rule this post's author out.
     pub fn cheat(&self) -> Option<Cheat> {
-        self.tag
-            .map(|t| (count_basename(&t.purpose), t.nym.clone()))
+        self.tag.map(|t| (count_basename(&t.purpose), t.nym.clone()))
     }
 }
 
@@ -341,25 +307,10 @@ pub struct Copy {
 impl Copy {
     /// An empty copy, given the record deriving the mint's capability, the
     /// token schema and the clerk whose tickets count.
-    pub fn new(
-        info: BoardInfo,
-        scheme: S,
-        genesis: Genesis,
-        mint: &Record,
-        schema: Hash,
-        clerk: Credential,
-    ) -> Result<Copy, String> {
+    pub fn new(info: BoardInfo, scheme: S, genesis: Genesis, mint: &Record, schema: Hash, clerk: Credential) -> Result<Copy, String> {
         let mut view = View::new(scheme, genesis);
         apply_ok(&mut view, mint).map_err(|e| format!("board mint: {e}"))?;
-        Ok(Copy {
-            info,
-            view,
-            clerk,
-            schema,
-            mint: mint.output(0),
-            subs: BTreeMap::new(),
-            order: vec![],
-        })
+        Ok(Copy { info, view, clerk, schema, mint: mint.output(0), subs: BTreeMap::new(), order: vec![] })
     }
 
     /// Check a post and keep it: a token from the mint, transferred to this
@@ -386,12 +337,7 @@ impl Copy {
             return Err("the token isn't sent to this board's server with this post".into());
         }
         let taken = sub.taken.as_ref().ok_or("the server hasn't taken it")?;
-        if taken.signer != self.info.host
-            || taken.op
-                != (Op::Retire {
-                    state: sub.record.output(0),
-                })
-        {
+        if taken.signer != self.info.host || taken.op != (Op::Retire { state: sub.record.output(0) }) {
             return Err("that isn't the server's retire of this post's token".into());
         }
         for r in &sub.provenance {
@@ -402,10 +348,7 @@ impl Copy {
             }
             apply_ok(&mut self.view, r)?;
         }
-        let coin = self
-            .view
-            .coin(state)
-            .ok_or("the token's history is missing")?;
+        let coin = self.view.coin(state).ok_or("the token's history is missing")?;
         if coin.schema != self.schema || coin.kind != Kind::Value {
             return Err("not a post token".into());
         }
@@ -416,16 +359,8 @@ impl Copy {
         }
         apply_ok(&mut self.view, taken)?;
         let s = self.view.scheme();
-        let ticket = sub.ticket.clone().filter(|t| {
-            t.clerk == self.clerk && t.ticket.credential == sub.record.signer && t.verify(s)
-        });
-        self.subs.insert(
-            id,
-            Submission {
-                ticket,
-                ..sub.clone()
-            },
-        );
+        let ticket = sub.ticket.clone().filter(|t| t.clerk == self.clerk && t.ticket.credential == sub.record.signer && t.verify(s));
+        self.subs.insert(id, Submission { ticket, ..sub.clone() });
         self.order.push(id);
         Ok(true)
     }
@@ -438,25 +373,8 @@ impl Copy {
             .map(|id| {
                 let sub = &self.subs[id];
                 let p = &sub.post;
-                let by =
-                    p.by.as_ref()
-                        .filter(|b| {
-                            s.verify(
-                                &b.key,
-                                &by_bytes(&p.board, &p.kind, &p.thread, &p.content),
-                                None,
-                                &b.sig,
-                            )
-                        })
-                        .map(|b| b.key.clone());
-                Item {
-                    id: *id,
-                    signer: &sub.record.signer,
-                    post: p,
-                    content: &sub.content,
-                    by,
-                    tag: sub.ticket.as_ref().and_then(|t| t.ticket.tag.as_ref()),
-                }
+                let by = p.by.as_ref().filter(|b| s.verify(&b.key, &by_bytes(&p.board, &p.kind, &p.thread, &p.content), None, &b.sig)).map(|b| b.key.clone());
+                Item { id: *id, signer: &sub.record.signer, post: p, content: &sub.content, by, tag: sub.ticket.as_ref().and_then(|t| t.ticket.tag.as_ref()) }
             })
             .collect()
     }
@@ -485,11 +403,7 @@ impl Copy {
 
     /// The posts a reader lacks, given what it has.
     pub fn since(&self, have: &BTreeSet<Prefix>) -> Vec<Submission> {
-        self.order
-            .iter()
-            .filter(|id| !have.contains(&prefix(id)))
-            .map(|id| self.subs[id].clone())
-            .collect()
+        self.order.iter().filter(|id| !have.contains(&prefix(id))).map(|id| self.subs[id].clone()).collect()
     }
 
     pub fn submissions(&self) -> Vec<Submission> {
@@ -498,28 +412,18 @@ impl Copy {
 
     /// Posts whose author key hashes to `author`.
     pub fn by_author(&self, a: &Hash) -> Vec<Hash> {
-        self.items()
-            .into_iter()
-            .filter(|i| author(i.signer) == *a)
-            .map(|i| i.id)
-            .collect()
+        self.items().into_iter().filter(|i| author(i.signer) == *a).map(|i| i.id).collect()
     }
 
     /// Posts whose content hashes to `content`.
     pub fn by_content(&self, c: &Hash) -> Vec<Hash> {
-        self.items()
-            .into_iter()
-            .filter(|i| i.post.content == *c)
-            .map(|i| i.id)
-            .collect()
+        self.items().into_iter().filter(|i| i.post.content == *c).map(|i| i.id).collect()
     }
 }
 
 /// Seconds since 1970, as a server keeps its clock.
 pub fn now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
 impl Node {
@@ -529,23 +433,14 @@ impl Node {
     }
 
     pub fn copy(&self, scope: &Hash) -> Result<&Copy, String> {
-        self.boards
-            .get(scope)
-            .ok_or_else(|| "no copy of that board".into())
+        self.boards.get(scope).ok_or_else(|| "no copy of that board".into())
     }
 
     /// Open an empty copy of each of the town's boards this node lacks.
     pub(crate) fn open_boards(&mut self) -> Result<(), String> {
         for info in self.board_infos() {
             if !self.boards.contains_key(&info.scope) {
-                let copy = Copy::new(
-                    info.clone(),
-                    self.view.scheme().clone(),
-                    self.town.genesis.clone(),
-                    &self.town.post_mint,
-                    self.town.posts,
-                    self.town.clerk.clone(),
-                )?;
+                let copy = Copy::new(info.clone(), self.view.scheme().clone(), self.town.genesis.clone(), &self.town.post_mint, self.town.posts, self.town.clerk.clone())?;
                 self.boards.insert(info.scope, copy);
             }
         }
@@ -559,31 +454,14 @@ impl Node {
 
     /// Write a post as `signer`. It waits for the next sync with a server;
     /// a node that serves the board takes it at once. Returns its name.
-    pub fn compose(
-        &mut self,
-        scope: &Hash,
-        signer: &Credential,
-        kind: &str,
-        thread: Option<Hash>,
-        content: Vec<u8>,
-        count: Option<Hash>,
-    ) -> Result<Hash, String> {
+    pub fn compose(&mut self, scope: &Hash, signer: &Credential, kind: &str, thread: Option<Hash>, content: Vec<u8>, count: Option<Hash>) -> Result<Hash, String> {
         self.compose_as(scope, signer, kind, thread, content, count, None)
     }
 
     /// As [`Node::compose`], also signed with this wallet's identity
     /// `identity` (see [`Node::identity`]) when given.
     #[allow(clippy::too_many_arguments)]
-    pub fn compose_as(
-        &mut self,
-        scope: &Hash,
-        signer: &Credential,
-        kind: &str,
-        thread: Option<Hash>,
-        content: Vec<u8>,
-        count: Option<Hash>,
-        identity: Option<&str>,
-    ) -> Result<Hash, String> {
+    pub fn compose_as(&mut self, scope: &Hash, signer: &Credential, kind: &str, thread: Option<Hash>, content: Vec<u8>, count: Option<Hash>, identity: Option<&str>) -> Result<Hash, String> {
         if content.len() > MAX_CONTENT {
             return Err(format!("content over {MAX_CONTENT} bytes"));
         }
@@ -592,26 +470,12 @@ impl Node {
         }
         // A key holds one ticket. Posting would put a post ticket on it,
         // replacing a badge or shift ticket from another clerk.
-        if self
-            .know
-            .tickets
-            .get(signer)
-            .is_some_and(|t| t.clerk != self.town.clerk)
-        {
+        if self.know.tickets.get(signer).is_some_and(|t| t.clerk != self.town.clerk) {
             return Err("this key carries another clerk's ticket (a badge or shift); post under another key".into());
         }
         let mut nonce = [0u8; 16];
         rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce);
-        let d = Draft {
-            board: *scope,
-            signer: signer.clone(),
-            kind: kind.into(),
-            thread,
-            content,
-            nonce,
-            count,
-            identity: identity.map(String::from),
-        };
+        let d = Draft { board: *scope, signer: signer.clone(), kind: kind.into(), thread, content, nonce, count, identity: identity.map(String::from) };
         let id = d.name();
         self.outgoing.push(d);
         self.save()?;
@@ -632,11 +496,7 @@ impl Node {
         let drafts = std::mem::take(&mut self.outgoing);
         for d in &drafts {
             let tag = match d.count {
-                Some(p) => Some(Tag {
-                    purpose: p,
-                    nym: self.own_nym(&p),
-                    class: self.class.clone(),
-                }),
+                Some(p) => Some(Tag { purpose: p, nym: self.own_nym(&p), class: self.class.clone() }),
                 None => None,
             };
             let class = self.class.clone();
@@ -653,16 +513,9 @@ impl Node {
     /// The mint's own pseudonym for `purpose`, as its access credential
     /// would show it.
     fn own_nym(&self, purpose: &Hash) -> Vec<u8> {
-        let a = BrioletteV1 {
-            group_public_key: self.town.classes[&self.class].group_public_key.clone(),
-        };
+        let a = BrioletteV1 { group_public_key: self.town.classes[&self.class].group_public_key.clone() };
         let access = a.credential(&self.access);
-        let sig = a.sign(
-            &self.access,
-            &access,
-            b"pave/board/own",
-            Some(&count_basename(purpose)),
-        );
+        let sig = a.sign(&self.access, &access, b"pave/board/own", Some(&count_basename(purpose)));
         a.nym(&sig).unwrap_or_default()
     }
 
@@ -671,79 +524,37 @@ impl Node {
         if !self.hosts(board) {
             return Err("this node doesn't serve that board".into());
         }
-        Ok(Clock {
-            epoch: self.epoch(),
-            clock: now(),
-        })
+        Ok(Clock { epoch: self.epoch(), clock: now() })
     }
 
     /// Mint: what a token request must meet this epoch.
     pub fn token_terms(&self) -> Result<TokenTerms, String> {
-        self.operator
-            .as_ref()
-            .ok_or("only the mint issues tokens")?;
-        Ok(TokenTerms {
-            epoch: self.epoch(),
-            cheats: cheat_list(&self.view),
-            ruled: self.ruled_tags(),
-        })
+        self.operator.as_ref().ok_or("only the mint issues tokens")?;
+        Ok(TokenTerms { epoch: self.epoch(), cheats: cheat_list(&self.view), ruled: self.ruled_tags() })
     }
 
     /// Every tag a board's ruling put on the mint's list.
     pub fn ruled_tags(&self) -> Vec<Cheat> {
-        self.boards
-            .get(&self.town.reports.scope)
-            .map(crate::report::ruled)
-            .unwrap_or_default()
+        self.boards.get(&self.town.reports.scope).map(crate::report::ruled).unwrap_or_default()
     }
 
     /// Ask for a token for each of `creds`, anonymously, counted for
     /// `purpose` if given.
     /// The board mint's request spec: slotted per epoch.
     pub fn token_spec(&self) -> crate::request::RequestSpec {
-        crate::request::RequestSpec {
-            domain: "pave/board/tokens/v3".into(),
-            scope: self.town.post_mint.output(0),
-            linkage: crate::request::Linkage::Slots(TOKEN_SLOTS),
-            max_skew_ms: None,
-        }
+        crate::request::RequestSpec { domain: "pave/board/tokens/v3".into(), scope: self.town.post_mint.output(0), linkage: crate::request::Linkage::Slots(TOKEN_SLOTS), max_skew_ms: None }
     }
 
-    pub fn token_request(
-        &mut self,
-        terms: &TokenTerms,
-        creds: &[Credential],
-        purpose: Option<Hash>,
-    ) -> Result<TokenRequest, String> {
-        let slot = self.slots.take(
-            &self.town.post_mint.output(0),
-            terms.epoch as u64,
-            TOKEN_SLOTS,
-        );
+    pub fn token_request(&mut self, terms: &TokenTerms, creds: &[Credential], purpose: Option<Hash>) -> Result<TokenRequest, String> {
+        let slot = self.slots.take(&self.town.post_mint.output(0), terms.epoch as u64, TOKEN_SLOTS);
         let s = self.view.scheme();
         let standing = creds
             .iter()
-            .map(|c| {
-                Standing::prove(s, &self.key, c, &terms.cheats)
-                    .ok_or_else(|| "this wallet is a known cheat".to_string())
-            })
+            .map(|c| Standing::prove(s, &self.key, c, &terms.cheats).ok_or_else(|| "this wallet is a known cheat".to_string()))
             .collect::<Result<Vec<_>, _>>()?;
         let group = self.town.classes[&self.class].group_public_key.clone();
         let basenames: Vec<Vec<u8>> = purpose.iter().map(count_basename).collect();
-        self.token_spec().sign(
-            &self.access,
-            &group,
-            terms.epoch as u64,
-            slot,
-            TokenBody {
-                creds: creds.to_vec(),
-                standing,
-                purpose,
-            },
-            &terms.ruled,
-            &basenames,
-            &[],
-        )
+        self.token_spec().sign(&self.access, &group, terms.epoch as u64, slot, TokenBody { creds: creds.to_vec(), standing, purpose }, &terms.ruled, &basenames, &[])
     }
 
     /// Mint: answer an anonymous token request. The access signature shows
@@ -754,30 +565,15 @@ impl Node {
     pub fn answer_tokens(&mut self, req: &TokenRequest) -> Result<TokenGrant, String> {
         let terms = self.token_terms()?;
         if req.period != terms.epoch as u64 {
-            return Err(format!(
-                "stale request: the mint is at epoch {}",
-                terms.epoch
-            ));
+            return Err(format!("stale request: the mint is at epoch {}", terms.epoch));
         }
         let b = &req.body;
         if b.creds.is_empty() || b.creds.len() > MAX_TOKENS || b.standing.len() != b.creds.len() {
-            return Err(format!(
-                "ask for 1 to {MAX_TOKENS} tokens, each with standing"
-            ));
+            return Err(format!("ask for 1 to {MAX_TOKENS} tokens, each with standing"));
         }
-        let groups = self
-            .town
-            .classes
-            .iter()
-            .map(|(n, c)| (n, &c.group_public_key));
-        let expect: Vec<crate::request::Expect> = b
-            .purpose
-            .iter()
-            .map(|p| crate::request::Expect::Basename(count_basename(p)))
-            .collect();
-        let v = self
-            .token_spec()
-            .verify(req, groups, &terms.ruled, &expect)?;
+        let groups = self.town.classes.iter().map(|(n, c)| (n, &c.group_public_key));
+        let expect: Vec<crate::request::Expect> = b.purpose.iter().map(|p| crate::request::Expect::Basename(count_basename(p))).collect();
+        let v = self.token_spec().verify(req, groups, &terms.ruled, &expect)?;
         let (class, nym) = (v.group, v.nym);
         let s = self.view.scheme().clone();
         for (c, st) in b.creds.iter().zip(&b.standing) {
@@ -786,21 +582,12 @@ impl Node {
             }
         }
         let tag = match (b.purpose, v.also.first()) {
-            (Some(p), Some(Some(n))) => Some(Tag {
-                purpose: p,
-                nym: n.clone(),
-                class: class.clone(),
-            }),
+            (Some(p), Some(Some(n))) => Some(Tag { purpose: p, nym: n.clone(), class: class.clone() }),
             _ => None,
         };
-        let op = self
-            .operator
-            .as_mut()
-            .ok_or("only the mint issues tokens")?;
+        let op = self.operator.as_mut().ok_or("only the mint issues tokens")?;
         if op.closed.contains(&class) {
-            return Err(format!(
-                "class {class} is closed: update the wallet and enroll again"
-            ));
+            return Err(format!("class {class} is closed: update the wallet and enroll again"));
         }
         op.tokens.note(req.period, nym);
         self.mint_tokens(&b.creds, &class, tag)
@@ -808,45 +595,17 @@ impl Node {
 
     /// Mint: ticket each credential in one fresh group and mint it a token,
     /// from a budget of its own so a token's history stays short.
-    pub(crate) fn mint_tokens(
-        &mut self,
-        creds: &[Credential],
-        class: &str,
-        tag: Option<Tag>,
-    ) -> Result<TokenGrant, String> {
+    pub(crate) fn mint_tokens(&mut self, creds: &[Credential], class: &str, tag: Option<Tag>) -> Result<TokenGrant, String> {
         let (_, tickets) = self.issue_tickets_tagged(creds, class, tag)?;
-        let op = self
-            .operator
-            .as_ref()
-            .ok_or("only the mint issues tokens")?;
+        let op = self.operator.as_ref().ok_or("only the mint issues tokens")?;
         let (key, me) = (op.minter.clone(), op.minter_cred.clone());
         let s = self.view.scheme().clone();
-        let budget = pave_kernel::sign(
-            &s,
-            &key,
-            &me,
-            Op::IssueBudget {
-                authority: self.town.post_mint.output(0),
-                schema: post_schema(),
-                amount: creds.len() as u64,
-                to: me.clone(),
-            },
-        );
+        let budget = pave_kernel::sign(&s, &key, &me, Op::IssueBudget { authority: self.town.post_mint.output(0), schema: post_schema(), amount: creds.len() as u64, to: me.clone() });
         apply_ok(&mut self.view, &budget)?;
         let mut records = vec![budget.clone()];
         let mut state = budget.output(0);
         for c in creds {
-            let m = self.guard(pave_kernel::sign(
-                &s,
-                &key,
-                &me,
-                Op::Mint {
-                    budget: state,
-                    amount: 1,
-                    to: c.clone(),
-                    change_to: me.clone(),
-                },
-            ))?;
+            let m = self.guard(pave_kernel::sign(&s, &key, &me, Op::Mint { budget: state, amount: 1, to: c.clone(), change_to: me.clone() }))?;
             apply_ok(&mut self.view, &m)?;
             state = m.output(1);
             records.push(m);
@@ -874,85 +633,32 @@ impl Node {
 
     /// An unused post token held by `signer`.
     fn token_for(&self, signer: &Credential) -> Option<Hash> {
-        self.view
-            .unspent()
-            .find(|c| {
-                c.schema == self.town.posts
-                    && c.kind == Kind::Value
-                    && &c.holder == signer
-                    && !self.signed_log.contains_key(&c.state)
-            })
-            .map(|c| c.state)
+        self.view.unspent().find(|c| c.schema == self.town.posts && c.kind == Kind::Value && &c.holder == signer && !self.signed_log.contains_key(&c.state)).map(|c| c.state)
     }
 
     /// Sign a draft with a server's proposed epoch and clock: the token's
     /// transfer to the server, committing to the post.
     pub fn sign_post(&mut self, d: &Draft, clock: &Clock) -> Result<Submission, String> {
-        let info = self
-            .boards
-            .get(&d.board)
-            .ok_or("no copy of that board")?
-            .info
-            .clone();
-        let state = self
-            .token_for(&d.signer)
-            .ok_or("no post token for that key")?;
+        let info = self.boards.get(&d.board).ok_or("no copy of that board")?.info.clone();
+        let state = self.token_for(&d.signer).ok_or("no post token for that key")?;
         let ch = content_hash(&d.content);
         let by = match &d.identity {
             Some(label) => {
                 let key = self.identity(label)?;
-                let sig = self.view.scheme().sign(
-                    &self.key,
-                    &key,
-                    &by_bytes(&d.board, &d.kind, &d.thread, &ch),
-                    None,
-                );
+                let sig = self.view.scheme().sign(&self.key, &key, &by_bytes(&d.board, &d.kind, &d.thread, &ch), None);
                 Some(Signed { key, sig })
             }
             None => None,
         };
         let prior = self.boards[&d.board].latest();
-        let post = Post {
-            board: d.board,
-            kind: d.kind.clone(),
-            thread: d.thread,
-            content: ch,
-            nonce: d.nonce,
-            prior,
-            epoch: clock.epoch,
-            clock: clock.clock,
-            by,
-        };
-        let record = self.signed(
-            &d.signer,
-            Op::Transfer {
-                state,
-                to: info.host,
-                receipt: post.receipt(),
-            },
-        )?;
-        let mut provenance: Vec<Record> = pave_protocol::accept::ancestry(&self.view, &state)
-            .iter()
-            .filter_map(|s| self.view.creator(s).cloned())
-            .collect();
-        let at: BTreeMap<Hash, usize> = self
-            .view
-            .records()
-            .iter()
-            .enumerate()
-            .map(|(i, r)| (r.id(), i))
-            .collect();
+        let post = Post { board: d.board, kind: d.kind.clone(), thread: d.thread, content: ch, nonce: d.nonce, prior, epoch: clock.epoch, clock: clock.clock, by };
+        let record = self.signed(&d.signer, Op::Transfer { state, to: info.host, receipt: post.receipt() })?;
+        let mut provenance: Vec<Record> = pave_protocol::accept::ancestry(&self.view, &state).iter().filter_map(|s| self.view.creator(s).cloned()).collect();
+        let at: BTreeMap<Hash, usize> = self.view.records().iter().enumerate().map(|(i, r)| (r.id(), i)).collect();
         provenance.sort_by_key(|r| at.get(&r.id()).copied().unwrap_or(usize::MAX));
         provenance.dedup();
         let ticket = self.know.tickets.get(&d.signer).cloned();
-        Ok(Submission {
-            record,
-            post,
-            content: d.content.clone(),
-            provenance,
-            ticket,
-            taken: None,
-        })
+        Ok(Submission { record, post, content: d.content.clone(), provenance, ticket, taken: None })
     }
 
     /// Server: take a post. Its epoch and clock must be what this server
@@ -962,10 +668,7 @@ impl Node {
         let scope = sub.scope();
         let p = self.board_clock(&scope)?;
         if sub.post.epoch != p.epoch && sub.post.epoch + 1 != p.epoch {
-            return Err(format!(
-                "post epoch {} isn't current (the board is at {})",
-                sub.post.epoch, p.epoch
-            ));
+            return Err(format!("post epoch {} isn't current (the board is at {})", sub.post.epoch, p.epoch));
         }
         if sub.post.clock.abs_diff(p.clock) > CLOCK_SLACK {
             return Err("post clock isn't the one this board proposed".into());
@@ -992,28 +695,13 @@ impl Node {
         if let Some(t) = &sub.ticket {
             self.know.add_ticket(&s, t.clone());
         }
-        let policy = Policy {
-            require_standing: false,
-            honor_ticket_caps: false,
-            ..self.policy()
-        };
-        pave_protocol::check(&self.view, &self.know, state, &sub.record.signer, &policy)
-            .map_err(|e| format!("token refused: {e:?}"))?;
+        let policy = Policy { require_standing: false, honor_ticket_caps: false, ..self.policy() };
+        pave_protocol::check(&self.view, &self.know, state, &sub.record.signer, &policy).map_err(|e| format!("token refused: {e:?}"))?;
         apply_ok(&mut self.view, &sub.record)?;
-        let taken = self.guard(pave_kernel::sign(
-            &s,
-            &self.key,
-            &host,
-            Op::Retire {
-                state: sub.record.output(0),
-            },
-        ))?;
+        let taken = self.guard(pave_kernel::sign(&s, &self.key, &host, Op::Retire { state: sub.record.output(0) }))?;
         apply_ok(&mut self.view, &taken)?;
         let copy = self.boards.get_mut(&scope).unwrap();
-        copy.absorb(&Submission {
-            taken: Some(taken.clone()),
-            ..sub.clone()
-        })?;
+        copy.absorb(&Submission { taken: Some(taken.clone()), ..sub.clone() })?;
         self.save()?;
         Ok(taken)
     }
@@ -1024,14 +712,8 @@ impl Node {
         let _ = self.view.apply(&sub.record);
         let _ = self.view.apply(taken);
         let name = sub.name();
-        let copy = self
-            .boards
-            .get_mut(&sub.scope())
-            .ok_or("no copy of that board")?;
-        copy.absorb(&Submission {
-            taken: Some(taken.clone()),
-            ..sub.clone()
-        })?;
+        let copy = self.boards.get_mut(&sub.scope()).ok_or("no copy of that board")?;
+        copy.absorb(&Submission { taken: Some(taken.clone()), ..sub.clone() })?;
         self.outgoing.retain(|d| d.name() != name);
         self.save()
     }
@@ -1048,10 +730,7 @@ impl Node {
 
     /// Serve a reader from this node's copy.
     pub fn posts_since(&self, scope: &Hash, have: &BTreeSet<Prefix>) -> Vec<Submission> {
-        self.boards
-            .get(scope)
-            .map(|c| c.since(have))
-            .unwrap_or_default()
+        self.boards.get(scope).map(|c| c.since(have)).unwrap_or_default()
     }
 
     /// Take posts from a server or another copy. Each is checked; bad ones
@@ -1081,22 +760,8 @@ impl Node {
         let mut need: BTreeMap<Option<Hash>, Vec<Credential>> = BTreeMap::new();
         let mut have: BTreeMap<Credential, usize> = BTreeMap::new();
         for d in &drafts {
-            let tagged = self
-                .know
-                .tickets
-                .get(&d.signer)
-                .and_then(|t| t.ticket.tag.as_ref())
-                .map(|t| t.purpose);
-            let held = have.entry(d.signer.clone()).or_insert_with(|| {
-                self.view
-                    .unspent()
-                    .filter(|c| {
-                        c.schema == self.town.posts
-                            && c.holder == d.signer
-                            && !self.signed_log.contains_key(&c.state)
-                    })
-                    .count()
-            });
+            let tagged = self.know.tickets.get(&d.signer).and_then(|t| t.ticket.tag.as_ref()).map(|t| t.purpose);
+            let held = have.entry(d.signer.clone()).or_insert_with(|| self.view.unspent().filter(|c| c.schema == self.town.posts && c.holder == d.signer && !self.signed_log.contains_key(&c.state)).count());
             if *held == 0 || (d.count.is_some() && d.count != tagged) {
                 need.entry(d.count).or_default().push(d.signer.clone());
             } else {
@@ -1108,10 +773,7 @@ impl Node {
                 Ok(terms) => {
                     for (purpose, creds) in need {
                         for chunk in creds.chunks(MAX_TOKENS) {
-                            let got = self
-                                .token_request(&terms, chunk, purpose)
-                                .and_then(|req| host.tokens(&req))
-                                .and_then(|g| self.take_grant(g));
+                            let got = self.token_request(&terms, chunk, purpose).and_then(|req| host.tokens(&req)).and_then(|g| self.take_grant(g));
                             if let Err(e) = got {
                                 out.refused.push(e);
                             }
@@ -1122,10 +784,7 @@ impl Node {
             }
         }
         for d in drafts {
-            let sent = host
-                .clock(&d.board)
-                .and_then(|c| self.sign_post(&d, &c))
-                .and_then(|sub| host.post(&sub).map(|r| (sub, r)));
+            let sent = host.clock(&d.board).and_then(|c| self.sign_post(&d, &c)).and_then(|sub| host.post(&sub).map(|r| (sub, r)));
             match sent {
                 Ok((sub, r)) => {
                     if self.posted(&sub, &r).is_ok() {

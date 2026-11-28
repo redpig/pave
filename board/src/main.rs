@@ -13,8 +13,8 @@
 //! or an agent can drive it the same way. Send `{"cmd":"help"}` for the list.
 
 use pave_board::commands::{command, hx};
-use pave_board::net;
 use pave_board::node::{Enrollment, Join, Node, PendingJoin};
+use pave_board::net;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::net::TcpListener;
@@ -22,10 +22,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 fn arg(args: &[String], name: &str) -> Option<String> {
-    args.iter()
-        .position(|a| a == name)
-        .and_then(|i| args.get(i + 1))
-        .cloned()
+    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
 }
 
 fn need(args: &[String], name: &str) -> String {
@@ -34,6 +31,7 @@ fn need(args: &[String], name: &str) -> String {
         std::process::exit(2)
     })
 }
+
 
 fn run(state: PathBuf, listen: String) {
     let node = Arc::new(Mutex::new(Node::load(&state).unwrap_or_else(|e| {
@@ -58,12 +56,7 @@ fn run(state: PathBuf, listen: String) {
         (n.name.clone(), n.group)
     };
     let mut out = std::io::stdout();
-    writeln!(
-        out,
-        "{}",
-        json!({ "event": "ready", "name": name, "group": group, "listen": listen })
-    )
-    .ok();
+    writeln!(out, "{}", json!({ "event": "ready", "name": name, "group": group, "listen": listen })).ok();
     out.flush().ok();
     for line in std::io::stdin().lock().lines() {
         let Ok(line) = line else { break };
@@ -95,10 +88,7 @@ fn main() {
                 eprintln!("{e}");
                 std::process::exit(1)
             });
-            println!(
-                "{}",
-                json!({ "ok": true, "town": town, "jobs": hx(&n.town.jobs.scope), "reports": hx(&n.town.reports.scope), "sequence": hx(&n.town.sequence) })
-            );
+            println!("{}", json!({ "ok": true, "town": town, "jobs": hx(&n.town.jobs.scope), "reports": hx(&n.town.reports.scope), "sequence": hx(&n.town.sequence) }));
         }
         Some("join") => {
             // Wallet side: generate a key here and write a join request.
@@ -115,18 +105,11 @@ fn main() {
             let request: Join = read_cbor(&PathBuf::from(need(&args, "--request")));
             let class = arg(&args, "--class").unwrap_or_else(|| "hardware".into());
             let reply = PathBuf::from(need(&args, "--reply"));
-            let credits: Vec<u64> = arg(&args, "--credit")
-                .map(|c| c.split(',').filter_map(|x| x.parse().ok()).collect())
-                .unwrap_or_default();
+            let credits: Vec<u64> = arg(&args, "--credit").map(|c| c.split(',').filter_map(|x| x.parse().ok()).collect()).unwrap_or_default();
             let mut t = Node::load(&town).unwrap_or_else(|e| die(e));
-            let e = t
-                .enroll(&request, &class, &credits)
-                .unwrap_or_else(|e| die(e));
+            let e = t.enroll(&request, &class, &credits).unwrap_or_else(|e| die(e));
             write_cbor(&reply, &e);
-            println!(
-                "{}",
-                json!({ "ok": true, "class": class, "group": e.group, "credit": credits, "reply": reply })
-            );
+            println!("{}", json!({ "ok": true, "class": class, "group": e.group, "credit": credits, "reply": reply }));
         }
         Some("finish") => {
             // Wallet side: take the town's answer and become a node.
@@ -135,15 +118,9 @@ fn main() {
             let name = need(&args, "--name");
             let out = PathBuf::from(need(&args, "--out"));
             let p = Node::finish_enrollment(key, &e, &name, &out).unwrap_or_else(|e| die(e));
-            println!(
-                "{}",
-                json!({ "ok": true, "name": name, "class": p.class, "group": p.group, "out": out })
-            );
+            println!("{}", json!({ "ok": true, "name": name, "class": p.class, "group": p.group, "out": out }));
         }
-        Some("run") => run(
-            PathBuf::from(need(&args, "--state")),
-            need(&args, "--listen"),
-        ),
+        Some("run") => run(PathBuf::from(need(&args, "--state")), need(&args, "--listen")),
         _ => {
             eprintln!("usage: pave-node init|join|enroll|finish|run ... (see the source header)");
             std::process::exit(2);
@@ -157,12 +134,10 @@ fn die(e: String) -> ! {
 }
 
 fn write_cbor<T: serde::Serialize>(path: &std::path::Path, v: &T) {
-    std::fs::write(path, pave_kernel::hash::encode(v))
-        .unwrap_or_else(|e| die(format!("{}: {e}", path.display())));
+    std::fs::write(path, pave_kernel::hash::encode(v)).unwrap_or_else(|e| die(format!("{}: {e}", path.display())));
 }
 
 fn read_cbor<T: serde::de::DeserializeOwned>(path: &std::path::Path) -> T {
     let bytes = std::fs::read(path).unwrap_or_else(|e| die(format!("{}: {e}", path.display())));
-    ciborium::from_reader(bytes.as_slice())
-        .unwrap_or_else(|e| die(format!("{}: {e}", path.display())))
+    ciborium::from_reader(bytes.as_slice()).unwrap_or_else(|e| die(format!("{}: {e}", path.display())))
 }

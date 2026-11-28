@@ -39,27 +39,13 @@ pub struct Standing {
 
 impl Standing {
     /// None if the key is one of the cheats.
-    pub fn prove<S: Scheme>(
-        scheme: &S,
-        key: &S::HolderKey,
-        credential: &Credential,
-        cheats: &[(Vec<u8>, Vec<u8>)],
-    ) -> Option<Self> {
+    pub fn prove<S: Scheme>(scheme: &S, key: &S::HolderKey, credential: &Credential, cheats: &[(Vec<u8>, Vec<u8>)]) -> Option<Self> {
         let proof = scheme.prove_not_cheat(key, credential, cheats, STANDING_CONTEXT)?;
-        Some(Standing {
-            credential: credential.clone(),
-            cheats: cheats.to_vec(),
-            proof,
-        })
+        Some(Standing { credential: credential.clone(), cheats: cheats.to_vec(), proof })
     }
 
     pub fn verify<S: Scheme>(&self, scheme: &S) -> bool {
-        scheme.verify_not_cheat(
-            &self.credential,
-            &self.cheats,
-            STANDING_CONTEXT,
-            &self.proof,
-        )
+        scheme.verify_not_cheat(&self.credential, &self.cheats, STANDING_CONTEXT, &self.proof)
     }
 
     /// Does this cover every cheat in `list`?
@@ -105,9 +91,8 @@ impl Knowledge {
 
     /// Keep epoch data only if a signed roll in `view` commits to it.
     pub fn add_epoch_data<S: Scheme>(&mut self, view: &View<S>, d: EpochData) -> bool {
-        let committed = crate::epochs::epoch_record(view, &d.sequence, d.number).is_some_and(
-            |r| matches!(r.op, pave_kernel::Op::Transfer { receipt, .. } if receipt == d.hash()),
-        );
+        let committed = crate::epochs::epoch_record(view, &d.sequence, d.number)
+            .is_some_and(|r| matches!(r.op, pave_kernel::Op::Transfer { receipt, .. } if receipt == d.hash()));
         if committed {
             self.epoch_data.insert(d.hash(), d);
         }
@@ -140,16 +125,7 @@ pub const REVOCATION_WINDOW: u32 = 2;
 impl Policy {
     /// The default wallet policy: honor everything, don't wait on hints.
     pub fn wallet(trusted_clerks: BTreeMap<Credential, Hash>) -> Self {
-        Policy {
-            trusted_clerks,
-            honor_expiry: true,
-            honor_transfer_limit: true,
-            refuse_known_cheats: true,
-            wait_on_hints: false,
-            require_standing: true,
-            honor_ticket_caps: true,
-            revocation_window: REVOCATION_WINDOW,
-        }
+        Policy { trusted_clerks, honor_expiry: true, honor_transfer_limit: true, refuse_known_cheats: true, wait_on_hints: false, require_standing: true, honor_ticket_caps: true, revocation_window: REVOCATION_WINDOW }
     }
 }
 
@@ -165,30 +141,16 @@ pub enum Refusal {
     UnknownSequence(Hash),
     EpochDataMissing(Hash),
     /// A ticket on the last hop is past the schema's soft expiry.
-    Expired {
-        credential: Credential,
-        issued: u32,
-        now: u32,
-    },
+    Expired { credential: Credential, issued: u32, now: u32 },
     /// The coin is past the schema's hard expiry, counted from its first
     /// (mint-time) ticket.
-    CoinExpired {
-        issued: u32,
-        now: u32,
-    },
-    Revoked {
-        credential: Credential,
-        group: u32,
-    },
+    CoinExpired { issued: u32, now: u32 },
+    Revoked { credential: Credential, group: u32 },
     HintPending(Hash),
     /// The recipient knows of cheats, and the sender hasn't shown it isn't one.
     NoStanding(Credential),
     /// More than the sender's or holder's ticket allows in one coin.
-    OverMaxSpend {
-        credential: Credential,
-        amount: u64,
-        max: u64,
-    },
+    OverMaxSpend { credential: Credential, amount: u64, max: u64 },
 }
 
 /// Every state in a coin's provenance, from its current state back to mint.
@@ -242,11 +204,7 @@ pub fn check<S: Scheme>(
         for cred in [sender, &coin.holder] {
             if let Some(max) = know.tickets.get(cred).and_then(|t| t.ticket.max_spend) {
                 if coin.amount > max {
-                    return Err(Refusal::OverMaxSpend {
-                        credential: cred.clone(),
-                        amount: coin.amount,
-                        max,
-                    });
+                    return Err(Refusal::OverMaxSpend { credential: cred.clone(), amount: coin.amount, max });
                 }
             }
         }
@@ -261,17 +219,11 @@ pub fn check<S: Scheme>(
     // revocation's window.
     let last_hop = |c: &Credential| c == sender || c == &coin.holder;
     for (i, cred) in coin.history.iter().enumerate() {
-        let t = know
-            .tickets
-            .get(cred)
-            .ok_or_else(|| Refusal::NoTicket(cred.clone()))?;
+        let t = know.tickets.get(cred).ok_or_else(|| Refusal::NoTicket(cred.clone()))?;
         if !t.verify(view.scheme()) {
             return Err(Refusal::BadTicket(cred.clone()));
         }
-        let seq = policy
-            .trusted_clerks
-            .get(&t.clerk)
-            .ok_or_else(|| Refusal::UntrustedClerk(t.clerk.clone()))?;
+        let seq = policy.trusted_clerks.get(&t.clerk).ok_or_else(|| Refusal::UntrustedClerk(t.clerk.clone()))?;
         if &t.ticket.sequence != seq {
             return Err(Refusal::BadTicket(cred.clone()));
         }
@@ -279,35 +231,20 @@ pub fn check<S: Scheme>(
         if policy.honor_expiry {
             if let (true, Some(soft)) = (last_hop(cred), schema.soft_expiry) {
                 if h.number >= t.ticket.epoch.saturating_add(soft) {
-                    return Err(Refusal::Expired {
-                        credential: cred.clone(),
-                        issued: t.ticket.epoch,
-                        now: h.number,
-                    });
+                    return Err(Refusal::Expired { credential: cred.clone(), issued: t.ticket.epoch, now: h.number });
                 }
             }
             if let (0, Some(hard)) = (i, schema.hard_expiry) {
                 if h.number >= t.ticket.epoch.saturating_add(hard) {
-                    return Err(Refusal::CoinExpired {
-                        issued: t.ticket.epoch,
-                        now: h.number,
-                    });
+                    return Err(Refusal::CoinExpired { issued: t.ticket.epoch, now: h.number });
                 }
             }
         }
         if let Some(d) = h.data {
-            let data = know
-                .epoch_data
-                .get(&d)
-                .ok_or(Refusal::EpochDataMissing(d))?;
+            let data = know.epoch_data.get(&d).ok_or(Refusal::EpochDataMissing(d))?;
             if let Some(&at) = data.revoked.get(&t.ticket.group) {
-                if last_hop(cred)
-                    || crate::epochs::taints(t.ticket.epoch, at, policy.revocation_window)
-                {
-                    return Err(Refusal::Revoked {
-                        credential: cred.clone(),
-                        group: t.ticket.group,
-                    });
+                if last_hop(cred) || crate::epochs::taints(t.ticket.epoch, at, policy.revocation_window) {
+                    return Err(Refusal::Revoked { credential: cred.clone(), group: t.ticket.group });
                 }
             }
         }

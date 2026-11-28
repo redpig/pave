@@ -39,30 +39,14 @@ fn the_whole_story_on_ecdaa() {
     // Enrollment tickets carry only the credit; the rest come anonymously.
     for p in [&mut alice, &mut bob, &mut carol] {
         assert!(p.pool.is_empty());
-        let t = town
-            .answer_refill(&p.refill_request(&town.refill_terms().unwrap(), 8).unwrap())
-            .unwrap();
+        let t = town.answer_refill(&p.refill_request(&town.refill_terms().unwrap(), 8).unwrap()).unwrap();
         let groups: BTreeSet<u32> = t.iter().map(|t| t.ticket.group).collect();
         assert_eq!(groups.len(), 1, "one random group per batch");
-        assert_ne!(
-            groups.into_iter().next(),
-            Some(p.group),
-            "not the enrollment batch's group"
-        );
+        assert_ne!(groups.into_iter().next(), Some(p.group), "not the enrollment batch's group");
         assert_eq!(p.take_tickets(t), 8);
     }
     // The class shows only as terms: software wallets' tickets cap one coin at 50.
-    assert_eq!(
-        carol
-            .know
-            .tickets
-            .values()
-            .find(|t| carol.mine.contains(&t.ticket.credential))
-            .unwrap()
-            .ticket
-            .max_spend,
-        Some(50)
-    );
+    assert_eq!(carol.know.tickets.values().find(|t| carol.mine.contains(&t.ticket.credential)).unwrap().ticket.max_spend, Some(50));
     meet(&mut alice, &mut bob);
     meet(&mut alice, &mut carol);
 
@@ -79,131 +63,45 @@ fn the_whole_story_on_ecdaa() {
     alice.sync_with(&mut town);
     let worker = alice.jobs()[&job].replies[0].0.clone();
     // Only the poster's key can accept: Bob accepting himself is ignored.
-    let msg = pave_board::board::BoardMsg::Accept {
-        job,
-        worker: worker.clone(),
-        assignment: None,
-        badge: None,
-    };
+    let msg = pave_board::board::BoardMsg::Accept { job, worker: worker.clone(), assignment: None, badge: None };
     let bobs = bob.receive().unwrap();
-    bob.compose(
-        &bob.town.jobs.scope.clone(),
-        &bobs,
-        msg.kind(),
-        msg.job(),
-        msg.encode(),
-        None,
-    )
-    .unwrap();
+    bob.compose(&bob.town.jobs.scope.clone(), &bobs, msg.kind(), msg.job(), msg.encode(), None).unwrap();
     bob.sync_with(&mut town);
     assert_eq!(bob.jobs()[&job].status, Status::Open);
     // An accept must carry the poster's transfer of the job's state.
-    let bare = pave_board::board::BoardMsg::Accept {
-        job,
-        worker: worker.clone(),
-        assignment: None,
-        badge: None,
-    };
+    let bare = pave_board::board::BoardMsg::Accept { job, worker: worker.clone(), assignment: None, badge: None };
     let poster = alice.jobs()[&job].poster.clone();
-    alice
-        .compose(
-            &alice.town.jobs.scope.clone(),
-            &poster,
-            bare.kind(),
-            bare.job(),
-            bare.encode(),
-            None,
-        )
-        .unwrap();
+    alice.compose(&alice.town.jobs.scope.clone(), &poster, bare.kind(), bare.job(), bare.encode(), None).unwrap();
     alice.sync_with(&mut town);
     assert_eq!(alice.jobs()[&job].status, Status::Open);
     let s = alice.view.scheme().clone();
-    let wrong = pave_kernel::sign(
-        &s,
-        &alice.key,
-        &poster,
-        pave_kernel::Op::Transfer {
-            state: pave_kernel::hash::Hash([1; 32]),
-            to: worker.clone(),
-            receipt: pave_board::board::accept_receipt(&job, &worker),
-        },
-    );
-    let forged = pave_board::board::BoardMsg::Accept {
-        job,
-        worker: worker.clone(),
-        assignment: Some(wrong),
-        badge: None,
-    };
-    alice
-        .compose(
-            &alice.town.jobs.scope.clone(),
-            &poster,
-            forged.kind(),
-            forged.job(),
-            forged.encode(),
-            None,
-        )
-        .unwrap();
+    let wrong = pave_kernel::sign(&s, &alice.key, &poster, pave_kernel::Op::Transfer { state: pave_kernel::hash::Hash([1; 32]), to: worker.clone(), receipt: pave_board::board::accept_receipt(&job, &worker) });
+    let forged = pave_board::board::BoardMsg::Accept { job, worker: worker.clone(), assignment: Some(wrong), badge: None };
+    alice.compose(&alice.town.jobs.scope.clone(), &poster, forged.kind(), forged.job(), forged.encode(), None).unwrap();
     alice.sync_with(&mut town);
-    assert_eq!(
-        alice.jobs()[&job].status,
-        Status::Open,
-        "an assignment of another state"
-    );
+    assert_eq!(alice.jobs()[&job].status, Status::Open, "an assignment of another state");
     alice.accept(job, worker.clone()).unwrap();
     assert!(alice.pay(job).is_err(), "can't pay before the work is done");
     alice.sync_with(&mut town);
     bob.sync_with(&mut town);
-    assert!(
-        alice.done(job).is_err(),
-        "only the accepted worker marks done"
-    );
+    assert!(alice.done(job).is_err(), "only the accepted worker marks done");
     bob.done(job).unwrap();
     bob.sync_with(&mut town);
     alice.sync_with(&mut town);
-    assert!(
-        bob.jobs()[&job].assignment.is_some(),
-        "Bob holds the assignment record"
-    );
+    assert!(bob.jobs()[&job].assignment.is_some(), "Bob holds the assignment record");
     // A poster can't give one job twice: a second assignment is a second
     // transfer of the job's state, and readers mark the job contested.
     let job2 = alice.post("Paint the shed", 10).unwrap();
     alice.sync_with(&mut town);
     let (w1, w2) = (bob.receive().unwrap(), bob.receive().unwrap());
     alice.accept(job2, w1).unwrap();
-    assert!(
-        alice.accept(job2, w2.clone()).is_err(),
-        "the wallet won't sign it twice"
-    );
+    assert!(alice.accept(job2, w2.clone()).is_err(), "the wallet won't sign it twice");
     let j2 = alice.jobs()[&job2].clone();
     let s = alice.view.scheme().clone();
     let state = pave_board::board::job_state(&j2.means);
-    let twice = pave_kernel::sign(
-        &s,
-        &alice.key,
-        &j2.poster,
-        pave_kernel::Op::Transfer {
-            state,
-            to: w2.clone(),
-            receipt: pave_board::board::accept_receipt(&job2, &w2),
-        },
-    );
-    let msg = pave_board::board::BoardMsg::Accept {
-        job: job2,
-        worker: w2,
-        assignment: Some(twice),
-        badge: None,
-    };
-    alice
-        .compose(
-            &alice.town.jobs.scope.clone(),
-            &j2.poster,
-            msg.kind(),
-            msg.job(),
-            msg.encode(),
-            None,
-        )
-        .unwrap();
+    let twice = pave_kernel::sign(&s, &alice.key, &j2.poster, pave_kernel::Op::Transfer { state, to: w2.clone(), receipt: pave_board::board::accept_receipt(&job2, &w2) });
+    let msg = pave_board::board::BoardMsg::Accept { job: job2, worker: w2, assignment: Some(twice), badge: None };
+    alice.compose(&alice.town.jobs.scope.clone(), &j2.poster, msg.kind(), msg.job(), msg.encode(), None).unwrap();
     alice.sync_with(&mut town);
     bob.sync_with(&mut town);
     assert_eq!(bob.jobs()[&job2].status, Status::Contested);
@@ -219,13 +117,7 @@ fn the_whole_story_on_ecdaa() {
     assert_eq!(alice.my_coins().iter().map(|c| c.amount).sum::<u64>(), 70);
 
     // Unlinkable: every credential alice used is distinct.
-    let alice_signers: BTreeSet<_> = alice
-        .view
-        .records()
-        .iter()
-        .filter(|r| alice.mine.contains(&r.signer))
-        .map(|r| &r.signer)
-        .collect();
+    let alice_signers: BTreeSet<_> = alice.view.records().iter().filter(|r| alice.mine.contains(&r.signer)).map(|r| &r.signer).collect();
     assert!(alice_signers.len() >= 2);
 
     // The double spend.
@@ -235,19 +127,12 @@ fn the_whole_story_on_ecdaa() {
     meet(&mut carol, &mut bob);
     carol.cheat(coin, alice.receive().unwrap()).unwrap();
     meet(&mut carol, &mut alice);
-    assert!(
-        alice.view.flagged().is_empty() && bob.view.flagged().is_empty(),
-        "nobody can tell yet"
-    );
+    assert!(alice.view.flagged().is_empty() && bob.view.flagged().is_empty(), "nobody can tell yet");
     meet(&mut alice, &mut bob);
     for n in [&alice, &bob] {
         let flagged = n.view.flagged();
         assert_eq!(flagged.len(), 1);
-        assert_eq!(
-            n.group_of(flagged.iter().next().unwrap()),
-            Some(carol.group),
-            "evidence leads to carol's group only"
-        );
+        assert_eq!(n.group_of(flagged.iter().next().unwrap()), Some(carol.group), "evidence leads to carol's group only");
     }
     assert_eq!(bob.check(&to_bob), Err(Refusal::KnownCheat));
 
@@ -256,14 +141,8 @@ fn the_whole_story_on_ecdaa() {
     // Carol can't, under any credential. No town, no revocation list.
     let paid_alice = carol.spend(other, alice.receive().unwrap()).unwrap();
     meet(&mut carol, &mut alice);
-    assert!(
-        carol.standings().is_empty(),
-        "the cheat has no standing to give"
-    );
-    assert!(matches!(
-        alice.check(&paid_alice),
-        Err(Refusal::NoStanding(_))
-    ));
+    assert!(carol.standings().is_empty(), "the cheat has no standing to give");
+    assert!(matches!(alice.check(&paid_alice), Err(Refusal::NoStanding(_))));
 
     // An honest payer proves it without being linked to anything.
     let bobs = bob.my_coins();
@@ -274,17 +153,11 @@ fn the_whole_story_on_ecdaa() {
     // The town can still revoke carol's ticket group, for recipients that
     // haven't met the evidence; the epoch reaches alice by gossip.
     meet(&mut bob, &mut town);
-    town.roll_epoch([carol.group].into_iter().collect(), BTreeSet::new())
-        .unwrap();
+    town.roll_epoch([carol.group].into_iter().collect(), BTreeSet::new()).unwrap();
     gossip_to(&town, &mut alice);
     let carol_cred = alice.view.coin(&paid_alice).unwrap().history[0].clone();
-    let no_standing = Policy {
-        require_standing: false,
-        ..alice.policy()
-    };
-    assert!(
-        matches!(check(&alice.view, &alice.know, &paid_alice, &carol_cred, &no_standing), Err(Refusal::Revoked { group, .. }) if group == carol.group)
-    );
+    let no_standing = Policy { require_standing: false, ..alice.policy() };
+    assert!(matches!(check(&alice.view, &alice.know, &paid_alice, &carol_cred, &no_standing), Err(Refusal::Revoked { group, .. }) if group == carol.group));
 
     // Refills are anonymous, each batch in a fresh random group. A wallet's
     // first REFILL_SLOTS requests an epoch can't be linked to each other;
@@ -297,23 +170,15 @@ fn the_whole_story_on_ecdaa() {
     let t = town.answer_refill(&req).unwrap();
     assert_eq!(bob.take_tickets(t), 4);
     for _ in 1..pave_board::node::REFILL_SLOTS {
-        assert!(town
-            .answer_refill(&bob.refill_request(&terms, 4).unwrap())
-            .is_ok());
+        assert!(town.answer_refill(&bob.refill_request(&terms, 4).unwrap()).is_ok());
     }
     assert_eq!(linked(&town), before, "within the slots: unlinked");
-    assert!(town
-        .answer_refill(&bob.refill_request(&terms, 4).unwrap())
-        .is_ok());
+    assert!(town.answer_refill(&bob.refill_request(&terms, 4).unwrap()).is_ok());
     assert_eq!(linked(&town), before + 1, "past them: served, and linked");
     let mut bad = bob.refill_request(&terms, 1).unwrap();
     bad.slot = pave_board::node::REFILL_SLOTS;
     assert!(town.answer_refill(&bad).unwrap_err().contains("slots"));
-    assert!(
-        town.answer_refill(&alice.refill_request(&terms, 4).unwrap())
-            .is_ok(),
-        "others aren't affected"
-    );
+    assert!(town.answer_refill(&alice.refill_request(&terms, 4).unwrap()).is_ok(), "others aren't affected");
 
     // The cheat can't get tickets: no standing against the clerk's evidence.
     meet(&mut alice, &mut town);
@@ -329,36 +194,18 @@ fn the_whole_story_on_ecdaa() {
     // gave that class is revoked, and its wallets get no tickets until they
     // re-enroll. Hardware wallets carry on.
     let before = town.operator.as_ref().unwrap().revoked.len();
-    town.roll_epoch(
-        BTreeSet::new(),
-        ["software".to_string()].into_iter().collect(),
-    )
-    .unwrap();
+    town.roll_epoch(BTreeSet::new(), ["software".to_string()].into_iter().collect()).unwrap();
     let op = town.operator.as_ref().unwrap();
-    let software: BTreeSet<u32> = op
-        .groups
-        .iter()
-        .filter(|(_, c)| *c == "software")
-        .map(|(g, _)| *g)
-        .collect();
+    let software: BTreeSet<u32> = op.groups.iter().filter(|(_, c)| *c == "software").map(|(g, _)| *g).collect();
     assert!(software.iter().all(|g| op.revoked.contains_key(g)) && op.revoked.len() > before);
-    assert!(op
-        .groups
-        .iter()
-        .filter(|(_, c)| *c == "hardware")
-        .all(|(g, _)| !op.revoked.contains_key(g)));
+    assert!(op.groups.iter().filter(|(_, c)| *c == "hardware").all(|(g, _)| !op.revoked.contains_key(g)));
     let terms = town.refill_terms().unwrap();
     let mut dave = join(&mut town, "dave", "hardware", &dir, &[]);
     assert!(dave.pool.is_empty());
-    let t = town
-        .answer_refill(&dave.refill_request(&terms, 2).unwrap())
-        .unwrap();
+    let t = town.answer_refill(&dave.refill_request(&terms, 2).unwrap()).unwrap();
     assert_eq!(dave.take_tickets(t), 2);
     let (pending, req) = PendingJoin::generate();
-    assert!(
-        town.enroll(&req, "software", &[]).is_err(),
-        "closed to new members too"
-    );
+    assert!(town.enroll(&req, "software", &[]).is_err(), "closed to new members too");
     drop(pending);
 
     // Saved state replays to the same wallet.
@@ -366,11 +213,7 @@ fn the_whole_story_on_ecdaa() {
     let again = Node::load(&alice.path).unwrap();
     assert_eq!(again.my_coins(), alice.my_coins());
     assert_eq!(again.view.flagged(), alice.view.flagged());
-    assert_eq!(
-        again.jobs()[&job].status,
-        Status::Paid,
-        "board copies are saved too"
-    );
+    assert_eq!(again.jobs()[&job].status, Status::Paid, "board copies are saved too");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -51,15 +51,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// The vote coin's schema: one each, spent once, no expiry.
 pub fn vote_schema(label: &str) -> Schema {
-    Schema {
-        label: format!("vote: {label}"),
-        divisible: false,
-        soft_expiry: None,
-        hard_expiry: None,
-        offline_transfers: Some(1),
-        max_per_holder: Some(1),
-        sequence: None,
-    }
+    Schema { label: format!("vote: {label}"), divisible: false, soft_expiry: None, hard_expiry: None, offline_transfers: Some(1), max_per_holder: Some(1), sequence: None }
 }
 
 /// What everyone knows about an election.
@@ -95,23 +87,14 @@ impl Election {
     /// The mint's request spec: the election is the basename, so one voter
     /// has one pseudonym for the whole election.
     pub fn spec(&self) -> crate::request::RequestSpec {
-        crate::request::RequestSpec {
-            domain: "pave/election/v2".into(),
-            scope: self.id,
-            linkage: crate::request::Linkage::Scope,
-            max_skew_ms: Some(CLOCK_SLACK * 1000),
-        }
+        crate::request::RequestSpec { domain: "pave/election/v2".into(), scope: self.id, linkage: crate::request::Linkage::Scope, max_skew_ms: Some(CLOCK_SLACK * 1000) }
     }
     /// A district's ballot box, as a board.
     pub fn board(&self, district: &str) -> Hash {
         hash_of("pave/election/booth", &(self.id, district))
     }
     pub fn info(&self, district: &str) -> Option<BoardInfo> {
-        Some(BoardInfo {
-            scope: self.board(district),
-            host: self.booths.get(district)?.clone(),
-            roles: BTreeMap::new(),
-        })
+        Some(BoardInfo { scope: self.board(district), host: self.booths.get(district)?.clone(), roles: BTreeMap::new() })
     }
     fn open_at(&self, t: u64) -> bool {
         self.opens <= t && t < self.closes
@@ -132,24 +115,10 @@ impl VoterCard {
     pub fn start() -> (PendingKey, JoinRequest) {
         PendingKey::generate(&pave_scheme_briolette::join_nonce())
     }
-    pub fn finish(
-        e: &Election,
-        district: &str,
-        pending: PendingKey,
-        reply: &JoinReply,
-    ) -> Result<VoterCard, String> {
+    pub fn finish(e: &Election, district: &str, pending: PendingKey, reply: &JoinReply) -> Result<VoterCard, String> {
         let gpk = e.districts.get(district).ok_or("no such district")?;
-        let key = pending.finish(
-            &BrioletteV1 {
-                group_public_key: gpk.clone(),
-            },
-            reply,
-        )?;
-        Ok(VoterCard {
-            election: e.id,
-            district: district.into(),
-            key,
-        })
+        let key = pending.finish(&BrioletteV1 { group_public_key: gpk.clone() }, reply)?;
+        Ok(VoterCard { election: e.id, district: district.into(), key })
     }
 }
 
@@ -206,87 +175,32 @@ pub struct Count {
 
 impl Node {
     fn authority(&self, id: &Hash) -> Result<&Authority, String> {
-        self.operator
-            .as_ref()
-            .and_then(|o| o.elections.get(id))
-            .ok_or_else(|| "this node doesn't run that election".into())
+        self.operator.as_ref().and_then(|o| o.elections.get(id)).ok_or_else(|| "this node doesn't run that election".into())
     }
     fn authority_mut(&mut self, id: &Hash) -> Result<&mut Authority, String> {
-        self.operator
-            .as_mut()
-            .and_then(|o| o.elections.get_mut(id))
-            .ok_or_else(|| "this node doesn't run that election".into())
+        self.operator.as_mut().and_then(|o| o.elections.get_mut(id)).ok_or_else(|| "this node doesn't run that election".into())
     }
 
     /// Operator: set up an election: a roll per district, a booth per
     /// district, a mint capability derived from the root, and the election's
     /// own tick sequence.
-    pub fn open_election(
-        &mut self,
-        label: &str,
-        districts: &[&str],
-        choices: &[&str],
-        opens: u64,
-        closes: u64,
-        revote: bool,
-    ) -> Result<Election, String> {
-        let op = self
-            .operator
-            .as_ref()
-            .ok_or("only the operator runs elections")?;
+    pub fn open_election(&mut self, label: &str, districts: &[&str], choices: &[&str], opens: u64, closes: u64, revote: bool) -> Result<Election, String> {
+        let op = self.operator.as_ref().ok_or("only the operator runs elections")?;
         let s = self.view.scheme().clone();
         let auth = self.town.genesis.rooting_capability();
         let clerk = s.credential(&op.clerk);
-        let derive = sign(
-            &s,
-            &op.root,
-            &op.root_cred,
-            Op::Derive {
-                parent: auth,
-                rights: [rights::ISSUE.to_string()].into_iter().collect(),
-                to: op.minter_cred.clone(),
-            },
-        );
-        let budget = sign(
-            &s,
-            &op.root,
-            &op.root_cred,
-            Op::IssueBudget {
-                authority: auth,
-                schema: epoch_schema(&format!("election {label}")),
-                amount: 1,
-                to: clerk.clone(),
-            },
-        );
-        let first = sign(
-            &s,
-            &op.clerk,
-            &clerk,
-            Op::Mint {
-                budget: budget.output(0),
-                amount: 1,
-                to: clerk.clone(),
-                change_to: clerk.clone(),
-            },
-        );
+        let derive = sign(&s, &op.root, &op.root_cred, Op::Derive { parent: auth, rights: [rights::ISSUE.to_string()].into_iter().collect(), to: op.minter_cred.clone() });
+        let budget = sign(&s, &op.root, &op.root_cred, Op::IssueBudget { authority: auth, schema: epoch_schema(&format!("election {label}")), amount: 1, to: clerk.clone() });
+        let first = sign(&s, &op.clerk, &clerk, Op::Mint { budget: budget.output(0), amount: 1, to: clerk.clone(), change_to: clerk.clone() });
         for r in [&derive, &budget, &first] {
             apply_ok(&mut self.view, r)?;
         }
-        let rolls: BTreeMap<String, Issuer> = districts
-            .iter()
-            .map(|d| (d.to_string(), Issuer::new()))
-            .collect();
+        let rolls: BTreeMap<String, Issuer> = districts.iter().map(|d| (d.to_string(), Issuer::new())).collect();
         let e = Election {
             id: derive.output(0),
             label: label.into(),
-            districts: rolls
-                .iter()
-                .map(|(d, i)| (d.clone(), i.group_public_key.clone()))
-                .collect(),
-            booths: districts
-                .iter()
-                .map(|d| (d.to_string(), s.credential(&self.key)))
-                .collect(),
+            districts: rolls.iter().map(|(d, i)| (d.clone(), i.group_public_key.clone())).collect(),
+            booths: districts.iter().map(|d| (d.to_string(), s.credential(&self.key))).collect(),
             choices: choices.iter().map(|c| c.to_string()).collect(),
             opens,
             closes,
@@ -296,13 +210,7 @@ impl Node {
             schema: vote_schema(label).id(),
             records: vec![derive, budget, first],
         };
-        let a = Authority {
-            election: e.clone(),
-            rolls,
-            issued: BTreeMap::new(),
-            revoked: BTreeMap::new(),
-            ballots: vec![],
-        };
+        let a = Authority { election: e.clone(), rolls, issued: BTreeMap::new(), revoked: BTreeMap::new(), ballots: vec![] };
         self.operator.as_mut().unwrap().elections.insert(e.id, a);
         self.save()?;
         Ok(e)
@@ -322,36 +230,13 @@ impl Node {
 
     /// Registrar: put a voter on a district's roll, from the voter's join
     /// request. Who may register is checked outside pave, as today.
-    pub fn register_voter(
-        &mut self,
-        id: &Hash,
-        district: &str,
-        req: &JoinRequest,
-    ) -> Result<JoinReply, String> {
-        self.authority(id)?
-            .rolls
-            .get(district)
-            .ok_or("no such district")?
-            .issue(req)
+    pub fn register_voter(&mut self, id: &Hash, district: &str, req: &JoinRequest) -> Result<JoinReply, String> {
+        self.authority(id)?.rolls.get(district).ok_or("no such district")?.issue(req)
     }
 
     /// Voter: ask for a vote coin held under `cred`, anonymously.
     pub fn vote_request(&self, e: &Election, card: &VoterCard, cred: &Credential) -> VoteRequest {
-        e.spec()
-            .sign(
-                &card.key,
-                &e.districts[&card.district],
-                0,
-                0,
-                VoteBody {
-                    election: e.id,
-                    cred: cred.clone(),
-                },
-                &[],
-                &[],
-                &[],
-            )
-            .expect("no ruled list for votes")
+        e.spec().sign(&card.key, &e.districts[&card.district], 0, 0, VoteBody { election: e.id, cred: cred.clone() }, &[], &[], &[]).expect("no ruled list for votes")
     }
 
     /// Mint: answer a vote request inside the legal window. A pseudonym seen
@@ -365,16 +250,7 @@ impl Node {
         if !e.open_at(t) {
             return Err("outside the legal window".into());
         }
-        let v = e
-            .spec()
-            .verify(req, e.districts.iter(), &[], &[])
-            .map_err(|err| {
-                if err.contains("member") {
-                    "not on any district's roll".to_string()
-                } else {
-                    err
-                }
-            })?;
+        let v = e.spec().verify(req, e.districts.iter(), &[], &[]).map_err(|err| if err.contains("member") { "not on any district's roll".to_string() } else { err })?;
         let (district, nym) = (v.group, v.nym);
         let prior = a.issued.get(&nym).cloned();
         let mut tick = None;
@@ -389,11 +265,7 @@ impl Node {
         }
         let used: BTreeSet<u32> = {
             let a = self.authority(&e.id)?;
-            a.issued
-                .values()
-                .map(|i| i.group)
-                .chain(a.revoked.keys().copied())
-                .collect()
+            a.issued.values().map(|i| i.group).chain(a.revoked.keys().copied()).collect()
         };
         let group = loop {
             let g = rand::Rng::gen_range(&mut rand::rngs::OsRng, 1..u32::MAX);
@@ -401,102 +273,33 @@ impl Node {
                 break g;
             }
         };
-        let number = head(&self.view, &e.sequence)
-            .ok_or("no election tick")?
-            .number;
+        let number = head(&self.view, &e.sequence).ok_or("no election tick")?.number;
         let op = self.operator.as_ref().unwrap();
         let sch = self.view.scheme().clone();
-        let tag = Tag {
-            purpose: e.id,
-            nym: nym.clone(),
-            class: district,
-        };
-        let ticket = SignedTicket::issue(
-            &sch,
-            &op.clerk,
-            &e.clerk,
-            Ticket {
-                credential: req.body.cred.clone(),
-                sequence: e.sequence,
-                epoch: number,
-                group,
-                max_spend: None,
-                tag: Some(tag),
-            },
-        );
+        let tag = Tag { purpose: e.id, nym: nym.clone(), class: district };
+        let ticket = SignedTicket::issue(&sch, &op.clerk, &e.clerk, Ticket { credential: req.body.cred.clone(), sequence: e.sequence, epoch: number, group, max_spend: None, tag: Some(tag) });
         let (minter, me) = (op.minter.clone(), op.minter_cred.clone());
-        let budget = sign(
-            &sch,
-            &minter,
-            &me,
-            Op::IssueBudget {
-                authority: e.id,
-                schema: vote_schema(&e.label),
-                amount: 1,
-                to: me.clone(),
-            },
-        );
+        let budget = sign(&sch, &minter, &me, Op::IssueBudget { authority: e.id, schema: vote_schema(&e.label), amount: 1, to: me.clone() });
         apply_ok(&mut self.view, &budget)?;
-        let coin = self.guard(sign(
-            &sch,
-            &minter,
-            &me,
-            Op::Mint {
-                budget: budget.output(0),
-                amount: 1,
-                to: req.body.cred.clone(),
-                change_to: me.clone(),
-            },
-        ))?;
+        let coin = self.guard(sign(&sch, &minter, &me, Op::Mint { budget: budget.output(0), amount: 1, to: req.body.cred.clone(), change_to: me.clone() }))?;
         apply_ok(&mut self.view, &coin)?;
         self.know.add_ticket(&sch, ticket.clone());
-        self.authority_mut(&e.id)?.issued.insert(
-            nym,
-            Issued {
-                group,
-                credential: req.body.cred.clone(),
-                at: req.at,
-                cast: false,
-            },
-        );
+        self.authority_mut(&e.id)?.issued.insert(nym, Issued { group, credential: req.body.cred.clone(), at: req.at, cast: false });
         self.save()?;
-        Ok(VoteGrant {
-            ticket,
-            records: vec![budget, coin],
-            tick,
-        })
+        Ok(VoteGrant { ticket, records: vec![budget, coin], tick })
     }
 
     /// Authority: roll the election's own clock, revoking `group` if given.
-    fn tick_election(
-        &mut self,
-        id: &Hash,
-        group: Option<u32>,
-    ) -> Result<(Record, EpochData), String> {
+    fn tick_election(&mut self, id: &Hash, group: Option<u32>) -> Result<(Record, EpochData), String> {
         let e = self.authority(id)?.election.clone();
         let h = head(&self.view, &e.sequence).ok_or("no election tick")?;
         if let Some(g) = group {
             self.authority_mut(id)?.revoked.insert(g, h.number + 1);
         }
-        let data = EpochData {
-            sequence: e.sequence,
-            number: h.number + 1,
-            revoked: self.authority(id)?.revoked.clone(),
-        };
-        let current = self
-            .view
-            .coin(&h.state)
-            .ok_or("election tick missing")?
-            .clone();
+        let data = EpochData { sequence: e.sequence, number: h.number + 1, revoked: self.authority(id)?.revoked.clone() };
+        let current = self.view.coin(&h.state).ok_or("election tick missing")?.clone();
         let op = self.operator.as_ref().unwrap();
-        let rec = roll(
-            self.view.scheme(),
-            &op.clerk,
-            &e.clerk,
-            &current,
-            &e.clerk,
-            &data,
-        );
+        let rec = roll(self.view.scheme(), &op.clerk, &e.clerk, &current, &e.clerk, &data);
         let rec = self.guard(rec)?;
         apply_ok(&mut self.view, &rec)?;
         self.know.add_epoch_data(&self.view, data.clone());
@@ -522,78 +325,22 @@ impl Node {
         if !e.open_at(now()) {
             return Err("outside the legal window".into());
         }
-        Ok(Clock {
-            epoch: head(&self.view, &e.sequence)
-                .ok_or("no election tick")?
-                .number,
-            clock: now(),
-        })
+        Ok(Clock { epoch: head(&self.view, &e.sequence).ok_or("no election tick")?.number, clock: now() })
     }
 
     /// Voter: cast the vote coin held under `cred` at its district's booth,
     /// with the booth's clock.
-    pub fn cast_vote(
-        &mut self,
-        e: &Election,
-        district: &str,
-        cred: &Credential,
-        choice: &str,
-        at: &Clock,
-    ) -> Result<Submission, String> {
-        let state = self
-            .view
-            .unspent()
-            .find(|c| {
-                c.schema == e.schema
-                    && c.kind == Kind::Value
-                    && &c.holder == cred
-                    && !self.signed_log.contains_key(&c.state)
-            })
-            .map(|c| c.state)
-            .ok_or("no vote coin for that key")?;
+    pub fn cast_vote(&mut self, e: &Election, district: &str, cred: &Credential, choice: &str, at: &Clock) -> Result<Submission, String> {
+        let state = self.view.unspent().find(|c| c.schema == e.schema && c.kind == Kind::Value && &c.holder == cred && !self.signed_log.contains_key(&c.state)).map(|c| c.state).ok_or("no vote coin for that key")?;
         let booth = e.booths.get(district).ok_or("no such district")?.clone();
         let mut nonce = [0u8; 16];
         rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce);
-        let post = Post {
-            board: e.board(district),
-            kind: "ballot".into(),
-            thread: Some(e.id),
-            content: content_hash(choice.as_bytes()),
-            nonce,
-            prior: None,
-            epoch: at.epoch,
-            clock: at.clock,
-            by: None,
-        };
-        let record = self.signed(
-            cred,
-            Op::Transfer {
-                state,
-                to: booth,
-                receipt: post.receipt(),
-            },
-        )?;
-        let mint = self
-            .view
-            .creator(&state)
-            .cloned()
-            .ok_or("the coin's mint is missing")?;
-        let budget = mint
-            .op
-            .consumes()
-            .first()
-            .and_then(|b| self.view.creator(b))
-            .cloned()
-            .ok_or("the coin's budget is missing")?;
+        let post = Post { board: e.board(district), kind: "ballot".into(), thread: Some(e.id), content: content_hash(choice.as_bytes()), nonce, prior: None, epoch: at.epoch, clock: at.clock, by: None };
+        let record = self.signed(cred, Op::Transfer { state, to: booth, receipt: post.receipt() })?;
+        let mint = self.view.creator(&state).cloned().ok_or("the coin's mint is missing")?;
+        let budget = mint.op.consumes().first().and_then(|b| self.view.creator(b)).cloned().ok_or("the coin's budget is missing")?;
         let provenance = vec![budget, mint];
-        Ok(Submission {
-            record,
-            post,
-            content: choice.as_bytes().to_vec(),
-            provenance,
-            ticket: self.know.tickets.get(cred).cloned(),
-            taken: None,
-        })
+        Ok(Submission { record, post, content: choice.as_bytes().to_vec(), provenance, ticket: self.know.tickets.get(cred).cloned(), taken: None })
     }
 
     /// Booth: take a vote for its district, inside the legal window: a coin
@@ -605,22 +352,11 @@ impl Node {
         if !e.open_at(now()) {
             return Err("outside the legal window".into());
         }
-        let district = e
-            .booths
-            .keys()
-            .find(|d| e.board(d) == sub.post.board)
-            .ok_or("not a ballot box of this election")?
-            .clone();
-        if sub.post.clock.abs_diff(now()) > CLOCK_SLACK
-            || sub.post.kind != "ballot"
-            || sub.post.thread != Some(e.id)
-        {
+        let district = e.booths.keys().find(|d| e.board(d) == sub.post.board).ok_or("not a ballot box of this election")?.clone();
+        if sub.post.clock.abs_diff(now()) > CLOCK_SLACK || sub.post.kind != "ballot" || sub.post.thread != Some(e.id) {
             return Err("not a ballot for now".into());
         }
-        let choice = std::str::from_utf8(&sub.content)
-            .ok()
-            .filter(|c| e.choices.iter().any(|x| x == c))
-            .ok_or("not a choice on the ballot")?;
+        let choice = std::str::from_utf8(&sub.content).ok().filter(|c| e.choices.iter().any(|x| x == c)).ok_or("not a choice on the ballot")?;
         if content_hash(choice.as_bytes()) != sub.post.content {
             return Err("content doesn't match its hash".into());
         }
@@ -646,35 +382,20 @@ impl Node {
         }
         let s = self.view.scheme().clone();
         self.know.add_ticket(&s, t.clone());
-        let policy = Policy {
-            require_standing: false,
-            honor_ticket_caps: false,
-            ..Policy::wallet([(e.clerk.clone(), e.sequence)].into_iter().collect())
-        };
-        pave_protocol::check(&self.view, &self.know, state, &sub.record.signer, &policy)
-            .map_err(|r| format!("vote refused: {r:?}"))?;
+        let policy = Policy { require_standing: false, honor_ticket_caps: false, ..Policy::wallet([(e.clerk.clone(), e.sequence)].into_iter().collect()) };
+        pave_protocol::check(&self.view, &self.know, state, &sub.record.signer, &policy).map_err(|r| format!("vote refused: {r:?}"))?;
         match self.view.apply(&sub.record) {
             Ok(pave_kernel::Applied::Accepted) => {}
             other => return Err(format!("vote refused: {other:?}")),
         }
-        let taken = self.guard(sign(
-            &s,
-            &self.key,
-            &e.booths[&district],
-            Op::Retire {
-                state: sub.record.output(0),
-            },
-        ))?;
+        let taken = self.guard(sign(&s, &self.key, &e.booths[&district], Op::Retire { state: sub.record.output(0) }))?;
         apply_ok(&mut self.view, &taken)?;
         let nym = tag.nym.clone();
         let a = self.authority_mut(id)?;
         if let Some(i) = a.issued.get_mut(&nym) {
             i.cast = true;
         }
-        a.ballots.push(Submission {
-            taken: Some(taken.clone()),
-            ..sub.clone()
-        });
+        a.ballots.push(Submission { taken: Some(taken.clone()), ..sub.clone() });
         self.save()?;
         Ok(taken)
     }
@@ -691,50 +412,24 @@ impl Node {
     /// its ticket is tagged for this election and district and its group
     /// wasn't revoked, and each pseudonym counts once, from its newest
     /// ticket.
-    pub fn tally(
-        &self,
-        e: &Election,
-        ballots: &[Submission],
-        revoked: &BTreeMap<u32, u32>,
-    ) -> Result<BTreeMap<String, Count>, String> {
+    pub fn tally(&self, e: &Election, ballots: &[Submission], revoked: &BTreeMap<u32, u32>) -> Result<BTreeMap<String, Count>, String> {
         let mut out = BTreeMap::new();
         for district in e.booths.keys() {
             let info = e.info(district).unwrap();
-            let mut copy = Copy::new(
-                info,
-                self.view.scheme().clone(),
-                self.town.genesis.clone(),
-                e.mint(),
-                e.schema,
-                e.clerk.clone(),
-            )?;
+            let mut copy = Copy::new(info, self.view.scheme().clone(), self.town.genesis.clone(), e.mint(), e.schema, e.clerk.clone())?;
             for b in ballots.iter().filter(|b| b.post.board == e.board(district)) {
                 let _ = copy.absorb(b);
             }
             let mut count = Count::default();
             let mut latest: BTreeMap<Vec<u8>, (u32, String)> = BTreeMap::new();
             for item in copy.items() {
-                let Some(t) = copy.ticket(&item.id) else {
-                    continue;
-                };
-                let Some(tag) = t
-                    .ticket
-                    .tag
-                    .as_ref()
-                    .filter(|g| g.purpose == e.id && &g.class == district)
-                else {
-                    continue;
-                };
+                let Some(t) = copy.ticket(&item.id) else { continue };
+                let Some(tag) = t.ticket.tag.as_ref().filter(|g| g.purpose == e.id && &g.class == district) else { continue };
                 if revoked.contains_key(&t.ticket.group) {
                     count.revoked += 1;
                     continue;
                 }
-                let Some(choice) = std::str::from_utf8(item.content)
-                    .ok()
-                    .filter(|c| e.choices.iter().any(|x| x == c))
-                else {
-                    continue;
-                };
+                let Some(choice) = std::str::from_utf8(item.content).ok().filter(|c| e.choices.iter().any(|x| x == c)) else { continue };
                 match latest.get(&tag.nym) {
                     Some((at, _)) if *at >= t.ticket.epoch => count.replaced += 1,
                     Some(_) => {

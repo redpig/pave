@@ -15,16 +15,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug)]
 enum Action {
-    Spend {
-        site: usize,
-        actor: usize,
-        pick: usize,
-        to: usize,
-        split: bool,
-    },
-    Merge {
-        into: usize,
-    },
+    Spend { site: usize, actor: usize, pick: usize, to: usize, split: bool },
+    Merge { into: usize },
 }
 
 fn action() -> impl Strategy<Value = Action> {

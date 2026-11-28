@@ -25,14 +25,8 @@ pub const FORK_HINT_BYTES: usize = 11;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Hint {
-    Head {
-        sequence: [u8; 8],
-        number: u32,
-        tag: [u8; 8],
-    },
-    Fork {
-        state: [u8; 10],
-    },
+    Head { sequence: [u8; 8], number: u32, tag: [u8; 8] },
+    Fork { state: [u8; 10] },
 }
 
 fn prefix<const N: usize>(h: &Hash) -> [u8; N] {
@@ -43,25 +37,15 @@ fn prefix<const N: usize>(h: &Hash) -> [u8; N] {
 
 impl Hint {
     pub fn head(sequence: &Hash, number: u32, state: &Hash) -> Self {
-        Hint::Head {
-            sequence: prefix(sequence),
-            number,
-            tag: prefix(state),
-        }
+        Hint::Head { sequence: prefix(sequence), number, tag: prefix(state) }
     }
     pub fn fork(state: &Hash) -> Self {
-        Hint::Fork {
-            state: prefix(state),
-        }
+        Hint::Fork { state: prefix(state) }
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
         match self {
-            Hint::Head {
-                sequence,
-                number,
-                tag,
-            } => {
+            Hint::Head { sequence, number, tag } => {
                 out.push(1);
                 out.extend_from_slice(sequence);
                 out.extend_from_slice(&number.to_be_bytes());
@@ -103,9 +87,7 @@ pub fn decode_frame(mut b: &[u8]) -> Option<Vec<Hint>> {
                 b = &rest[20..];
             }
             2 if rest.len() >= 10 => {
-                out.push(Hint::Fork {
-                    state: rest[..10].try_into().ok()?,
-                });
+                out.push(Hint::Fork { state: rest[..10].try_into().ok()? });
                 b = &rest[10..];
             }
             _ => return None,
@@ -156,25 +138,13 @@ pub fn wants<S: Scheme>(
     let proven: BTreeSet<[u8; 10]> = view.evidence().map(|e| prefix(&e.basename)).collect();
     for h in &know.hints {
         match *h {
-            Hint::Head {
-                sequence,
-                number,
-                tag,
-            } => {
-                let Some(seq) = relies_on.iter().find(|s| prefix::<8>(s) == sequence) else {
-                    continue;
-                };
+            Hint::Head { sequence, number, tag } => {
+                let Some(seq) = relies_on.iter().find(|s| prefix::<8>(s) == sequence) else { continue };
                 let mine = head(view, seq);
                 let have = mine.as_ref().map_or(0, |m| m.number);
-                let differs = mine
-                    .as_ref()
-                    .is_some_and(|m| m.number == number && prefix::<8>(&m.state) != tag);
+                let differs = mine.as_ref().is_some_and(|m| m.number == number && prefix::<8>(&m.state) != tag);
                 if number > have || differs {
-                    let have = if differs {
-                        number.saturating_sub(1)
-                    } else {
-                        have
-                    };
+                    let have = if differs { number.saturating_sub(1) } else { have };
                     let w = Want::Epochs { sequence, have };
                     if !out.contains(&w) {
                         out.push(w);
@@ -200,19 +170,12 @@ pub enum Proof {
 }
 
 /// Answer a peer's wants from what this wallet can prove.
-pub fn serve<S: Scheme>(
-    view: &View<S>,
-    know: &Knowledge,
-    carries: &BTreeSet<Hash>,
-    wants: &[Want],
-) -> Vec<Proof> {
+pub fn serve<S: Scheme>(view: &View<S>, know: &Knowledge, carries: &BTreeSet<Hash>, wants: &[Want]) -> Vec<Proof> {
     let mut out = Vec::new();
     for w in wants {
         match w {
             Want::Epochs { sequence, have } => {
-                let Some(seq) = carries.iter().find(|s| prefix::<8>(s) == *sequence) else {
-                    continue;
-                };
+                let Some(seq) = carries.iter().find(|s| prefix::<8>(s) == *sequence) else { continue };
                 let recs = chain_since(view, seq, *have);
                 if recs.is_empty() {
                     continue;

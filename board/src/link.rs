@@ -57,27 +57,18 @@ pub struct Invite {
 impl Invite {
     /// A fresh invite, good for `ttl` seconds.
     pub fn new(radios: Vec<Radio>, ttl: u64) -> Invite {
-        Invite {
-            key: rand::random(),
-            token: rand::random(),
-            radios,
-            expires: crate::bulletin::now() + ttl,
-        }
+        Invite { key: rand::random(), token: rand::random(), radios, expires: crate::bulletin::now() + ttl }
     }
 
     /// The text to put in the QR code.
     pub fn to_qr(&self) -> String {
-        format!(
-            "{INVITE_PREFIX}{}",
-            base45::encode(&pave_kernel::hash::encode(self))
-        )
+        format!("{INVITE_PREFIX}{}", base45::encode(&pave_kernel::hash::encode(self)))
     }
 
     /// Read a scanned invite, refusing a stale one.
     pub fn from_qr(s: &str) -> Result<Invite, String> {
         let body = s.strip_prefix(INVITE_PREFIX).ok_or("not a pave invite")?;
-        let inv: Invite =
-            ciborium::from_reader(base45::decode(body)?.as_slice()).map_err(|e| e.to_string())?;
+        let inv: Invite = ciborium::from_reader(base45::decode(body)?.as_slice()).map_err(|e| e.to_string())?;
         if crate::bulletin::now() > inv.expires {
             return Err("this invite has expired: ask for a new code".into());
         }
@@ -109,13 +100,7 @@ const HEADER: usize = 24 + 8;
 
 impl Link {
     pub fn new(inv: &Invite, side: Side) -> Link {
-        Link {
-            key: inv.key,
-            token: inv.token,
-            side,
-            sent: 0,
-            next: 0,
-        }
+        Link { key: inv.key, token: inv.token, side, sent: 0, next: 0 }
     }
 
     pub fn token(&self) -> [u8; 8] {
@@ -137,15 +122,7 @@ impl Link {
         self.sent += 1;
         let plain = pave_kernel::hash::encode(&(kind, serde_bytes::Bytes::new(body)));
         let aad = self.aad(self.side, seq, kind);
-        let ct = XChaCha20Poly1305::new(Key::from_slice(&self.key))
-            .encrypt(
-                XNonce::from_slice(&nonce),
-                Payload {
-                    msg: &plain,
-                    aad: &aad,
-                },
-            )
-            .expect("sealing doesn't fail");
+        let ct = XChaCha20Poly1305::new(Key::from_slice(&self.key)).encrypt(XNonce::from_slice(&nonce), Payload { msg: &plain, aad: &aad }).expect("sealing doesn't fail");
         let mut out = nonce.to_vec();
         out.extend_from_slice(&seq.to_be_bytes());
         out.push(u8::try_from(kind.len()).expect("a kind is a short name"));
@@ -165,31 +142,20 @@ impl Link {
         }
         let seq = u64::from_be_bytes(sealed[24..32].try_into().unwrap());
         let klen = sealed[32] as usize;
-        let kind = sealed
-            .get(33..33 + klen)
-            .and_then(|k| std::str::from_utf8(k).ok())
-            .ok_or(NOT_OURS)?
-            .to_string();
+        let kind = sealed.get(33..33 + klen).and_then(|k| std::str::from_utf8(k).ok()).ok_or(NOT_OURS)?.to_string();
         let from = match self.side {
             Side::Shower => Side::Scanner,
             Side::Scanner => Side::Shower,
         };
         let aad = self.aad(from, seq, &kind);
         let plain = XChaCha20Poly1305::new(Key::from_slice(&self.key))
-            .decrypt(
-                XNonce::from_slice(&sealed[..24]),
-                Payload {
-                    msg: &sealed[33 + klen..],
-                    aad: &aad,
-                },
-            )
+            .decrypt(XNonce::from_slice(&sealed[..24]), Payload { msg: &sealed[33 + klen..], aad: &aad })
             .map_err(|_| NOT_OURS)?;
         // Only now, authenticated: is it the next one?
         if seq != self.next {
             return Err(format!("out of order: expected {}, got {seq}", self.next));
         }
-        let (k, body): (String, serde_bytes::ByteBuf) =
-            ciborium::from_reader(plain.as_slice()).map_err(|e| e.to_string())?;
+        let (k, body): (String, serde_bytes::ByteBuf) = ciborium::from_reader(plain.as_slice()).map_err(|e| e.to_string())?;
         if k != kind {
             return Err("kind mismatch".into());
         }
@@ -224,18 +190,7 @@ pub fn frames(token: [u8; 8], sealed: &[u8], size: usize) -> Vec<String> {
     chunks
         .iter()
         .enumerate()
-        .map(|(i, c)| {
-            format!(
-                "{FRAME_PREFIX}{}",
-                base45::encode(&pave_kernel::hash::encode(&Frame {
-                    token,
-                    msg,
-                    index: i as u32,
-                    count,
-                    data: c.to_vec()
-                }))
-            )
-        })
+        .map(|(i, c)| format!("{FRAME_PREFIX}{}", base45::encode(&pave_kernel::hash::encode(&Frame { token, msg, index: i as u32, count, data: c.to_vec() }))))
         .collect()
 }
 
@@ -248,25 +203,18 @@ pub struct Frames {
 
 impl Frames {
     pub fn new(token: [u8; 8]) -> Frames {
-        Frames {
-            token,
-            parts: BTreeMap::new(),
-        }
+        Frames { token, parts: BTreeMap::new() }
     }
 
     /// Add a scanned code. Returns a sealed message once all its frames are
     /// in; ignores frames from another link.
     pub fn add(&mut self, code: &str) -> Result<Option<Vec<u8>>, String> {
         let body = code.strip_prefix(FRAME_PREFIX).ok_or("not a pave frame")?;
-        let f: Frame =
-            ciborium::from_reader(base45::decode(body)?.as_slice()).map_err(|e| e.to_string())?;
+        let f: Frame = ciborium::from_reader(base45::decode(body)?.as_slice()).map_err(|e| e.to_string())?;
         if f.token != self.token || f.count == 0 || f.index >= f.count {
             return Ok(None);
         }
-        let (count, got) = self
-            .parts
-            .entry(f.msg)
-            .or_insert((f.count, BTreeMap::new()));
+        let (count, got) = self.parts.entry(f.msg).or_insert((f.count, BTreeMap::new()));
         if *count != f.count {
             return Err("frames disagree on their count".into());
         }
@@ -280,10 +228,7 @@ impl Frames {
 
     /// How many of the current messages' frames are still missing.
     pub fn missing(&self) -> u32 {
-        self.parts
-            .values()
-            .map(|(n, got)| n - got.len() as u32)
-            .sum()
+        self.parts.values().map(|(n, got)| n - got.len() as u32).sum()
     }
 }
 
@@ -309,16 +254,7 @@ pub mod base45 {
     }
 
     pub fn decode(s: &str) -> Result<Vec<u8>, String> {
-        let vals: Vec<u32> = s
-            .bytes()
-            .map(|b| {
-                ALPHABET
-                    .iter()
-                    .position(|&a| a == b)
-                    .map(|p| p as u32)
-                    .ok_or("not base45")
-            })
-            .collect::<Result<_, _>>()?;
+        let vals: Vec<u32> = s.bytes().map(|b| ALPHABET.iter().position(|&a| a == b).map(|p| p as u32).ok_or("not base45")).collect::<Result<_, _>>()?;
         let mut out = Vec::with_capacity(vals.len() * 2 / 3);
         for c in vals.chunks(3) {
             match c {
@@ -347,12 +283,7 @@ pub mod base45 {
         // RFC 9285, section 4.
         #[test]
         fn rfc_vectors() {
-            for (plain, coded) in [
-                ("AB", "BB8"),
-                ("Hello!!", "%69 VD92EX0"),
-                ("base-45", "UJCLQE7W581"),
-                ("ietf!", "QED8WEX0"),
-            ] {
+            for (plain, coded) in [("AB", "BB8"), ("Hello!!", "%69 VD92EX0"), ("base-45", "UJCLQE7W581"), ("ietf!", "QED8WEX0")] {
                 assert_eq!(super::encode(plain.as_bytes()), coded);
                 assert_eq!(super::decode(coded).unwrap(), plain.as_bytes());
             }

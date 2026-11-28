@@ -10,16 +10,14 @@
 
 use crate::board::{self, BoardMsg};
 use crate::bulletin::{BoardInfo, Copy, Draft, Submission};
-use crate::vault::{Keystore, SoftwareKeystore};
-use pave_kernel::objects::rights;
 use pave_kernel::receipt::Receipt;
 use pave_kernel::*;
+use pave_kernel::objects::rights;
 use pave_protocol::gossip::Hint;
 use pave_protocol::*;
-use pave_scheme_briolette::{
-    join_nonce, randomize, BrioletteV1, HolderKey, Issuer, JoinReply, JoinRequest, PendingKey,
-};
+use pave_scheme_briolette::{join_nonce, randomize, BrioletteV1, HolderKey, Issuer, JoinReply, JoinRequest, PendingKey};
 use serde::{Deserialize, Serialize};
+use crate::vault::{Keystore, SoftwareKeystore};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -137,17 +135,7 @@ impl PendingJoin {
     pub fn generate() -> (PendingJoin, Join) {
         let (t, tr) = PendingKey::generate(&join_nonce());
         let (a, ar) = PendingKey::generate(&join_nonce());
-        (
-            PendingJoin {
-                transfer: t,
-                access: a,
-            },
-            Join {
-                transfer: tr,
-                access: ar,
-                attestation: None,
-            },
-        )
+        (PendingJoin { transfer: t, access: a }, Join { transfer: tr, access: ar, attestation: None })
     }
 }
 
@@ -361,15 +349,13 @@ pub(crate) fn apply_ok(view: &mut View<S>, rec: &Record) -> Result<(), String> {
 /// Every credential an operation names as a recipient.
 pub(crate) fn op_recipients(op: &Op) -> Vec<&Credential> {
     match op {
-        Op::Derive { to, .. }
-        | Op::IssueBudget { to, .. }
-        | Op::Transfer { to, .. }
-        | Op::Merge { to, .. } => vec![to],
+        Op::Derive { to, .. } | Op::IssueBudget { to, .. } | Op::Transfer { to, .. } | Op::Merge { to, .. } => vec![to],
         Op::Mint { to, change_to, .. } => vec![to, change_to],
         Op::Split { parts, .. } => parts.iter().map(|(_, c)| c).collect(),
         _ => vec![],
     }
 }
+
 
 /// The classes a test town starts with.
 fn default_classes() -> Vec<(&'static str, Option<u64>)> {
@@ -386,111 +372,30 @@ impl Node {
     pub fn init_town(path: &Path, label: &str) -> Result<Node, String> {
         let registrar = Issuer::new();
         let s = registrar.scheme();
-        let (root, clerk, minter, me) = (
-            registrar.join_locally(),
-            registrar.join_locally(),
-            registrar.join_locally(),
-            registrar.join_locally(),
-        );
-        let (rc, cc, mc) = (
-            s.credential(&root),
-            s.credential(&clerk),
-            s.credential(&minter),
-        );
-        let genesis = Genesis {
-            label: label.into(),
-            root_rules: ScopeRules::default(),
-            rooting: rc.clone(),
-        };
+        let (root, clerk, minter, me) = (registrar.join_locally(), registrar.join_locally(), registrar.join_locally(), registrar.join_locally());
+        let (rc, cc, mc) = (s.credential(&root), s.credential(&clerk), s.credential(&minter));
+        let genesis = Genesis { label: label.into(), root_rules: ScopeRules::default(), rooting: rc.clone() };
         let mut view = View::new(s.clone(), genesis.clone());
         let auth = genesis.rooting_capability();
 
-        let seq_budget = sign(
-            &s,
-            &root,
-            &rc,
-            Op::IssueBudget {
-                authority: auth,
-                schema: epoch_schema(label),
-                amount: 1,
-                to: cc.clone(),
-            },
-        );
+        let seq_budget = sign(&s, &root, &rc, Op::IssueBudget { authority: auth, schema: epoch_schema(label), amount: 1, to: cc.clone() });
         apply_ok(&mut view, &seq_budget)?;
-        let seq = sign(
-            &s,
-            &clerk,
-            &cc,
-            Op::Mint {
-                budget: seq_budget.output(0),
-                amount: 1,
-                to: cc.clone(),
-                change_to: cc.clone(),
-            },
-        );
+        let seq = sign(&s, &clerk, &cc, Op::Mint { budget: seq_budget.output(0), amount: 1, to: cc.clone(), change_to: cc.clone() });
         apply_ok(&mut view, &seq)?;
-        let cash = sign(
-            &s,
-            &root,
-            &rc,
-            Op::IssueBudget {
-                authority: auth,
-                schema: cash_schema(),
-                amount: 1_000_000,
-                to: mc.clone(),
-            },
-        );
+        let cash = sign(&s, &root, &rc, Op::IssueBudget { authority: auth, schema: cash_schema(), amount: 1_000_000, to: mc.clone() });
         apply_ok(&mut view, &cash)?;
-        let jobs = sign(
-            &s,
-            &root,
-            &rc,
-            Op::CreateScope {
-                parent: genesis.root_scope(),
-                rules: ScopeRules::default(),
-                authority: auth,
-            },
-        );
+        let jobs = sign(&s, &root, &rc, Op::CreateScope { parent: genesis.root_scope(), rules: ScopeRules::default(), authority: auth });
         apply_ok(&mut view, &jobs)?;
-        let reports = sign(
-            &s,
-            &root,
-            &rc,
-            Op::CreateScope {
-                parent: genesis.root_scope(),
-                rules: ScopeRules::default(),
-                authority: auth,
-            },
-        );
+        let reports = sign(&s, &root, &rc, Op::CreateScope { parent: genesis.root_scope(), rules: ScopeRules::default(), authority: auth });
         apply_ok(&mut view, &reports)?;
         // The board mint: the minter's capability to issue post tokens.
-        let post_mint = sign(
-            &s,
-            &root,
-            &rc,
-            Op::Derive {
-                parent: auth,
-                rights: [rights::ISSUE.to_string()].into_iter().collect(),
-                to: mc.clone(),
-            },
-        );
+        let post_mint = sign(&s, &root, &rc, Op::Derive { parent: auth, rights: [rights::ISSUE.to_string()].into_iter().collect(), to: mc.clone() });
         apply_ok(&mut view, &post_mint)?;
 
-        let access: BTreeMap<String, Issuer> = default_classes()
-            .iter()
-            .map(|(c, _)| (c.to_string(), Issuer::new()))
-            .collect();
+        let access: BTreeMap<String, Issuer> = default_classes().iter().map(|(c, _)| (c.to_string(), Issuer::new())).collect();
         let classes = default_classes()
             .into_iter()
-            .map(|(c, max_spend)| {
-                (
-                    c.to_string(),
-                    Class {
-                        group_public_key: access[c].group_public_key.clone(),
-                        max_spend,
-                    },
-                )
-            })
+            .map(|(c, max_spend)| (c.to_string(), Class { group_public_key: access[c].group_public_key.clone(), max_spend }))
             .collect();
         let town = Town {
             genesis,
@@ -502,22 +407,11 @@ impl Node {
             parcels: crate::parcel::parcel_schema().id(),
             posts: crate::bulletin::post_schema().id(),
             post_mint,
-            jobs: BoardInfo {
-                scope: jobs.output(0),
-                host: s.credential(&me),
-                roles: [("escrow".to_string(), s.credential(&me))]
-                    .into_iter()
-                    .collect(),
-            },
+            jobs: BoardInfo { scope: jobs.output(0), host: s.credential(&me), roles: [("escrow".to_string(), s.credential(&me))].into_iter().collect() },
             reports: BoardInfo {
                 scope: reports.output(0),
                 host: s.credential(&me),
-                roles: [
-                    ("mirror".to_string(), s.credential(&me)),
-                    ("moderator".to_string(), s.credential(&me)),
-                ]
-                .into_iter()
-                .collect(),
+                roles: [("mirror".to_string(), s.credential(&me)), ("moderator".to_string(), s.credential(&me))].into_iter().collect(),
             },
         };
         let my_access = access["hardware"].join_locally();
@@ -588,10 +482,7 @@ impl Node {
 
     /// Operator: a fresh random ticket group for a batch from `class`.
     fn new_group(&mut self, class: &str) -> Result<u32, String> {
-        let op = self
-            .operator
-            .as_mut()
-            .ok_or("only the town operator assigns groups")?;
+        let op = self.operator.as_mut().ok_or("only the town operator assigns groups")?;
         loop {
             let g = rand::Rng::gen_range(&mut rand::rngs::OsRng, 1..GROUPS);
             if op.revoked.contains_key(&g) {
@@ -609,53 +500,20 @@ impl Node {
 
     /// Operator: the clerk certifies a batch of credentials from `class`, in
     /// a fresh random group, at the current epoch, on the class's terms.
-    pub fn issue_tickets(
-        &mut self,
-        creds: &[Credential],
-        class: &str,
-    ) -> Result<(u32, Vec<SignedTicket>), String> {
+    pub fn issue_tickets(&mut self, creds: &[Credential], class: &str) -> Result<(u32, Vec<SignedTicket>), String> {
         self.issue_tickets_tagged(creds, class, None)
     }
 
     /// As [`Node::issue_tickets`], each ticket carrying `tag`.
-    pub fn issue_tickets_tagged(
-        &mut self,
-        creds: &[Credential],
-        class: &str,
-        tag: Option<Tag>,
-    ) -> Result<(u32, Vec<SignedTicket>), String> {
+    pub fn issue_tickets_tagged(&mut self, creds: &[Credential], class: &str, tag: Option<Tag>) -> Result<(u32, Vec<SignedTicket>), String> {
         let group = self.new_group(class)?;
-        let max_spend = self
-            .town
-            .classes
-            .get(class)
-            .ok_or("unknown class")?
-            .max_spend;
-        let op = self
-            .operator
-            .as_ref()
-            .ok_or("only the town operator issues tickets")?;
-        let epoch = head(&self.view, &self.town.sequence)
-            .ok_or("no epoch")?
-            .number;
+        let max_spend = self.town.classes.get(class).ok_or("unknown class")?.max_spend;
+        let op = self.operator.as_ref().ok_or("only the town operator issues tickets")?;
+        let epoch = head(&self.view, &self.town.sequence).ok_or("no epoch")?.number;
         let s = self.view.scheme().clone();
         let out: Vec<SignedTicket> = creds
             .iter()
-            .map(|c| {
-                SignedTicket::issue(
-                    &s,
-                    &op.clerk,
-                    &self.town.clerk,
-                    Ticket {
-                        credential: c.clone(),
-                        sequence: self.town.sequence,
-                        epoch,
-                        group,
-                        max_spend,
-                        tag: tag.clone(),
-                    },
-                )
-            })
+            .map(|c| SignedTicket::issue(&s, &op.clerk, &self.town.clerk, Ticket { credential: c.clone(), sequence: self.town.sequence, epoch, group, max_spend, tag: tag.clone() }))
             .collect();
         for t in &out {
             self.know.add_ticket(&s, t.clone());
@@ -669,65 +527,28 @@ impl Node {
     /// transfer credential, an access credential for the class, and test
     /// credit minted to ticketed credentials. Everything else the wallet gets
     /// later through anonymous refills.
-    pub fn enroll(
-        &mut self,
-        join: &Join,
-        class: &str,
-        credits: &[u64],
-    ) -> Result<Enrollment, String> {
-        let op = self
-            .operator
-            .as_mut()
-            .ok_or("only the town operator can enroll")?;
+    pub fn enroll(&mut self, join: &Join, class: &str, credits: &[u64]) -> Result<Enrollment, String> {
+        let op = self.operator.as_mut().ok_or("only the town operator can enroll")?;
         if op.closed.contains(class) {
             return Err(format!("class {class} is closed"));
         }
         // A class an attestation earns is granted only on one that verifies
         // and earns it, never on the operator's say-so.
         if op.attest.attested_classes().any(|c| c == class) {
-            let a = join
-                .attestation
-                .as_ref()
-                .ok_or(format!("class {class} needs a hardware attestation"))?;
-            let got = crate::attest::verify(
-                &op.attest,
-                a,
-                &crate::attest::challenge(join),
-                crate::bulletin::now(),
-            )?;
+            let a = join.attestation.as_ref().ok_or(format!("class {class} needs a hardware attestation"))?;
+            let got = crate::attest::verify(&op.attest, a, &crate::attest::challenge(join), crate::bulletin::now())?;
             if op.attest.earns.get(&got) != Some(&class.to_string()) {
                 return Err(format!("a {got:?} attestation doesn't earn class {class}"));
             }
         }
         let transfer = op.registrar.issue(&join.transfer)?;
-        let access = op
-            .access
-            .get(class)
-            .ok_or("unknown class")?
-            .issue(&join.access)?;
+        let access = op.access.get(class).ok_or("unknown class")?.issue(&join.access)?;
         let s = self.view.scheme().clone();
-        let creds: Vec<Credential> = credits
-            .iter()
-            .map(|_| randomize(&transfer.credential))
-            .collect();
-        let group = if creds.is_empty() {
-            0
-        } else {
-            self.issue_tickets(&creds, class)?.0
-        };
+        let creds: Vec<Credential> = credits.iter().map(|_| randomize(&transfer.credential)).collect();
+        let group = if creds.is_empty() { 0 } else { self.issue_tickets(&creds, class)?.0 };
         for (i, amount) in credits.iter().enumerate() {
             let op = self.operator.as_mut().unwrap();
-            let mint = sign(
-                &s,
-                &op.minter,
-                &op.minter_cred,
-                Op::Mint {
-                    budget: op.cash_budget,
-                    amount: *amount,
-                    to: creds[i].clone(),
-                    change_to: op.minter_cred.clone(),
-                },
-            );
+            let mint = sign(&s, &op.minter, &op.minter_cred, Op::Mint { budget: op.cash_budget, amount: *amount, to: creds[i].clone(), change_to: op.minter_cred.clone() });
             let mint = self.guard(mint)?;
             self.operator.as_mut().unwrap().cash_budget = mint.output(1);
             apply_ok(&mut self.view, &mint)?;
@@ -736,9 +557,7 @@ impl Node {
         // Only what the new member needs: its coins' provenance, the epoch
         // sequence and the board scope. Never the rest of the town's view.
         let mut keep: std::collections::BTreeMap<Hash, Record> = BTreeMap::new();
-        let mut roots: Vec<Hash> = (0..credits.len())
-            .filter_map(|i| self.view.coins_held_by(&creds[i]).next().map(|c| c.state))
-            .collect();
+        let mut roots: Vec<Hash> = (0..credits.len()).filter_map(|i| self.view.coins_held_by(&creds[i]).next().map(|c| c.state)).collect();
         if let Some(h) = head(&self.view, &self.town.sequence) {
             roots.push(h.state);
         }
@@ -747,78 +566,29 @@ impl Node {
                 keep.insert(r.id(), r);
             }
         }
-        for r in self
-            .view
-            .records()
-            .iter()
-            .filter(|r| matches!(r.op, Op::CreateScope { .. }))
-        {
+        for r in self.view.records().iter().filter(|r| matches!(r.op, Op::CreateScope { .. })) {
             keep.insert(r.id(), r.clone());
         }
         let mut bundle = self.bundle();
-        bundle.records = self
-            .view
-            .records()
-            .iter()
-            .filter(|r| keep.contains_key(&r.id()))
-            .cloned()
-            .collect();
+        bundle.records = self.view.records().iter().filter(|r| keep.contains_key(&r.id())).cloned().collect();
         bundle.conflicts.clear();
-        bundle.tickets = self
-            .know
-            .tickets
-            .values()
-            .filter(|t| creds.contains(&t.ticket.credential))
-            .cloned()
-            .collect();
-        Ok(Enrollment {
-            town: self.town.clone(),
-            transfer,
-            access,
-            class: class.into(),
-            group,
-            creds,
-            bundle,
-        })
+        bundle.tickets = self.know.tickets.values().filter(|t| creds.contains(&t.ticket.credential)).cloned().collect();
+        Ok(Enrollment { town: self.town.clone(), transfer, access, class: class.into(), group, creds, bundle })
     }
 
     /// Wallet: finish enrolling with the town's answer to this wallet's join
     /// request, checking that both credentials are bound to its own keys.
-    pub fn finish_enrollment(
-        pending: PendingJoin,
-        e: &Enrollment,
-        name: &str,
-        out: &Path,
-    ) -> Result<Node, String> {
-        Self::finish_enrollment_with(
-            pending,
-            e,
-            name,
-            out,
-            Box::new(SoftwareKeystore::for_state(out)?),
-        )
+    pub fn finish_enrollment(pending: PendingJoin, e: &Enrollment, name: &str, out: &Path) -> Result<Node, String> {
+        Self::finish_enrollment_with(pending, e, name, out, Box::new(SoftwareKeystore::for_state(out)?))
     }
 
     /// As [`Node::finish_enrollment`], sealing the state under `vault`: on a
     /// phone, the platform keystore.
-    pub fn finish_enrollment_with(
-        pending: PendingJoin,
-        e: &Enrollment,
-        name: &str,
-        out: &Path,
-        vault: Box<dyn Keystore>,
-    ) -> Result<Node, String> {
-        let s = BrioletteV1 {
-            group_public_key: e.town.group_public_key.clone(),
-        };
+    pub fn finish_enrollment_with(pending: PendingJoin, e: &Enrollment, name: &str, out: &Path, vault: Box<dyn Keystore>) -> Result<Node, String> {
+        let s = BrioletteV1 { group_public_key: e.town.group_public_key.clone() };
         let class = e.town.classes.get(&e.class).ok_or("unknown class")?;
         let key = pending.transfer.finish(&s, &e.transfer)?;
-        let access = pending.access.finish(
-            &BrioletteV1 {
-                group_public_key: class.group_public_key.clone(),
-            },
-            &e.access,
-        )?;
+        let access = pending.access.finish(&BrioletteV1 { group_public_key: class.group_public_key.clone() }, &e.access)?;
         let mut person = Node {
             links: BTreeMap::new(),
             path: out.into(),
@@ -887,9 +657,7 @@ impl Node {
         let sealed = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let bytes = vault.open(&sealed)?;
         let saved: Saved = ciborium::from_reader(bytes.as_slice()).map_err(|e| e.to_string())?;
-        let scheme = BrioletteV1 {
-            group_public_key: saved.town.group_public_key.clone(),
-        };
+        let scheme = BrioletteV1 { group_public_key: saved.town.group_public_key.clone() };
         let mut node = Node {
             links: BTreeMap::new(),
             path: path.into(),
@@ -908,11 +676,7 @@ impl Node {
             cheat_states: saved.cheat_states.into_iter().collect(),
             swaps_held: saved.swaps_held,
             signed_log: saved.signed_log.into_iter().collect(),
-            invoices: saved
-                .invoices
-                .into_iter()
-                .map(|(c, a, m)| (c, (a, m)))
-                .collect(),
+            invoices: saved.invoices.into_iter().map(|(c, a, m)| (c, (a, m))).collect(),
             invoice_credit: saved.invoice_credit.into_iter().collect(),
             paid: saved.paid.into_iter().collect(),
             pending: saved.pending,
@@ -926,20 +690,13 @@ impl Node {
             labels: saved.labels.into_iter().collect(),
             shift_keys: saved.shift_keys,
             slots: saved.slots,
-            originals: saved
-                .originals
-                .into_iter()
-                .map(|(c, sub, s, b)| (c, (sub, s.into_vec(), b.into_vec())))
-                .collect(),
+            originals: saved.originals.into_iter().map(|(c, sub, s, b)| (c, (sub, s.into_vec(), b.into_vec()))).collect(),
             drop_photos: saved.drop_photos.into_iter().collect(),
             evidence_out: saved.evidence_out,
-            held_evidence: saved
-                .held_evidence
-                .into_iter()
-                .fold(BTreeMap::new(), |mut m, e| {
-                    m.entry(e.subject).or_insert_with(Vec::new).push(e);
-                    m
-                }),
+            held_evidence: saved.held_evidence.into_iter().fold(BTreeMap::new(), |mut m, e| {
+                m.entry(e.subject).or_insert_with(Vec::new).push(e);
+                m
+            }),
             nac_seen: BTreeMap::new(),
             nac_barred: BTreeSet::new(),
             nac_limit: crate::nac::NAC_LIMIT,
@@ -983,57 +740,22 @@ impl Node {
             outbox: self.outbox.clone(),
             cheat_states: self.cheat_states.iter().copied().collect(),
             swaps_held: self.swaps_held.clone(),
-            signed_log: self
-                .signed_log
-                .iter()
-                .map(|(h, r)| (*h, r.clone()))
-                .collect(),
-            invoices: self
-                .invoices
-                .iter()
-                .map(|(c, (a, m))| (c.clone(), *a, *m))
-                .collect(),
-            invoice_credit: self
-                .invoice_credit
-                .iter()
-                .map(|(c, h)| (c.clone(), *h))
-                .collect(),
+            signed_log: self.signed_log.iter().map(|(h, r)| (*h, r.clone())).collect(),
+            invoices: self.invoices.iter().map(|(c, (a, m))| (c.clone(), *a, *m)).collect(),
+            invoice_credit: self.invoice_credit.iter().map(|(c, h)| (c.clone(), *h)).collect(),
             paid: self.paid.iter().map(|(h, c)| (*h, c.clone())).collect(),
             pending: self.pending.clone(),
-            boards: self
-                .boards
-                .iter()
-                .map(|(s, c)| (*s, c.submissions()))
-                .collect(),
+            boards: self.boards.iter().map(|(s, c)| (*s, c.submissions())).collect(),
             outgoing: self.outgoing.clone(),
             trade: self.trade.clone(),
-            identities: self
-                .identities
-                .iter()
-                .map(|(l, c)| (l.clone(), c.clone()))
-                .collect(),
-            contacts: self
-                .contacts
-                .iter()
-                .map(|(n, c)| (n.clone(), c.clone()))
-                .collect(),
+            identities: self.identities.iter().map(|(l, c)| (l.clone(), c.clone())).collect(),
+            contacts: self.contacts.iter().map(|(n, c)| (n.clone(), c.clone())).collect(),
             parcels: self.parcels.values().cloned().collect(),
             codes: self.codes.iter().map(|(p, c)| (*p, c.clone())).collect(),
             labels: self.labels.iter().map(|(p, c)| (*p, c.clone())).collect(),
             shift_keys: self.shift_keys.clone(),
             slots: self.slots.clone(),
-            originals: self
-                .originals
-                .iter()
-                .map(|(c, (sub, s, b))| {
-                    (
-                        *c,
-                        *sub,
-                        serde_bytes::ByteBuf::from(s.clone()),
-                        serde_bytes::ByteBuf::from(b.clone()),
-                    )
-                })
-                .collect(),
+            originals: self.originals.iter().map(|(c, (sub, s, b))| (*c, *sub, serde_bytes::ByteBuf::from(s.clone()), serde_bytes::ByteBuf::from(b.clone()))).collect(),
             drop_photos: self.drop_photos.iter().map(|(p, c)| (*p, *c)).collect(),
             evidence_out: self.evidence_out.clone(),
             held_evidence: self.held_evidence.values().flatten().cloned().collect(),
@@ -1058,27 +780,10 @@ impl Node {
         // hides its other spends of the states it double-spent.
         // Post tokens go between a wallet, the mint and a board server, never
         // between wallets: they would show which keys posted.
-        let hidden = |r: &Record| {
-            r.op.consumes()
-                .iter()
-                .any(|s| self.cheat_states.contains(s))
-                || self.post_record(r)
-        };
-        let mut records: Vec<Record> = self
-            .view
-            .records()
-            .iter()
-            .filter(|r| !hidden(r))
-            .cloned()
-            .collect();
+        let hidden = |r: &Record| r.op.consumes().iter().any(|s| self.cheat_states.contains(s)) || self.post_record(r);
+        let mut records: Vec<Record> = self.view.records().iter().filter(|r| !hidden(r)).cloned().collect();
         records.extend(self.outbox.iter().cloned());
-        let conflicts: Vec<Record> = self
-            .view
-            .conflicts()
-            .iter()
-            .filter(|r| !hidden(r))
-            .cloned()
-            .collect();
+        let conflicts: Vec<Record> = self.view.conflicts().iter().filter(|r| !hidden(r)).cloned().collect();
         // Tickets only for credentials those records name: never the pool.
         let named: BTreeSet<&Credential> = records
             .iter()
@@ -1087,21 +792,10 @@ impl Node {
             .collect();
         Bundle {
             genesis: self.town.genesis.root_scope(),
-            tickets: self
-                .know
-                .tickets
-                .values()
-                .filter(|t| named.contains(&t.ticket.credential))
-                .cloned()
-                .collect(),
+            tickets: self.know.tickets.values().filter(|t| named.contains(&t.ticket.credential)).cloned().collect(),
             records,
             conflicts,
-            evidence: self
-                .view
-                .evidence()
-                .filter(|e| !self.cheat_states.contains(&e.basename))
-                .cloned()
-                .collect(),
+            evidence: self.view.evidence().filter(|e| !self.cheat_states.contains(&e.basename)).cloned().collect(),
             epoch_data: self.know.epoch_data.values().cloned().collect(),
         }
     }
@@ -1111,13 +805,7 @@ impl Node {
     pub fn have(&self) -> Have {
         use crate::pay::prefix;
         Have {
-            records: self
-                .view
-                .records()
-                .iter()
-                .chain(self.view.conflicts().iter())
-                .map(|r| prefix(&r.id()))
-                .collect(),
+            records: self.view.records().iter().chain(self.view.conflicts().iter()).map(|r| prefix(&r.id())).collect(),
             evidence: self.view.evidence().map(|e| prefix(&e.basename)).collect(),
             epochs: self.know.epoch_data.keys().map(prefix).collect(),
         }
@@ -1128,20 +816,11 @@ impl Node {
     pub fn bundle_for(&self, have: &Have) -> Bundle {
         use crate::pay::prefix;
         let mut b = self.bundle();
-        b.records
-            .retain(|r| !have.records.contains(&prefix(&r.id())));
-        b.conflicts
-            .retain(|r| !have.records.contains(&prefix(&r.id())));
-        b.evidence
-            .retain(|e| !have.evidence.contains(&prefix(&e.basename)));
-        b.epoch_data
-            .retain(|d| !have.epochs.contains(&prefix(&d.hash())));
-        let named: BTreeSet<&Credential> = b
-            .records
-            .iter()
-            .chain(b.conflicts.iter())
-            .flat_map(|r| std::iter::once(&r.signer).chain(op_recipients(&r.op)))
-            .collect();
+        b.records.retain(|r| !have.records.contains(&prefix(&r.id())));
+        b.conflicts.retain(|r| !have.records.contains(&prefix(&r.id())));
+        b.evidence.retain(|e| !have.evidence.contains(&prefix(&e.basename)));
+        b.epoch_data.retain(|d| !have.epochs.contains(&prefix(&d.hash())));
+        let named: BTreeSet<&Credential> = b.records.iter().chain(b.conflicts.iter()).flat_map(|r| std::iter::once(&r.signer).chain(op_recipients(&r.op))).collect();
         b.tickets.retain(|t| named.contains(&t.ticket.credential));
         b
     }
@@ -1150,11 +829,7 @@ impl Node {
     pub fn post_record(&self, r: &Record) -> bool {
         match &r.op {
             Op::IssueBudget { schema, .. } => schema.id() == self.town.posts,
-            op => op.consumes().iter().any(|s| {
-                self.view
-                    .coin(s)
-                    .is_some_and(|c| c.schema == self.town.posts)
-            }),
+            op => op.consumes().iter().any(|s| self.view.coin(s).is_some_and(|c| c.schema == self.town.posts)),
         }
     }
 
@@ -1162,13 +837,9 @@ impl Node {
     pub fn absorb_bundle(&mut self, b: &Bundle) -> Vec<Hash> {
         let before: BTreeSet<Hash> = self.view.evidence().map(|e| e.basename).collect();
         // Board posts don't travel between wallets; they go to their host.
-        let boards: BTreeSet<Hash> = [self.town.jobs.scope, self.town.reports.scope]
-            .into_iter()
-            .collect();
+        let boards: BTreeSet<Hash> = [self.town.jobs.scope, self.town.reports.scope].into_iter().collect();
         for r in b.records.iter().chain(b.conflicts.iter()) {
-            if matches!(&r.op, Op::Send { scope, .. } if boards.contains(scope))
-                || self.post_record(r)
-            {
+            if matches!(&r.op, Op::Send { scope, .. } if boards.contains(scope)) || self.post_record(r) {
                 continue;
             }
             let _ = self.view.apply(r);
@@ -1189,11 +860,7 @@ impl Node {
                 self.know.add_epoch_data(&self.view, d.clone());
             }
         }
-        self.view
-            .evidence()
-            .map(|e| e.basename)
-            .filter(|h| !before.contains(h))
-            .collect()
+        self.view.evidence().map(|e| e.basename).filter(|h| !before.contains(h)).collect()
     }
 
     /// Standing for every credential this wallet has paid others from,
@@ -1209,31 +876,19 @@ impl Node {
             .records()
             .iter()
             .chain(self.outbox.iter())
-            .filter(|r| {
-                self.mine.contains(&r.signer)
-                    && op_recipients(&r.op).iter().any(|c| !self.mine.contains(*c))
-            })
+            .filter(|r| self.mine.contains(&r.signer) && op_recipients(&r.op).iter().any(|c| !self.mine.contains(*c)))
             .map(|r| &r.signer)
             .collect();
-        paid_from
-            .into_iter()
-            .filter_map(|c| Standing::prove(self.scheme(), &self.key, c, &list))
-            .collect()
+        paid_from.into_iter().filter_map(|c| Standing::prove(self.scheme(), &self.key, c, &list)).collect()
     }
 
     pub fn absorb_standings(&mut self, v: Vec<Standing>) -> usize {
         let s = self.view.scheme().clone();
-        v.into_iter()
-            .filter(|st| self.know.add_standing(&s, st.clone()))
-            .count()
+        v.into_iter().filter(|st| self.know.add_standing(&s, st.clone())).count()
     }
 
     pub fn policy(&self) -> Policy {
-        Policy::wallet(
-            [(self.town.clerk.clone(), self.town.sequence)]
-                .into_iter()
-                .collect(),
-        )
+        Policy::wallet([(self.town.clerk.clone(), self.town.sequence)].into_iter().collect())
     }
 
     pub fn carries(&self) -> BTreeSet<Hash> {
@@ -1258,12 +913,7 @@ impl Node {
         let mut v: Vec<Coin> = self
             .view
             .unspent()
-            .filter(|c| {
-                self.mine.contains(&c.holder)
-                    && c.kind == Kind::Value
-                    && &c.schema == credit
-                    && c.amount > 0
-            })
+            .filter(|c| self.mine.contains(&c.holder) && c.kind == Kind::Value && &c.schema == credit && c.amount > 0)
             .cloned()
             .collect();
         v.sort_by_key(|c| std::cmp::Reverse(c.amount));
@@ -1272,20 +922,13 @@ impl Node {
 
     /// A fresh credential with a ticket, from the prefetched pool.
     pub fn fresh(&mut self) -> Result<Credential, String> {
-        self.pool
-            .pop()
-            .ok_or_else(|| "out of tickets: refill when you next meet the town".into())
+        self.pool.pop().ok_or_else(|| "out of tickets: refill when you next meet the town".into())
     }
 
     /// Operator: what a ticket request must meet this epoch.
     pub fn refill_terms(&self) -> Result<RefillTerms, String> {
-        let epoch = head(&self.view, &self.town.sequence)
-            .ok_or("no epoch")?
-            .number;
-        Ok(RefillTerms {
-            epoch,
-            cheats: cheat_list(&self.view),
-        })
+        let epoch = head(&self.view, &self.town.sequence).ok_or("no epoch")?.number;
+        Ok(RefillTerms { epoch, cheats: cheat_list(&self.view) })
     }
 
     /// Ask for `count` more tickets, anonymously: fresh credentials, each
@@ -1293,42 +936,19 @@ impl Node {
     /// fresh randomization of this wallet's access credential.
     /// The clerk's request spec: slotted per epoch of the town's sequence.
     pub fn refill_spec(&self) -> crate::request::RequestSpec {
-        crate::request::RequestSpec {
-            domain: "pave/ticket-request/v2".into(),
-            scope: self.town.sequence,
-            linkage: crate::request::Linkage::Slots(REFILL_SLOTS),
-            max_skew_ms: None,
-        }
+        crate::request::RequestSpec { domain: "pave/ticket-request/v2".into(), scope: self.town.sequence, linkage: crate::request::Linkage::Slots(REFILL_SLOTS), max_skew_ms: None }
     }
 
-    pub fn refill_request(
-        &mut self,
-        terms: &RefillTerms,
-        count: usize,
-    ) -> Result<RefillRequest, String> {
-        let slot = self
-            .slots
-            .take(&self.town.sequence, terms.epoch as u64, REFILL_SLOTS);
+    pub fn refill_request(&mut self, terms: &RefillTerms, count: usize) -> Result<RefillRequest, String> {
+        let slot = self.slots.take(&self.town.sequence, terms.epoch as u64, REFILL_SLOTS);
         let s = self.scheme();
         let creds: Vec<Credential> = (0..count).map(|_| s.credential(&self.key)).collect();
         let standing = creds
             .iter()
-            .map(|c| {
-                Standing::prove(s, &self.key, c, &terms.cheats)
-                    .ok_or_else(|| "this wallet is a known cheat".to_string())
-            })
+            .map(|c| Standing::prove(s, &self.key, c, &terms.cheats).ok_or_else(|| "this wallet is a known cheat".to_string()))
             .collect::<Result<Vec<_>, _>>()?;
         let group = self.town.classes[&self.class].group_public_key.clone();
-        self.refill_spec().sign(
-            &self.access,
-            &group,
-            terms.epoch as u64,
-            slot,
-            RefillBody { creds, standing },
-            &[],
-            &[],
-            &[],
-        )
+        self.refill_spec().sign(&self.access, &group, terms.epoch as u64, slot, RefillBody { creds, standing }, &[], &[], &[])
     }
 
     /// Operator: answer an anonymous ticket request. The access signature
@@ -1339,22 +959,13 @@ impl Node {
     pub fn answer_refill(&mut self, req: &RefillRequest) -> Result<Vec<SignedTicket>, String> {
         let terms = self.refill_terms()?;
         if req.period != terms.epoch as u64 {
-            return Err(format!(
-                "stale request: the clerk is at epoch {}",
-                terms.epoch
-            ));
+            return Err(format!("stale request: the clerk is at epoch {}", terms.epoch));
         }
         let b = &req.body;
         if b.creds.is_empty() || b.creds.len() > MAX_BATCH || b.standing.len() != b.creds.len() {
-            return Err(format!(
-                "ask for 1 to {MAX_BATCH} tickets, each with standing"
-            ));
+            return Err(format!("ask for 1 to {MAX_BATCH} tickets, each with standing"));
         }
-        let groups = self
-            .town
-            .classes
-            .iter()
-            .map(|(n, c)| (n, &c.group_public_key));
+        let groups = self.town.classes.iter().map(|(n, c)| (n, &c.group_public_key));
         let v = self.refill_spec().verify(req, groups, &[], &[])?;
         let (class, nym) = (v.group, v.nym);
         let s = self.view.scheme().clone();
@@ -1363,14 +974,9 @@ impl Node {
                 return Err("a credential lacks standing".into());
             }
         }
-        let op = self
-            .operator
-            .as_mut()
-            .ok_or("only the town operator issues tickets")?;
+        let op = self.operator.as_mut().ok_or("only the town operator issues tickets")?;
         if op.closed.contains(&class) {
-            return Err(format!(
-                "class {class} is closed: update the wallet and enroll again"
-            ));
+            return Err(format!("class {class} is closed: update the wallet and enroll again"));
         }
         op.refills.note(req.period, nym);
         Ok(self.issue_tickets(&b.creds, &class)?.1)
@@ -1406,10 +1012,7 @@ impl Node {
                 return if prior.op == rec.op && prior.signer == rec.signer {
                     Ok(prior.clone())
                 } else {
-                    Err(format!(
-                        "refusing to sign state {} a second time",
-                        hex::encode(&b.0[..6])
-                    ))
+                    Err(format!("refusing to sign state {} a second time", hex::encode(&b.0[..6])))
                 };
             }
         }
@@ -1429,34 +1032,19 @@ impl Node {
 
     /// The job board as this wallet's copy has it.
     pub fn jobs(&self) -> BTreeMap<Hash, board::Job> {
-        self.copy(&self.town.jobs.scope)
-            .map(board::jobs)
-            .unwrap_or_default()
+        self.copy(&self.town.jobs.scope).map(board::jobs).unwrap_or_default()
     }
 
     /// A contractor's reputation on the job board: distinct people per job
     /// type, and the vouches that count.
     pub fn reputation(&self, who: &Hash) -> (BTreeMap<String, usize>, Vec<board::Vouched>) {
-        self.copy(&self.town.jobs.scope)
-            .map(|c| board::reputation(c, &self.contacts, who))
-            .unwrap_or_default()
+        self.copy(&self.town.jobs.scope).map(|c| board::reputation(c, &self.contacts, who)).unwrap_or_default()
     }
 
     /// The vouch coins this wallet holds, by state.
     pub fn vouch_coins(&self) -> Vec<Hash> {
-        let Some(who) = self.contractor() else {
-            return vec![];
-        };
-        self.reputation(&who)
-            .1
-            .into_iter()
-            .map(|v| v.coin)
-            .filter(|c| {
-                self.view
-                    .coin(c)
-                    .is_some_and(|c| self.mine.contains(&c.holder))
-            })
-            .collect()
+        let Some(who) = self.contractor() else { return vec![] };
+        self.reputation(&who).1.into_iter().map(|v| v.coin).filter(|c| self.view.coin(c).is_some_and(|c| self.mine.contains(&c.holder))).collect()
     }
 
     fn job(&self, id: &Hash) -> Result<board::Job, String> {
@@ -1471,88 +1059,33 @@ impl Node {
 
     /// As [`Node::post`], for a job whose worker must be known as `known`
     /// says. Replies stay anonymous; the one accepted shows its key.
-    pub fn post_known(
-        &mut self,
-        title: &str,
-        pay: u64,
-        known: board::Known,
-    ) -> Result<Hash, String> {
+    pub fn post_known(&mut self, title: &str, pay: u64, known: board::Known) -> Result<Hash, String> {
         self.post_about(title, pay, Some(known), None, None)
     }
 
     /// Post a job, saying how its worker must be known, what it is about,
     /// and by when (board-clock seconds) the worker must finish.
-    pub fn post_about(
-        &mut self,
-        title: &str,
-        pay: u64,
-        known: Option<board::Known>,
-        about: Option<Hash>,
-        due: Option<u64>,
-    ) -> Result<Hash, String> {
+    pub fn post_about(&mut self, title: &str, pay: u64, known: Option<board::Known>, about: Option<Hash>, due: Option<u64>) -> Result<Hash, String> {
         let poster = self.fresh()?;
         self.post_as(poster, title, pay, known, about, due)
     }
 
     /// Post a job under `poster`, a key of this wallet's.
-    pub(crate) fn post_as(
-        &mut self,
-        poster: Credential,
-        title: &str,
-        pay: u64,
-        known: Option<board::Known>,
-        about: Option<Hash>,
-        due: Option<u64>,
-    ) -> Result<Hash, String> {
-        let coin = self
-            .my_coins()
-            .into_iter()
-            .find(|c| c.amount >= pay)
-            .ok_or("no single coin covers the pay")?;
+    pub(crate) fn post_as(&mut self, poster: Credential, title: &str, pay: u64, known: Option<board::Known>, about: Option<Hash>, due: Option<u64>) -> Result<Hash, String> {
+        let coin = self.my_coins().into_iter().find(|c| c.amount >= pay).ok_or("no single coin covers the pay")?;
         let terms = Receipt::Node(vec![
-            (
-                "public".into(),
-                Receipt::leaf(format!("{title} | pay {pay}").into_bytes()),
-            ),
-            (
-                "parties".into(),
-                Receipt::leaf(b"terms: done when the poster signs off".to_vec()),
-            ),
+            ("public".into(), Receipt::leaf(format!("{title} | pay {pay}").into_bytes())),
+            ("parties".into(), Receipt::leaf(b"terms: done when the poster signs off".to_vec())),
         ]);
-        let proof = self.signed(
-            &coin.holder,
-            Op::Split {
-                state: coin.state,
-                parts: vec![(coin.amount, poster.clone()), (0, poster.clone())],
-                receipt: terms.root(),
-            },
-        )?;
+        let proof = self.signed(&coin.holder, Op::Split { state: coin.state, parts: vec![(coin.amount, poster.clone()), (0, poster.clone())], receipt: terms.root() })?;
         apply_ok(&mut self.view, &proof)?;
-        self.send_as(
-            &poster,
-            BoardMsg::Post {
-                title: title.into(),
-                pay,
-                means: proof.id(),
-                terms: terms.root(),
-                known: known.map(Box::new),
-                about,
-                due,
-            },
-        )
+        self.send_as(&poster, BoardMsg::Post { title: title.into(), pay, means: proof.id(), terms: terms.root(), known: known.map(Box::new), about, due })
     }
 
     /// Reply under a fresh credential; that credential is who gets accepted and paid.
     pub fn reply(&mut self, job: Hash, note: &str) -> Result<Hash, String> {
         let me = self.fresh()?;
-        self.send_as(
-            &me,
-            BoardMsg::Reply {
-                job,
-                note: note.into(),
-                trade: None,
-            },
-        )
+        self.send_as(&me, BoardMsg::Reply { job, note: note.into(), trade: None })
     }
 
     /// This wallet's identity for `label`: a stable credential it can sign
@@ -1595,17 +1128,8 @@ impl Node {
     pub fn reply_as_contractor(&mut self, job: Hash, note: &str) -> Result<Hash, String> {
         let me = self.fresh()?;
         let key = self.trade_key()?;
-        let sig = self
-            .scheme()
-            .sign(&self.key, &key, &board::trade_bytes(&job, &me), None);
-        self.send_as(
-            &me,
-            BoardMsg::Reply {
-                job,
-                note: note.into(),
-                trade: Some(board::Trade { key, sig }),
-            },
-        )
+        let sig = self.scheme().sign(&self.key, &key, &board::trade_bytes(&job, &me), None);
+        self.send_as(&me, BoardMsg::Reply { job, note: note.into(), trade: Some(board::Trade { key, sig }) })
     }
 
     pub fn accept(&mut self, job: Hash, worker: Credential) -> Result<Hash, String> {
@@ -1626,9 +1150,7 @@ impl Node {
         if j.status != board::Status::Accepted {
             return Err(format!("job is {:?}, not Accepted", j.status));
         }
-        let due = j
-            .due
-            .ok_or("this job has no due time to release it after")?;
+        let due = j.due.ok_or("this job has no due time to release it after")?;
         if crate::bulletin::now() <= due {
             return Err("not yet past due".into());
         }
@@ -1637,10 +1159,7 @@ impl Node {
 
     /// Whether `sequence`'s latest tick, as this wallet has it, revokes `group`.
     pub fn is_revoked(&self, sequence: &Hash, group: u32) -> bool {
-        pave_protocol::head(&self.view, sequence)
-            .and_then(|h| h.data)
-            .and_then(|d| self.know.epoch_data.get(&d))
-            .is_some_and(|d| d.revoked.contains_key(&group))
+        pave_protocol::head(&self.view, sequence).and_then(|h| h.data).and_then(|d| self.know.epoch_data.get(&d)).is_some_and(|d| d.revoked.contains_key(&group))
     }
 
     /// Worker: show the poster of `job` this wallet's stable key, signed
@@ -1651,57 +1170,26 @@ impl Node {
     /// job, so the work counts toward that key.
     pub fn show_known(&mut self, job: Hash) -> Result<board::Shown, String> {
         let j = self.job(&job)?;
-        let known = j
-            .known
-            .as_ref()
-            .ok_or("this job's worker needn't be known")?;
-        let worker = j
-            .replies
-            .iter()
-            .map(|(c, _)| c)
-            .find(|c| self.mine.contains(*c))
-            .ok_or("this wallet hasn't replied")?
-            .clone();
+        let known = j.known.as_ref().ok_or("this job's worker needn't be known")?;
+        let worker = j.replies.iter().map(|(c, _)| c).find(|c| self.mine.contains(*c)).ok_or("this wallet hasn't replied")?.clone();
         let (key, ticket) = match known {
             board::Known::Stable => (self.trade_key()?, None),
             board::Known::Badge(d) => {
-                let t = self
-                    .know
-                    .tickets
-                    .values()
-                    .find(|t| {
-                        self.mine.contains(&t.ticket.credential)
-                            && d.badge_of(self.view.scheme(), t).is_some()
-                    })
-                    .ok_or("no badge from this job's roster")?;
+                let t = self.know.tickets.values().find(|t| self.mine.contains(&t.ticket.credential) && d.badge_of(self.view.scheme(), t).is_some()).ok_or("no badge from this job's roster")?;
                 (t.ticket.credential.clone(), Some(t.clone()))
             }
         };
-        let sig = self
-            .scheme()
-            .sign(&self.key, &key, &board::trade_bytes(&job, &worker), None);
-        Ok(board::Shown {
-            ticket,
-            trade: board::Trade { key, sig },
-        })
+        let sig = self.scheme().sign(&self.key, &key, &board::trade_bytes(&job, &worker), None);
+        Ok(board::Shown { ticket, trade: board::Trade { key, sig } })
     }
 
     /// Poster: give `job` to `worker` on what it showed, once it checks out
     /// and any badge isn't revoked as far as this wallet knows. Before
     /// accepting, the poster can read the shown key's reputation.
-    pub fn accept_shown(
-        &mut self,
-        job: Hash,
-        worker: Credential,
-        shown: board::Shown,
-    ) -> Result<Hash, String> {
+    pub fn accept_shown(&mut self, job: Hash, worker: Credential, shown: board::Shown) -> Result<Hash, String> {
         let j = self.job(&job)?;
-        let known = j
-            .known
-            .as_ref()
-            .ok_or("this job's worker needn't be known")?;
-        let (id, _) = board::shown_by(self.view.scheme(), known, &job, &worker, &shown)
-            .ok_or("not what this job needs, or not signed for this worker")?;
+        let known = j.known.as_ref().ok_or("this job's worker needn't be known")?;
+        let (id, _) = board::shown_by(self.view.scheme(), known, &job, &worker, &shown).ok_or("not what this job needs, or not signed for this worker")?;
         if let (board::Known::Badge(d), Some(t)) = (known, &shown.ticket) {
             if self.is_revoked(&d.id, t.ticket.group) {
                 return Err(format!("{}'s badge is revoked", id.unwrap_or_default()));
@@ -1710,12 +1198,7 @@ impl Node {
         self.assign(job, worker, Some(shown))
     }
 
-    fn assign(
-        &mut self,
-        job: Hash,
-        worker: Credential,
-        badge: Option<board::Shown>,
-    ) -> Result<Hash, String> {
+    fn assign(&mut self, job: Hash, worker: Credential, badge: Option<board::Shown>) -> Result<Hash, String> {
         let j = self.job(&job)?;
         if !self.mine.contains(&j.poster) {
             return Err("only the poster accepts".into());
@@ -1723,24 +1206,9 @@ impl Node {
         // Give the job by transferring its state: a second accept would be a
         // second use of it.
         let state = board::job_state(&j.means);
-        let rec = self.signed(
-            &j.poster,
-            Op::Transfer {
-                state,
-                to: worker.clone(),
-                receipt: board::accept_receipt(&job, &worker),
-            },
-        )?;
+        let rec = self.signed(&j.poster, Op::Transfer { state, to: worker.clone(), receipt: board::accept_receipt(&job, &worker) })?;
         let _ = self.view.apply(&rec);
-        self.send_as(
-            &j.poster,
-            BoardMsg::Accept {
-                job,
-                worker,
-                assignment: Some(rec),
-                badge: badge.map(Box::new),
-            },
-        )
+        self.send_as(&j.poster, BoardMsg::Accept { job, worker, assignment: Some(rec), badge: badge.map(Box::new) })
     }
 
     pub fn done(&mut self, job: Hash) -> Result<Hash, String> {
@@ -1763,21 +1231,11 @@ impl Node {
     /// worker must have replied as a contractor.
     /// With `as_stable`, the vouch is also signed with that stable
     /// credential, so whoever was given it knows the vouch is this wallet's.
-    pub fn pay_and_vouch(
-        &mut self,
-        job_id: Hash,
-        category: &str,
-        note: &str,
-        identity: Option<&str>,
-    ) -> Result<Hash, String> {
+    pub fn pay_and_vouch(&mut self, job_id: Hash, category: &str, note: &str, identity: Option<&str>) -> Result<Hash, String> {
         self.pay_with(job_id, Some((category, note, identity)))
     }
 
-    fn pay_with(
-        &mut self,
-        job_id: Hash,
-        vouch: Option<(&str, &str, Option<&str>)>,
-    ) -> Result<Hash, String> {
+    fn pay_with(&mut self, job_id: Hash, vouch: Option<(&str, &str, Option<&str>)>) -> Result<Hash, String> {
         let job = self.job(&job_id)?;
         if !self.mine.contains(&job.poster) {
             return Err("only the poster pays".into());
@@ -1786,17 +1244,9 @@ impl Node {
         if job.status != board::Status::Done {
             return Err(format!("job is {:?}, not Done", job.status));
         }
-        let coin = self
-            .my_coins()
-            .into_iter()
-            .find(|c| c.amount >= job.pay)
-            .ok_or("no single coin covers the pay")?;
+        let coin = self.my_coins().into_iter().find(|c| c.amount >= job.pay).ok_or("no single coin covers the pay")?;
         let who = match vouch {
-            Some(_) => Some(
-                *job.contractors
-                    .get(&worker)
-                    .ok_or("the worker didn't reply as a contractor")?,
-            ),
+            Some(_) => Some(*job.contractors.get(&worker).ok_or("the worker didn't reply as a contractor")?),
             None => None,
         };
         let rec = match (vouch, who) {
@@ -1805,61 +1255,21 @@ impl Node {
                 if coin.amount > job.pay {
                     parts.push((coin.amount - job.pay, self.fresh()?));
                 }
-                self.signed(
-                    &coin.holder,
-                    Op::Split {
-                        state: coin.state,
-                        parts,
-                        receipt: board::vouch_receipt(&job_id, &who, category),
-                    },
-                )?
+                self.signed(&coin.holder, Op::Split { state: coin.state, parts, receipt: board::vouch_receipt(&job_id, &who, category) })?
             }
-            _ if coin.amount == job.pay => self.signed(
-                &coin.holder,
-                Op::Transfer {
-                    state: coin.state,
-                    to: worker,
-                    receipt: board::pay_receipt(&job_id),
-                },
-            )?,
+            _ if coin.amount == job.pay => self.signed(&coin.holder, Op::Transfer { state: coin.state, to: worker, receipt: board::pay_receipt(&job_id) })?,
             _ => {
                 let change = self.fresh()?;
-                self.signed(
-                    &coin.holder,
-                    Op::Split {
-                        state: coin.state,
-                        parts: vec![(job.pay, worker), (coin.amount - job.pay, change)],
-                        receipt: board::pay_receipt(&job_id),
-                    },
-                )?
+                self.signed(&coin.holder, Op::Split { state: coin.state, parts: vec![(job.pay, worker), (coin.amount - job.pay, change)], receipt: board::pay_receipt(&job_id) })?
             }
         };
         apply_ok(&mut self.view, &rec)?;
         let payment = rec.output(0);
-        self.send_as(
-            &job.poster,
-            BoardMsg::Paid {
-                job: job_id,
-                payment,
-            },
-        )?;
+        self.send_as(&job.poster, BoardMsg::Paid { job: job_id, payment })?;
         if let (Some((category, note, identity)), Some(who)) = (vouch, who) {
-            let msg = BoardMsg::Vouch {
-                job: job_id,
-                category: category.into(),
-                note: note.into(),
-                payment: Box::new(rec),
-            };
+            let msg = BoardMsg::Vouch { job: job_id, category: category.into(), note: note.into(), payment: Box::new(rec) };
             let scope = self.town.jobs.scope;
-            self.compose_as(
-                &scope,
-                &job.poster,
-                msg.kind(),
-                Some(who),
-                msg.encode(),
-                Some(crate::bulletin::purpose(&scope, "vouch", &who)),
-                identity,
-            )?;
+            self.compose_as(&scope, &job.poster, msg.kind(), Some(who), msg.encode(), Some(crate::bulletin::purpose(&scope, "vouch", &who)), identity)?;
         }
         Ok(payment)
     }
@@ -1871,21 +1281,8 @@ impl Node {
 
     /// Plain transfer of a whole coin.
     pub fn spend(&mut self, state: Hash, to: Credential) -> Result<Hash, String> {
-        let holder = self
-            .view
-            .coin(&state)
-            .filter(|c| self.mine.contains(&c.holder))
-            .ok_or("not a coin this wallet holds")?
-            .holder
-            .clone();
-        let rec = self.signed(
-            &holder,
-            Op::Transfer {
-                state,
-                to,
-                receipt: Hash([0; 32]),
-            },
-        )?;
+        let holder = self.view.coin(&state).filter(|c| self.mine.contains(&c.holder)).ok_or("not a coin this wallet holds")?.holder.clone();
+        let rec = self.signed(&holder, Op::Transfer { state, to, receipt: Hash([0; 32]) })?;
         apply_ok(&mut self.view, &rec)?;
         Ok(rec.output(0))
     }
@@ -1899,16 +1296,7 @@ impl Node {
             _ => return Err("not a state this wallet held".into()),
         };
         // A tampered wallet: it skips its own signing log.
-        let rec = sign(
-            self.scheme(),
-            &self.key,
-            &holder,
-            Op::Transfer {
-                state,
-                to,
-                receipt: Hash([0; 32]),
-            },
-        );
+        let rec = sign(self.scheme(), &self.key, &holder, Op::Transfer { state, to, receipt: Hash([0; 32]) });
         self.outbox.push(rec.clone());
         self.cheat_states.insert(state);
         Ok(rec.output(0))
@@ -1917,36 +1305,17 @@ impl Node {
     /// Operator: roll the clerk's epoch, revoking ticket groups and whole
     /// classes. Revocation is cumulative. A revoked class is closed: its
     /// wallets get no tickets until they update and enroll again.
-    pub fn roll_epoch(
-        &mut self,
-        groups: BTreeSet<u32>,
-        classes: BTreeSet<String>,
-    ) -> Result<u32, String> {
-        let at = head(&self.view, &self.town.sequence)
-            .ok_or("no epoch")?
-            .number
-            + 1;
+    pub fn roll_epoch(&mut self, groups: BTreeSet<u32>, classes: BTreeSet<String>) -> Result<u32, String> {
+        let at = head(&self.view, &self.town.sequence).ok_or("no epoch")?.number + 1;
         // Rulings revoke the ticket groups of the posts they rule on.
-        let ruled = self
-            .boards
-            .get(&self.town.reports.scope)
-            .map(crate::report::ruled_groups)
-            .unwrap_or_default();
-        let op = self
-            .operator
-            .as_mut()
-            .ok_or("only the town operator rolls epochs")?;
+        let ruled = self.boards.get(&self.town.reports.scope).map(crate::report::ruled_groups).unwrap_or_default();
+        let op = self.operator.as_mut().ok_or("only the town operator rolls epochs")?;
         for c in &classes {
             if !op.access.contains_key(c) {
                 return Err(format!("unknown class {c}"));
             }
         }
-        let class_groups: Vec<u32> = op
-            .groups
-            .iter()
-            .filter(|(_, c)| classes.contains(*c))
-            .map(|(g, _)| *g)
-            .collect();
+        let class_groups: Vec<u32> = op.groups.iter().filter(|(_, c)| classes.contains(*c)).map(|(g, _)| *g).collect();
         for g in groups.into_iter().chain(class_groups).chain(ruled) {
             op.revoked.entry(g).or_insert(at);
         }
@@ -1954,24 +1323,9 @@ impl Node {
         let revoked = op.revoked.clone();
         let op = self.operator.as_ref().unwrap();
         let h = head(&self.view, &self.town.sequence).ok_or("no epoch")?;
-        let coin = self
-            .view
-            .coin(&h.state)
-            .ok_or("epoch state missing")?
-            .clone();
-        let data = EpochData {
-            sequence: self.town.sequence,
-            number: h.number + 1,
-            revoked,
-        };
-        let rec = roll(
-            self.view.scheme(),
-            &op.clerk,
-            &self.town.clerk,
-            &coin,
-            &self.town.clerk,
-            &data,
-        );
+        let coin = self.view.coin(&h.state).ok_or("epoch state missing")?.clone();
+        let data = EpochData { sequence: self.town.sequence, number: h.number + 1, revoked };
+        let rec = roll(self.view.scheme(), &op.clerk, &self.town.clerk, &coin, &self.town.clerk, &data);
         let rec = self.guard(rec)?;
         apply_ok(&mut self.view, &rec)?;
         self.know.add_epoch_data(&self.view, data);
@@ -1980,22 +1334,11 @@ impl Node {
 
     /// Would this wallet accept the coin at `state`?
     /// As [`Node::check`], also trusting `extra` clerks, each with its sequence.
-    pub fn check_trusting(
-        &self,
-        state: &Hash,
-        extra: &[(Credential, Hash)],
-    ) -> Result<(), Refusal> {
+    pub fn check_trusting(&self, state: &Hash, extra: &[(Credential, Hash)]) -> Result<(), Refusal> {
         let coin = self.view.coin(state).ok_or(Refusal::UnknownState)?;
         let n = coin.history.len();
-        let sender = if n >= 2 {
-            coin.history[n - 2].clone()
-        } else {
-            coin.holder.clone()
-        };
-        let mut policy = Policy {
-            require_standing: !self.mine.contains(&sender),
-            ..self.policy()
-        };
+        let sender = if n >= 2 { coin.history[n - 2].clone() } else { coin.holder.clone() };
+        let mut policy = Policy { require_standing: !self.mine.contains(&sender), ..self.policy() };
         policy.trusted_clerks.extend(extra.iter().cloned());
         check(&self.view, &self.know, state, &sender, &policy)
     }
@@ -2003,16 +1346,9 @@ impl Node {
     pub fn check(&self, state: &Hash) -> Result<(), Refusal> {
         let coin = self.view.coin(state).ok_or(Refusal::UnknownState)?;
         let n = coin.history.len();
-        let sender = if n >= 2 {
-            coin.history[n - 2].clone()
-        } else {
-            coin.holder.clone()
-        };
+        let sender = if n >= 2 { coin.history[n - 2].clone() } else { coin.holder.clone() };
         // This wallet can always prove its own standing.
-        let policy = Policy {
-            require_standing: !self.mine.contains(&sender),
-            ..self.policy()
-        };
+        let policy = Policy { require_standing: !self.mine.contains(&sender), ..self.policy() };
         check(&self.view, &self.know, state, &sender, &policy)
     }
 

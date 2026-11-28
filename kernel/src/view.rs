@@ -98,19 +98,12 @@ pub struct View<S: Scheme> {
 
 impl<S: Scheme> View<S> {
     pub fn new(scheme: S, genesis: Genesis) -> Self {
-        let root = Scope {
-            id: genesis.root_scope(),
-            parent: None,
-            rules: genesis.root_rules.clone(),
-        };
+        let root = Scope { id: genesis.root_scope(), parent: None, rules: genesis.root_rules.clone() };
         let rooting = Shared {
             id: genesis.rooting_capability(),
             parent: None,
             schema: None,
-            rights: [rights::CREATE_SCOPE, rights::ISSUE]
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
+            rights: [rights::CREATE_SCOPE, rights::ISSUE].iter().map(|s| s.to_string()).collect(),
             holder: genesis.rooting.clone(),
         };
         let mut v = View {
@@ -215,10 +208,7 @@ impl<S: Scheme> View<S> {
                 return Err(Reject::Malformed);
             }
             for (state, sig) in consumes.iter().zip(&rec.sigs) {
-                if !self
-                    .scheme
-                    .verify(&rec.signer, &msg, Some(state.as_bytes()), sig)
-                {
+                if !self.scheme.verify(&rec.signer, &msg, Some(state.as_bytes()), sig) {
                     return Err(Reject::BadSignature);
                 }
                 nyms.push(self.scheme.nym(sig).ok_or(Reject::BadSignature)?);
@@ -262,13 +252,7 @@ impl<S: Scheme> View<S> {
         // Commit.
         for (state, nym) in consumes.iter().zip(nyms) {
             self.unspent.remove(state);
-            self.spent.insert(
-                *state,
-                Spent {
-                    record: rec.clone(),
-                    nym,
-                },
-            );
+            self.spent.insert(*state, Spent { record: rec.clone(), nym });
         }
         for coin in effect.coins {
             self.created.insert(coin.state, self.records.len());
@@ -303,30 +287,16 @@ impl<S: Scheme> View<S> {
     fn effect(&self, rec: &Record, inputs: &[Coin]) -> Result<Effect, Reject> {
         let mut e = Effect::default();
         match &rec.op {
-            Op::CreateScope {
-                parent,
-                rules,
-                authority,
-            } => {
+            Op::CreateScope { parent, rules, authority } => {
                 self.authorize(authority, &rec.signer, rights::CREATE_SCOPE)?;
-                let p = self
-                    .scopes
-                    .get(parent)
-                    .ok_or(Reject::UnknownScope(*parent))?;
+                let p = self.scopes.get(parent).ok_or(Reject::UnknownScope(*parent))?;
                 if !rules.within(&p.rules) {
                     return Err(Reject::LooserScope);
                 }
-                e.scope = Some(Scope {
-                    id: rec.output(0),
-                    parent: Some(*parent),
-                    rules: rules.clone(),
-                });
+                e.scope = Some(Scope { id: rec.output(0), parent: Some(*parent), rules: rules.clone() });
             }
             Op::Derive { parent, rights, to } => {
-                let p = self
-                    .shared
-                    .get(parent)
-                    .ok_or(Reject::UnknownCapability(*parent))?;
+                let p = self.shared.get(parent).ok_or(Reject::UnknownCapability(*parent))?;
                 if p.holder != rec.signer {
                     return Err(Reject::NotHolder(*parent));
                 }
@@ -341,12 +311,7 @@ impl<S: Scheme> View<S> {
                     holder: to.clone(),
                 });
             }
-            Op::IssueBudget {
-                authority,
-                schema,
-                amount,
-                to,
-            } => {
+            Op::IssueBudget { authority, schema, amount, to } => {
                 self.authorize(authority, &rec.signer, rights::ISSUE)?;
                 if *amount == 0 {
                     return Err(Reject::Malformed);
@@ -363,20 +328,9 @@ impl<S: Scheme> View<S> {
                     history: vec![to.clone()],
                 });
                 e.schema = Some(schema.clone());
-                e.totals = Some((
-                    sid,
-                    Totals {
-                        issued: *amount,
-                        ..Default::default()
-                    },
-                ));
+                e.totals = Some((sid, Totals { issued: *amount, ..Default::default() }));
             }
-            Op::Mint {
-                amount,
-                to,
-                change_to,
-                ..
-            } => {
+            Op::Mint { amount, to, change_to, .. } => {
                 let b = &inputs[0];
                 if b.kind != Kind::MintBudget {
                     return Err(Reject::WrongKind);
@@ -407,13 +361,7 @@ impl<S: Scheme> View<S> {
                         history: vec![change_to.clone()],
                     });
                 }
-                e.totals = Some((
-                    b.schema,
-                    Totals {
-                        minted: *amount,
-                        ..Default::default()
-                    },
-                ));
+                e.totals = Some((b.schema, Totals { minted: *amount, ..Default::default() }));
             }
             Op::Transfer { to, .. } => {
                 let c = &inputs[0];
@@ -482,20 +430,12 @@ impl<S: Scheme> View<S> {
             Op::Retire { .. } => {
                 let c = &inputs[0];
                 let delta = match c.kind {
-                    Kind::Value => Totals {
-                        retired_value: c.amount,
-                        ..Default::default()
-                    },
-                    Kind::MintBudget => Totals {
-                        retired_budget: c.amount,
-                        ..Default::default()
-                    },
+                    Kind::Value => Totals { retired_value: c.amount, ..Default::default() },
+                    Kind::MintBudget => Totals { retired_budget: c.amount, ..Default::default() },
                 };
                 e.totals = Some((c.schema, delta));
             }
-            Op::Send {
-                scope, presenting, ..
-            } => {
+            Op::Send { scope, presenting, .. } => {
                 let s = self.scopes.get(scope).ok_or(Reject::UnknownScope(*scope))?;
                 if !s.rules.senders.is_empty() {
                     let cap = presenting
@@ -513,16 +453,8 @@ impl<S: Scheme> View<S> {
         Ok(e)
     }
 
-    fn authorize(
-        &self,
-        cap: &Hash,
-        signer: &Credential,
-        right: &'static str,
-    ) -> Result<(), Reject> {
-        let c = self
-            .shared
-            .get(cap)
-            .ok_or(Reject::UnknownCapability(*cap))?;
+    fn authorize(&self, cap: &Hash, signer: &Credential, right: &'static str) -> Result<(), Reject> {
+        let c = self.shared.get(cap).ok_or(Reject::UnknownCapability(*cap))?;
         if &c.holder != signer {
             return Err(Reject::NotHolder(*cap));
         }
@@ -545,9 +477,7 @@ impl<S: Scheme> View<S> {
         if !verify_evidence(&self.scheme, ev) {
             return false;
         }
-        self.evidence
-            .entry(ev.basename)
-            .or_insert_with(|| ev.clone());
+        self.evidence.entry(ev.basename).or_insert_with(|| ev.clone());
         true
     }
 
@@ -563,11 +493,7 @@ impl<S: Scheme> View<S> {
         for ev in other.evidence.values() {
             self.import_evidence(ev);
         }
-        self.evidence
-            .keys()
-            .filter(|k| !before.contains(k))
-            .copied()
-            .collect()
+        self.evidence.keys().filter(|k| !before.contains(k)).copied().collect()
     }
 }
 
@@ -615,11 +541,7 @@ pub fn verify_evidence<S: Scheme>(scheme: &S, ev: &Evidence) -> bool {
         let Some(sig) = rec.sigs.get(i) else {
             return false;
         };
-        scheme.verify(
-            &rec.signer,
-            &rec.op.signing_bytes(),
-            Some(ev.basename.as_bytes()),
-            sig,
-        ) && scheme.nym(sig).as_deref() == Some(ev.nym.as_slice())
+        scheme.verify(&rec.signer, &rec.op.signing_bytes(), Some(ev.basename.as_bytes()), sig)
+            && scheme.nym(sig).as_deref() == Some(ev.nym.as_slice())
     })
 }

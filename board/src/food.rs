@@ -36,13 +36,13 @@
 //!   up what it received against that receipt.
 
 use crate::board::{contractor, Known};
+use pave_kernel::Credential;
 use crate::bulletin::purpose;
 use crate::parcel::{label_hash, Manifest, Step};
 use pave_kernel::hash::Hash;
-use pave_kernel::Credential;
 use pave_kernel::Record;
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+use serde::{Deserialize, Serialize};
 
 /// The customer's note on delivery.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,40 +72,21 @@ pub struct DeliveryVouched {
 pub enum Outcome {
     /// No delivered note from the customer's key yet.
     Pending,
-    OnTime {
-        at: u64,
-    },
-    Late {
-        at: u64,
-        by: u64,
-    },
+    OnTime { at: u64 },
+    Late { at: u64, by: u64 },
     /// Delivered, but the seal's code didn't match the label.
-    SealBroken {
-        at: u64,
-    },
+    SealBroken { at: u64 },
 }
 
 impl crate::node::Node {
     /// Customer: post that the order arrived, with whether the seal matched,
     /// signed by the key the order was delivered to. Confirm the parcel
     /// first; the note waits for the next sync with the board.
-    pub fn note_delivered(
-        &mut self,
-        m: &Manifest,
-        order: Hash,
-        seal: &str,
-    ) -> Result<Hash, String> {
+    pub fn note_delivered(&mut self, m: &Manifest, order: Hash, seal: &str) -> Result<Hash, String> {
         let seal_ok = m.label == Some(label_hash(&m.parcel, seal));
         let note = Delivered { order, seal_ok };
         let scope = self.town.jobs.scope;
-        self.compose(
-            &scope,
-            &m.addressee,
-            "delivered",
-            Some(order),
-            pave_kernel::hash::encode(&note),
-            None,
-        )
+        self.compose(&scope, &m.addressee, "delivered", Some(order), pave_kernel::hash::encode(&note), None)
     }
 
     /// Customer: vouch for the courier who handed this wallet the parcel,
@@ -132,19 +113,8 @@ impl crate::node::Node {
         }
         let who = contractor(&courier);
         let scope = self.town.jobs.scope;
-        let v = DeliveryVouch {
-            manifest: m.clone(),
-            records,
-            note: note.into(),
-        };
-        self.compose(
-            &scope,
-            &m.addressee,
-            "delivery vouch",
-            Some(who),
-            pave_kernel::hash::encode(&v),
-            Some(purpose(&scope, "vouch", &who)),
-        )
+        let v = DeliveryVouch { manifest: m.clone(), records, note: note.into() };
+        self.compose(&scope, &m.addressee, "delivery vouch", Some(who), pave_kernel::hash::encode(&v), Some(purpose(&scope, "vouch", &who)))
     }
 
     /// Anyone: the delivery vouches for the courier key whose contractor id
@@ -152,23 +122,17 @@ impl crate::node::Node {
     /// records are learned first, as from any meet.
     pub fn delivery_vouches(&mut self, who: &Hash) -> (usize, Vec<DeliveryVouched>) {
         let scope = self.town.jobs.scope;
-        let Ok(copy) = self.copy(&scope) else {
-            return (0, vec![]);
-        };
+        let Ok(copy) = self.copy(&scope) else { return (0, vec![]) };
         let mut found = vec![];
         for i in copy.items() {
             if i.post.kind != "delivery vouch" || i.post.thread != Some(*who) {
                 continue;
             }
-            let Ok(v) = ciborium::from_reader::<DeliveryVouch, _>(i.content) else {
-                continue;
-            };
+            let Ok(v) = ciborium::from_reader::<DeliveryVouch, _>(i.content) else { continue };
             if *i.signer != v.manifest.addressee {
                 continue;
             }
-            let Some((_, nym)) = i.counted(&purpose(&scope, "vouch", who)) else {
-                continue;
-            };
+            let Some((_, nym)) = i.counted(&purpose(&scope, "vouch", who)) else { continue };
             found.push((v, nym));
         }
         let (mut parcels, mut people, mut out) = (BTreeSet::new(), BTreeSet::new(), vec![]);
@@ -181,10 +145,7 @@ impl crate::node::Node {
             let by_courier = c.steps.iter().any(|s| matches!(s, Step::Handoff { from, to } if *to == m.addressee && contractor(from) == *who));
             if c.delivered && by_courier && parcels.insert(m.parcel) {
                 people.insert(nym);
-                out.push(DeliveryVouched {
-                    parcel: m.parcel,
-                    note: v.note,
-                });
+                out.push(DeliveryVouched { parcel: m.parcel, note: v.note });
             }
         }
         (people.len(), out)
@@ -193,42 +154,20 @@ impl crate::node::Node {
     /// Provider: offer the delivery of `m` as a job paying `pay`, under the
     /// provider key the manifest names, for couriers with its dispatch's
     /// badge, to be picked up by `pickup_by` (board-clock seconds).
-    pub fn offer_delivery(
-        &mut self,
-        m: &Manifest,
-        pay: u64,
-        pickup_by: u64,
-    ) -> Result<Hash, String> {
-        let provider = m
-            .provider
-            .clone()
-            .filter(|p| self.mine.contains(p))
-            .ok_or("only the parcel's provider offers it")?;
+    pub fn offer_delivery(&mut self, m: &Manifest, pay: u64, pickup_by: u64) -> Result<Hash, String> {
+        let provider = m.provider.clone().filter(|p| self.mine.contains(p)).ok_or("only the parcel's provider offers it")?;
         let d = m.dispatch.as_ref().ok_or("this parcel names no dispatch")?;
-        self.post_as(
-            provider,
-            "Deliver a parcel",
-            pay,
-            Some(Known::Badge(d.clone())),
-            Some(m.parcel),
-            Some(pickup_by),
-        )
+        self.post_as(provider, "Deliver a parcel", pay, Some(Known::Badge(d.clone())), Some(m.parcel), Some(pickup_by))
     }
 
     /// Provider: release the delivery job for `m` when its courier didn't
     /// pick the bag up by the deadline, so it can be offered again. Refused
     /// if the courier took it: then the bag is on their key, a dispute.
     pub fn release_delivery(&mut self, m: &Manifest) -> Result<Hash, String> {
-        let (job, key) = self
-            .delivery_job(m)
-            .ok_or("no delivery job for this parcel")?;
+        let (job, key) = self.delivery_job(m).ok_or("no delivery job for this parcel")?;
         let key = key.ok_or("no courier accepted")?;
         let c = self.custody(m);
-        if c.holder.as_ref() == Some(&key)
-            || c.steps
-                .iter()
-                .any(|s| matches!(s, Step::Take { by } if *by == key))
-        {
+        if c.holder.as_ref() == Some(&key) || c.steps.iter().any(|s| matches!(s, Step::Take { by } if *by == key)) {
             return Err("the courier took the bag: that's a dispute, not a no-show".into());
         }
         self.release(job)
@@ -243,11 +182,7 @@ impl crate::node::Node {
     /// Customer: what this wallet holds that was paid with `receipt`.
     pub fn received(&self, receipt: &Hash) -> u64 {
         let paid = |r: &Record| matches!(&r.op, pave_kernel::Op::Transfer { receipt: x, .. } | pave_kernel::Op::Split { receipt: x, .. } if x == receipt);
-        self.my_coins()
-            .iter()
-            .filter(|c| self.view.creator(&c.state).is_some_and(paid))
-            .map(|c| c.amount)
-            .sum()
+        self.my_coins().iter().filter(|c| self.view.creator(&c.state).is_some_and(paid)).map(|c| c.amount).sum()
     }
 
     /// The delivery job for `m`: the one job about it posted under the
@@ -256,11 +191,7 @@ impl crate::node::Node {
     /// settled. (The profile's own gate still takes only badged keys.)
     pub fn delivery_job(&self, m: &Manifest) -> Option<(Hash, Option<Credential>)> {
         let provider = m.provider.as_ref()?;
-        let mut offers = self.jobs().into_values().filter(|j| {
-            j.about == Some(m.parcel)
-                && j.poster == *provider
-                && j.status != crate::board::Status::Released
-        });
+        let mut offers = self.jobs().into_values().filter(|j| j.about == Some(m.parcel) && j.poster == *provider && j.status != crate::board::Status::Released);
         let j = offers.next()?;
         offers.next().is_none().then_some((j.id, j.known_key))
     }
@@ -274,15 +205,10 @@ impl crate::node::Node {
     /// once custody shows the assigned courier's key handed it to the
     /// addressee and the addressee confirmed it.
     pub fn pay_delivery(&mut self, m: &Manifest, note: &str) -> Result<Hash, String> {
-        let (job, key) = self
-            .delivery_job(m)
-            .ok_or("no delivery job for this parcel")?;
+        let (job, key) = self.delivery_job(m).ok_or("no delivery job for this parcel")?;
         let key = key.ok_or("no courier accepted")?;
         let c = self.custody(m);
-        let handed = c
-            .steps
-            .iter()
-            .any(|s| matches!(s, Step::Handoff { from, to } if *from == key && *to == m.addressee));
+        let handed = c.steps.iter().any(|s| matches!(s, Step::Handoff { from, to } if *from == key && *to == m.addressee));
         if !c.delivered || !handed {
             return Err("custody doesn't show the assigned courier delivering it".into());
         }
@@ -291,13 +217,9 @@ impl crate::node::Node {
 
     /// Anyone: how the order went, from the board, against its deadline.
     pub fn food_outcome(&self, m: &Manifest, order: Hash, due: u64) -> Outcome {
-        let Ok(copy) = self.copy(&self.town.jobs.scope) else {
-            return Outcome::Pending;
-        };
+        let Ok(copy) = self.copy(&self.town.jobs.scope) else { return Outcome::Pending };
         let note = copy.items().into_iter().find_map(|i| {
-            let ok = i.post.kind == "delivered"
-                && i.post.thread == Some(order)
-                && *i.signer == m.addressee;
+            let ok = i.post.kind == "delivered" && i.post.thread == Some(order) && *i.signer == m.addressee;
             let d: Delivered = ciborium::from_reader(i.content).ok()?;
             (ok && d.order == order).then_some((i.post.clock, d.seal_ok))
         });

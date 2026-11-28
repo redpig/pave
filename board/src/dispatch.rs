@@ -32,8 +32,8 @@
 //!   package and its label code (see [`crate::parcel`]).
 
 use crate::bulletin::{now, Cheat, CLOCK_SLACK};
-use crate::node::{apply_ok, Node};
 use crate::request::{Expect, Linkage, Request, RequestSpec};
+use crate::node::{apply_ok, Node};
 use pave_kernel::hash::{hash_of, Hash};
 use pave_kernel::{sign, Credential, Op, Record, Scheme};
 use pave_protocol::{epoch_schema, head, roll, EpochData, SignedTicket, Tag, Ticket};
@@ -85,21 +85,11 @@ impl Roster {
     }
     /// The check-in spec: one pseudonym per member per day, for counting.
     pub fn check_in_spec(&self) -> RequestSpec {
-        RequestSpec {
-            domain: "pave/dispatch/checkin/v2".into(),
-            scope: self.id,
-            linkage: Linkage::Period,
-            max_skew_ms: Some(CLOCK_SLACK * 1000),
-        }
+        RequestSpec { domain: "pave/dispatch/checkin/v2".into(), scope: self.id, linkage: Linkage::Period, max_skew_ms: Some(CLOCK_SLACK * 1000) }
     }
     /// The shift request spec: a budget of unlinkable requests per day.
     pub fn shift_spec(&self) -> RequestSpec {
-        RequestSpec {
-            domain: "pave/dispatch/shift/v3".into(),
-            scope: self.id,
-            linkage: Linkage::Slots(SHIFT_SLOTS),
-            max_skew_ms: Some(CLOCK_SLACK * 1000),
-        }
+        RequestSpec { domain: "pave/dispatch/shift/v3".into(), scope: self.id, linkage: Linkage::Slots(SHIFT_SLOTS), max_skew_ms: Some(CLOCK_SLACK * 1000) }
     }
     /// What a day's shift tickets are tagged for.
     pub fn purpose(&self, day: u64) -> Hash {
@@ -111,14 +101,8 @@ impl Roster {
     }
     /// The courier id on `t`, if it is a badge from this dispatch.
     pub fn badge_of(&self, s: &impl Scheme, t: &SignedTicket) -> Option<String> {
-        let tag = t
-            .ticket
-            .tag
-            .as_ref()
-            .filter(|g| g.purpose == self.badge_purpose())?;
-        (t.clerk == self.clerk && t.ticket.sequence == self.id && t.verify(s))
-            .then(|| String::from_utf8(tag.nym.clone()).ok())
-            .flatten()
+        let tag = t.ticket.tag.as_ref().filter(|g| g.purpose == self.badge_purpose())?;
+        (t.clerk == self.clerk && t.ticket.sequence == self.id && t.verify(s)).then(|| String::from_utf8(tag.nym.clone()).ok()).flatten()
     }
     /// Whether `t` is this dispatch's shift ticket, for any day.
     pub fn shift_of(&self, s: &impl Scheme, t: &SignedTicket) -> Option<u64> {
@@ -147,21 +131,9 @@ impl MemberCard {
     pub fn start() -> (PendingKey, JoinRequest) {
         PendingKey::generate(&pave_scheme_briolette::join_nonce())
     }
-    pub fn finish(
-        d: &Dispatch,
-        pending: PendingKey,
-        reply: &JoinReply,
-    ) -> Result<MemberCard, String> {
-        let key = pending.finish(
-            &BrioletteV1 {
-                group_public_key: d.roll.clone(),
-            },
-            reply,
-        )?;
-        Ok(MemberCard {
-            dispatch: d.id,
-            key,
-        })
+    pub fn finish(d: &Dispatch, pending: PendingKey, reply: &JoinReply) -> Result<MemberCard, String> {
+        let key = pending.finish(&BrioletteV1 { group_public_key: d.roll.clone() }, reply)?;
+        Ok(MemberCard { dispatch: d.id, key })
     }
 }
 
@@ -226,76 +198,25 @@ pub struct Book {
 
 impl Node {
     fn book(&self, id: &Hash) -> Result<&Book, String> {
-        self.operator
-            .as_ref()
-            .and_then(|o| o.dispatches.get(id))
-            .ok_or_else(|| "this node doesn't run that dispatch".into())
+        self.operator.as_ref().and_then(|o| o.dispatches.get(id)).ok_or_else(|| "this node doesn't run that dispatch".into())
     }
     fn book_mut(&mut self, id: &Hash) -> Result<&mut Book, String> {
-        self.operator
-            .as_mut()
-            .and_then(|o| o.dispatches.get_mut(id))
-            .ok_or_else(|| "this node doesn't run that dispatch".into())
+        self.operator.as_mut().and_then(|o| o.dispatches.get_mut(id)).ok_or_else(|| "this node doesn't run that dispatch".into())
     }
 
     /// Operator: set up a dispatch: a member roll and its own ticks.
     pub fn open_dispatch(&mut self, label: &str) -> Result<Dispatch, String> {
-        let op = self
-            .operator
-            .as_ref()
-            .ok_or("only the operator runs a dispatch")?;
+        let op = self.operator.as_ref().ok_or("only the operator runs a dispatch")?;
         let s = self.view.scheme().clone();
         let clerk = s.credential(&op.clerk);
-        let budget = sign(
-            &s,
-            &op.root,
-            &op.root_cred,
-            Op::IssueBudget {
-                authority: self.town.genesis.rooting_capability(),
-                schema: epoch_schema(&format!("dispatch {label}")),
-                amount: 1,
-                to: clerk.clone(),
-            },
-        );
-        let first = sign(
-            &s,
-            &op.clerk,
-            &clerk,
-            Op::Mint {
-                budget: budget.output(0),
-                amount: 1,
-                to: clerk.clone(),
-                change_to: clerk.clone(),
-            },
-        );
+        let budget = sign(&s, &op.root, &op.root_cred, Op::IssueBudget { authority: self.town.genesis.rooting_capability(), schema: epoch_schema(&format!("dispatch {label}")), amount: 1, to: clerk.clone() });
+        let first = sign(&s, &op.clerk, &clerk, Op::Mint { budget: budget.output(0), amount: 1, to: clerk.clone(), change_to: clerk.clone() });
         apply_ok(&mut self.view, &budget)?;
         apply_ok(&mut self.view, &first)?;
         let roll = Issuer::new();
-        let d = Dispatch {
-            roster: Roster {
-                id: first.output(0),
-                label: label.into(),
-                clerk,
-            },
-            roll: roll.group_public_key.clone(),
-            records: vec![budget, first],
-        };
-        let book = Book {
-            dispatch: d.clone(),
-            roll,
-            shifts: BTreeMap::new(),
-            days: BTreeMap::new(),
-            checked_in: BTreeMap::new(),
-            requests: Default::default(),
-            ruled: vec![],
-            revoked: BTreeMap::new(),
-            badges: BTreeMap::new(),
-        };
-        self.operator
-            .as_mut()
-            .unwrap()
-            .dispatches
-            .insert(d.id, book);
+        let d = Dispatch { roster: Roster { id: first.output(0), label: label.into(), clerk }, roll: roll.group_public_key.clone(), records: vec![budget, first] };
+        let book = Book { dispatch: d.clone(), roll, shifts: BTreeMap::new(), days: BTreeMap::new(), checked_in: BTreeMap::new(), requests: Default::default(), ruled: vec![], revoked: BTreeMap::new(), badges: BTreeMap::new() };
+        self.operator.as_mut().unwrap().dispatches.insert(d.id, book);
         self.save()?;
         Ok(d)
     }
@@ -312,26 +233,9 @@ impl Node {
 
     /// Courier: check in for today: a join to the day's group, signed by
     /// the member credential under the day's check-in basename.
-    pub fn check_in(
-        &self,
-        d: &Dispatch,
-        card: &MemberCard,
-        terms: &(u64, Vec<Cheat>),
-    ) -> Result<(PendingKey, CheckIn), String> {
+    pub fn check_in(&self, d: &Dispatch, card: &MemberCard, terms: &(u64, Vec<Cheat>)) -> Result<(PendingKey, CheckIn), String> {
         let (pending, join) = PendingKey::generate(&pave_scheme_briolette::join_nonce());
-        let req = d.check_in_spec().sign(
-            &card.key,
-            &d.roll,
-            terms.0,
-            0,
-            CheckInBody {
-                dispatch: d.id,
-                join,
-            },
-            &terms.1,
-            &[],
-            &[],
-        )?;
+        let req = d.check_in_spec().sign(&card.key, &d.roll, terms.0, 0, CheckInBody { dispatch: d.id, join }, &terms.1, &[], &[])?;
         Ok((pending, req))
     }
 
@@ -345,9 +249,7 @@ impl Node {
             return Err("check in for today".into());
         }
         let members = d.members();
-        let v =
-            d.check_in_spec()
-                .verify(req, members.iter().map(|(n, g)| (n, g)), &book.ruled, &[])?;
+        let v = d.check_in_spec().verify(req, members.iter().map(|(n, g)| (n, g)), &book.ruled, &[])?;
         let book = self.book_mut(&req.body.dispatch)?;
         let issuer = book.days.entry(req.period).or_insert_with(Issuer::new);
         let reply = issuer.issue(&req.body.join)?;
@@ -363,53 +265,17 @@ impl Node {
     }
 
     /// Courier: keep the day credential.
-    pub fn day_card(
-        d: &Dispatch,
-        day: u64,
-        pending: PendingKey,
-        c: &CheckedIn,
-    ) -> Result<DayCard, String> {
-        let key = pending.finish(
-            &BrioletteV1 {
-                group_public_key: c.group.clone(),
-            },
-            &c.reply,
-        )?;
-        Ok(DayCard {
-            dispatch: d.id,
-            day,
-            group: c.group.clone(),
-            key,
-        })
+    pub fn day_card(d: &Dispatch, day: u64, pending: PendingKey, c: &CheckedIn) -> Result<DayCard, String> {
+        let key = pending.finish(&BrioletteV1 { group_public_key: c.group.clone() }, &c.reply)?;
+        Ok(DayCard { dispatch: d.id, day, group: c.group.clone(), key })
     }
 
     /// Courier: ask for shift tickets for `n` fresh keys, as a member who
     /// checked in today.
-    pub fn shift_request(
-        &mut self,
-        d: &Dispatch,
-        card: &MemberCard,
-        day: &DayCard,
-        terms: &(u64, Vec<Cheat>),
-        n: usize,
-    ) -> Result<ShiftRequest, String> {
-        let creds: Vec<Credential> = (0..n)
-            .map(|_| self.view.scheme().credential(&self.key))
-            .collect();
+    pub fn shift_request(&mut self, d: &Dispatch, card: &MemberCard, day: &DayCard, terms: &(u64, Vec<Cheat>), n: usize) -> Result<ShiftRequest, String> {
+        let creds: Vec<Credential> = (0..n).map(|_| self.view.scheme().credential(&self.key)).collect();
         let slot = self.slots.take(&d.id, terms.0, SHIFT_SLOTS);
-        d.shift_spec().sign(
-            &card.key,
-            &d.roll,
-            terms.0,
-            slot,
-            ShiftBody {
-                dispatch: d.id,
-                creds,
-            },
-            &terms.1,
-            &[],
-            &[(&day.key, &day.group)],
-        )
+        d.shift_spec().sign(&card.key, &d.roll, terms.0, slot, ShiftBody { dispatch: d.id, creds }, &terms.1, &[], &[(&day.key, &day.group)])
     }
 
     /// Dispatch: answer a shift request: today, a member with standing
@@ -425,26 +291,9 @@ impl Node {
         if creds.is_empty() || creds.len() > crate::node::MAX_BATCH {
             return Err(format!("ask for 1 to {} keys", crate::node::MAX_BATCH));
         }
-        let day = book
-            .days
-            .get(&req.period)
-            .ok_or("nobody has checked in today")?;
+        let day = book.days.get(&req.period).ok_or("nobody has checked in today")?;
         let members = d.members();
-        let v = d
-            .shift_spec()
-            .verify(
-                req,
-                members.iter().map(|(n, g)| (n, g)),
-                &book.ruled,
-                &[Expect::Shown(&day.group_public_key)],
-            )
-            .map_err(|e| {
-                if e.contains("extra signature") {
-                    "check in first: no day credential".to_string()
-                } else {
-                    e
-                }
-            })?;
+        let v = d.shift_spec().verify(req, members.iter().map(|(n, g)| (n, g)), &book.ruled, &[Expect::Shown(&day.group_public_key)]).map_err(|e| if e.contains("extra signature") { "check in first: no day credential".to_string() } else { e })?;
         let nym = v.nym;
         let used: BTreeSet<u32> = book.shifts.values().flatten().map(|(g, _)| *g).collect();
         let group = loop {
@@ -456,38 +305,14 @@ impl Node {
         let epoch = head(&self.view, &d.id).ok_or("no dispatch tick")?.number;
         let op = self.operator.as_ref().unwrap();
         let s = self.view.scheme().clone();
-        let tag = Tag {
-            purpose: d.purpose(req.period),
-            nym: nym.clone(),
-            class: format!("day {}", req.period),
-        };
-        let tickets: Vec<SignedTicket> = creds
-            .iter()
-            .map(|c| {
-                SignedTicket::issue(
-                    &s,
-                    &op.clerk,
-                    &d.clerk,
-                    Ticket {
-                        credential: c.clone(),
-                        sequence: d.id,
-                        epoch,
-                        group,
-                        max_spend: None,
-                        tag: Some(tag.clone()),
-                    },
-                )
-            })
-            .collect();
+        let tag = Tag { purpose: d.purpose(req.period), nym: nym.clone(), class: format!("day {}", req.period) };
+        let tickets: Vec<SignedTicket> = creds.iter().map(|c| SignedTicket::issue(&s, &op.clerk, &d.clerk, Ticket { credential: c.clone(), sequence: d.id, epoch, group, max_spend: None, tag: Some(tag.clone()) })).collect();
         for t in &tickets {
             self.know.add_ticket(&s, t.clone());
         }
         let book = self.book_mut(&req.body.dispatch)?;
         book.requests.note(req.period, nym.clone());
-        book.shifts
-            .entry((req.period, req.slot, nym))
-            .or_default()
-            .extend(creds.iter().map(|c| (group, c.clone())));
+        book.shifts.entry((req.period, req.slot, nym)).or_default().extend(creds.iter().map(|c| (group, c.clone())));
         self.save()?;
         Ok(tickets)
     }
@@ -514,12 +339,7 @@ impl Node {
     /// parcel at, or to take one under.
     pub fn shift_key(&mut self, d: &Roster) -> Option<Credential> {
         let s = self.view.scheme().clone();
-        let i = self.shift_keys.iter().position(|c| {
-            self.know
-                .tickets
-                .get(c)
-                .is_some_and(|t| d.shift_of(&s, t).is_some())
-        })?;
+        let i = self.shift_keys.iter().position(|c| self.know.tickets.get(c).is_some_and(|t| d.shift_of(&s, t).is_some()))?;
         Some(self.shift_keys.remove(i))
     }
 
@@ -527,22 +347,9 @@ impl Node {
     /// identity key, tagged with the co-op's courier id, in a group of its
     /// own so it can be revoked alone. The co-op vets the courier and keeps
     /// who they are; pave sees the id.
-    pub fn issue_badge(
-        &mut self,
-        id: &Hash,
-        courier: &str,
-        key: &Credential,
-    ) -> Result<SignedTicket, String> {
+    pub fn issue_badge(&mut self, id: &Hash, courier: &str, key: &Credential) -> Result<SignedTicket, String> {
         let d = self.book(id)?.dispatch.clone();
-        let used: BTreeSet<u32> = {
-            let b = self.book(id)?;
-            b.shifts
-                .values()
-                .flatten()
-                .map(|(g, _)| *g)
-                .chain(b.badges.values().map(|(_, g)| *g))
-                .collect()
-        };
+        let used: BTreeSet<u32> = { let b = self.book(id)?; b.shifts.values().flatten().map(|(g, _)| *g).chain(b.badges.values().map(|(_, g)| *g)).collect() };
         let group = loop {
             let g = rand::Rng::gen_range(&mut rand::rngs::OsRng, 1..u32::MAX);
             if !used.contains(&g) {
@@ -552,40 +359,17 @@ impl Node {
         let epoch = head(&self.view, &d.id).ok_or("no dispatch tick")?.number;
         let op = self.operator.as_ref().unwrap();
         let s = self.view.scheme().clone();
-        let tag = Tag {
-            purpose: d.badge_purpose(),
-            nym: courier.as_bytes().to_vec(),
-            class: "badge".into(),
-        };
-        let t = SignedTicket::issue(
-            &s,
-            &op.clerk,
-            &d.clerk,
-            Ticket {
-                credential: key.clone(),
-                sequence: d.id,
-                epoch,
-                group,
-                max_spend: None,
-                tag: Some(tag),
-            },
-        );
+        let tag = Tag { purpose: d.badge_purpose(), nym: courier.as_bytes().to_vec(), class: "badge".into() };
+        let t = SignedTicket::issue(&s, &op.clerk, &d.clerk, Ticket { credential: key.clone(), sequence: d.id, epoch, group, max_spend: None, tag: Some(tag) });
         self.know.add_ticket(&s, t.clone());
-        self.book_mut(id)?
-            .badges
-            .insert(courier.into(), (key.clone(), group));
+        self.book_mut(id)?.badges.insert(courier.into(), (key.clone(), group));
         self.save()?;
         Ok(t)
     }
 
     /// Co-op: revoke a courier's badge on a new tick.
     pub fn revoke_badge(&mut self, id: &Hash, courier: &str) -> Result<(), String> {
-        let (_, group) = self
-            .book(id)?
-            .badges
-            .get(courier)
-            .cloned()
-            .ok_or("no such badge")?;
+        let (_, group) = self.book(id)?.badges.get(courier).cloned().ok_or("no such badge")?;
         self.tick_dispatch(id, &[group])
     }
 
@@ -626,25 +410,10 @@ impl Node {
         for g in groups {
             book.revoked.entry(*g).or_insert(h.number + 1);
         }
-        let data = EpochData {
-            sequence: d.id,
-            number: h.number + 1,
-            revoked: book.revoked.clone(),
-        };
-        let current = self
-            .view
-            .coin(&h.state)
-            .ok_or("dispatch tick missing")?
-            .clone();
+        let data = EpochData { sequence: d.id, number: h.number + 1, revoked: book.revoked.clone() };
+        let current = self.view.coin(&h.state).ok_or("dispatch tick missing")?.clone();
         let op = self.operator.as_ref().unwrap();
-        let rec = roll(
-            self.view.scheme(),
-            &op.clerk,
-            &d.clerk,
-            &current,
-            &d.clerk,
-            &data,
-        );
+        let rec = roll(self.view.scheme(), &op.clerk, &d.clerk, &current, &d.clerk, &data);
         let rec = self.guard(rec)?;
         apply_ok(&mut self.view, &rec)?;
         self.know.add_epoch_data(&self.view, data);
@@ -656,14 +425,10 @@ impl Node {
     /// and that request's group is revoked.
     pub fn rule_courier(&mut self, id: &Hash, key: &Credential) -> Result<(), String> {
         let book = self.book(id)?;
-        let ((day, slot, nym), groups) = book
-            .shifts
-            .iter()
-            .find(|(_, ks)| ks.iter().any(|(_, c)| c == key))
-            .map(|(k, ks)| (k.clone(), ks.iter().map(|(g, _)| *g).collect::<Vec<_>>()))
-            .ok_or("not a key this dispatch issued")?;
+        let ((day, slot, nym), groups) = book.shifts.iter().find(|(_, ks)| ks.iter().any(|(_, c)| c == key)).map(|(k, ks)| (k.clone(), ks.iter().map(|(g, _)| *g).collect::<Vec<_>>())).ok_or("not a key this dispatch issued")?;
         let cheat = (book.dispatch.shift_spec().basename(day, slot), nym);
         self.book_mut(id)?.ruled.push(cheat);
         self.tick_dispatch(id, &groups)
     }
+
 }

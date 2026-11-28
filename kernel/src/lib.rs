@@ -30,14 +30,7 @@ pub fn sign<S: Scheme>(scheme: &S, key: &S::HolderKey, signer: &Credential, op: 
     let sigs = if consumes.is_empty() {
         vec![scheme.sign(key, signer, &msg, None)]
     } else {
-        consumes
-            .iter()
-            .map(|s| scheme.sign(key, signer, &msg, Some(s.as_bytes())))
-            .collect()
+        consumes.iter().map(|s| scheme.sign(key, signer, &msg, Some(s.as_bytes()))).collect()
     };
-    Record {
-        op,
-        signer: signer.clone(),
-        sigs,
-    }
+    Record { op, signer: signer.clone(), sigs }
 }

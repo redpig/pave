@@ -25,7 +25,7 @@
 
 use crate::node::{apply_ok, Bundle, Node, S};
 use pave_kernel::{Credential, Hash, Op, Record, Scheme, Sig};
-use pave_protocol::{cheat_list, check, head, Policy, Refusal, Standing};
+use pave_protocol::{check, cheat_list, head, Policy, Refusal, Standing};
 use serde::{Deserialize, Serialize};
 
 /// Epochs a coin tainted by a revoked group waits before it is paid.
@@ -43,9 +43,7 @@ pub struct QuoteRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Verdict {
     Pay,
-    Hold {
-        until: u32,
-    },
+    Hold { until: u32 },
     /// Prove standing against these cheats and ask again.
     NeedStanding(Vec<(Vec<u8>, Vec<u8>)>),
     Refuse(String),
@@ -75,11 +73,7 @@ pub struct SwapRequest {
 pub enum SwapOutcome {
     /// The retirement of the old coin and the mint of the new one, with the
     /// mint's provenance.
-    Paid {
-        retire: Box<Record>,
-        mint: Box<Record>,
-        bundle: Box<Bundle>,
-    },
+    Paid { retire: Box<Record>, mint: Box<Record>, bundle: Box<Bundle> },
     /// Held until this epoch; collect then.
     Held { until: u32 },
 }
@@ -104,72 +98,38 @@ fn quote_bytes(state: &Hash, verdict: &Verdict, swapper: &Credential) -> Vec<u8>
 
 impl Quote {
     pub fn verify(&self, scheme: &S) -> bool {
-        scheme.verify(
-            &self.swapper,
-            &quote_bytes(&self.state, &self.verdict, &self.swapper),
-            None,
-            &self.sig,
-        )
+        scheme.verify(&self.swapper, &quote_bytes(&self.state, &self.verdict, &self.swapper), None, &self.sig)
     }
 }
 
 impl Node {
     fn epoch_now(&self) -> Result<u32, String> {
-        Ok(head(&self.view, &self.town.sequence)
-            .ok_or("no epoch")?
-            .number)
+        Ok(head(&self.view, &self.town.sequence).ok_or("no epoch")?.number)
     }
 
     /// Holder: ask for a quote on the coin at `state`, with standing against
     /// `cheats` (start with the cheats this wallet knows of).
-    pub fn quote_request(
-        &self,
-        state: Hash,
-        cheats: &[(Vec<u8>, Vec<u8>)],
-    ) -> Result<QuoteRequest, String> {
-        let holder = self
-            .view
-            .coin(&state)
-            .filter(|c| self.mine.contains(&c.holder))
-            .ok_or("not a coin this wallet holds")?
-            .holder
-            .clone();
-        let standing = Standing::prove(self.view.scheme(), &self.key, &holder, cheats)
-            .ok_or("this wallet is a known cheat")?;
-        Ok(QuoteRequest {
-            state,
-            standing,
-            bundle: self.bundle(),
-        })
+    pub fn quote_request(&self, state: Hash, cheats: &[(Vec<u8>, Vec<u8>)]) -> Result<QuoteRequest, String> {
+        let holder = self.view.coin(&state).filter(|c| self.mine.contains(&c.holder)).ok_or("not a coin this wallet holds")?.holder.clone();
+        let standing = Standing::prove(self.view.scheme(), &self.key, &holder, cheats).ok_or("this wallet is a known cheat")?;
+        Ok(QuoteRequest { state, standing, bundle: self.bundle() })
     }
 
     fn verdict(&mut self, state: &Hash, sender: &Credential) -> Verdict {
-        let Ok(now) = self.epoch_now() else {
-            return Verdict::Refuse("no epoch".into());
-        };
+        let Ok(now) = self.epoch_now() else { return Verdict::Refuse("no epoch".into()) };
         let cheats = cheat_list(&self.view);
         if self.view.flagged().contains(sender) {
             return Verdict::Refuse("a known cheat".into());
         }
-        if !self
-            .know
-            .standing
-            .get(sender)
-            .is_some_and(|st| st.covers(&cheats))
-        {
+        if !self.know.standing.get(sender).is_some_and(|st| st.covers(&cheats)) {
             return Verdict::NeedStanding(cheats);
         }
         // The usual acceptance, except expiry: bringing expired coins back
         // is what a swapper is for.
-        let policy = Policy {
-            honor_expiry: false,
-            ..self.policy()
-        };
+        let policy = Policy { honor_expiry: false, ..self.policy() };
         match check(&self.view, &self.know, state, sender, &policy) {
             Ok(()) => Verdict::Pay,
-            Err(Refusal::Revoked { .. }) => Verdict::Hold {
-                until: now + SWAP_HOLD,
-            },
+            Err(Refusal::Revoked { .. }) => Verdict::Hold { until: now + SWAP_HOLD },
             Err(e) => Verdict::Refuse(format!("{e:?}")),
         }
     }
@@ -184,27 +144,12 @@ impl Node {
         if req.standing.verify(&s) {
             self.know.add_standing(&s, req.standing.clone());
         }
-        let sender = self
-            .view
-            .coin(&req.state)
-            .ok_or("unknown coin, or already spent")?
-            .holder
-            .clone();
+        let sender = self.view.coin(&req.state).ok_or("unknown coin, or already spent")?.holder.clone();
         let verdict = self.verdict(&req.state, &sender);
         let swapper = s.credential(&self.key);
         self.issue_tickets(std::slice::from_ref(&swapper), "hardware")?;
-        let sig = s.sign(
-            &self.key,
-            &swapper,
-            &quote_bytes(&req.state, &verdict, &swapper),
-            None,
-        );
-        Ok(Quote {
-            state: req.state,
-            verdict,
-            swapper,
-            sig,
-        })
+        let sig = s.sign(&self.key, &swapper, &quote_bytes(&req.state, &verdict, &swapper), None);
+        Ok(Quote { state: req.state, verdict, swapper, sig })
     }
 
     /// Holder: having a quote to pay or hold, transfer the coin.
@@ -215,43 +160,22 @@ impl Node {
         if !matches!(quote.verdict, Verdict::Pay | Verdict::Hold { .. }) {
             return Err(format!("the swapper won't take it: {:?}", quote.verdict));
         }
-        let holder = self
-            .view
-            .coin(&quote.state)
-            .filter(|c| self.mine.contains(&c.holder))
-            .ok_or("not a coin this wallet holds")?
-            .holder
-            .clone();
+        let holder = self.view.coin(&quote.state).filter(|c| self.mine.contains(&c.holder)).ok_or("not a coin this wallet holds")?.holder.clone();
         let to = self.fresh()?;
         let s = self.view.scheme().clone();
-        let transfer = pave_kernel::sign(
-            &s,
-            &self.key,
-            &holder,
-            Op::Transfer {
-                state: quote.state,
-                to: quote.swapper.clone(),
-                receipt: swap_receipt(&to),
-            },
-        );
+        let transfer = pave_kernel::sign(&s, &self.key, &holder, Op::Transfer { state: quote.state, to: quote.swapper.clone(), receipt: swap_receipt(&to) });
         let transfer = self.guard(transfer)?;
         apply_ok(&mut self.view, &transfer)?;
         let mut bundle = self.bundle();
         bundle.records.clear();
         bundle.conflicts.clear();
         bundle.tickets = self.know.tickets.get(&to).cloned().into_iter().collect();
-        Ok(SwapRequest {
-            transfer,
-            to,
-            bundle,
-        })
+        Ok(SwapRequest { transfer, to, bundle })
     }
 
     /// Swapper: take the old coin and pay or hold, as quoted.
     pub fn answer_swap(&mut self, req: &SwapRequest) -> Result<SwapOutcome, String> {
-        let Op::Transfer { state, receipt, .. } = req.transfer.op else {
-            return Err("not a transfer".into());
-        };
+        let Op::Transfer { state, receipt, .. } = req.transfer.op else { return Err("not a transfer".into()) };
         if receipt != swap_receipt(&req.to) {
             return Err("the transfer doesn't commit to this credential".into());
         }
@@ -262,19 +186,13 @@ impl Node {
         }
         // Judge the coin as it stood, then take it.
         let verdict = self.verdict(&state, &sender);
-        apply_ok(&mut self.view, &req.transfer)
-            .map_err(|e| format!("the old coin was used elsewhere: {e}"))?;
+        apply_ok(&mut self.view, &req.transfer).map_err(|e| format!("the old coin was used elsewhere: {e}"))?;
         let new_state = req.transfer.output(0);
         match verdict {
             Verdict::Pay => self.pay_swap(new_state, &req.to),
             Verdict::Hold { until } => {
                 let op = self.operator.as_mut().ok_or("only the town swaps")?;
-                op.held.push(Held {
-                    state: new_state,
-                    to: req.to.clone(),
-                    sender,
-                    until,
-                });
+                op.held.push(Held { state: new_state, to: req.to.clone(), sender, until });
                 Ok(SwapOutcome::Held { until })
             }
             v => Err(format!("refused: {v:?}")),
@@ -286,72 +204,37 @@ impl Node {
     pub fn collect_swap(&mut self, to: &Credential) -> Result<SwapOutcome, String> {
         let now = self.epoch_now()?;
         let op = self.operator.as_ref().ok_or("only the town swaps")?;
-        let h = op
-            .held
-            .iter()
-            .find(|h| &h.to == to)
-            .cloned()
-            .ok_or("no swap held for that credential")?;
+        let h = op.held.iter().find(|h| &h.to == to).cloned().ok_or("no swap held for that credential")?;
         if now < h.until {
             return Ok(SwapOutcome::Held { until: h.until });
         }
         let cheats = cheat_list(&self.view);
-        let stood = self
-            .know
-            .standing
-            .get(&h.sender)
-            .is_some_and(|st| st.covers(&cheats));
+        let stood = self.know.standing.get(&h.sender).is_some_and(|st| st.covers(&cheats));
         if self.view.flagged().contains(&h.sender) || !stood {
             return Err("refused: evidence against the sender surfaced during the hold".into());
         }
-        self.operator
-            .as_mut()
-            .unwrap()
-            .held
-            .retain(|x| x.state != h.state);
+        self.operator.as_mut().unwrap().held.retain(|x| x.state != h.state);
         self.pay_swap(h.state, &h.to)
     }
 
     fn pay_swap(&mut self, state: Hash, to: &Credential) -> Result<SwapOutcome, String> {
         let s = self.view.scheme().clone();
-        let coin = self
-            .view
-            .coin(&state)
-            .ok_or("the old coin isn't held here")?
-            .clone();
+        let coin = self.view.coin(&state).ok_or("the old coin isn't held here")?.clone();
         let retire = pave_kernel::sign(&s, &self.key, &coin.holder, Op::Retire { state });
         let retire = self.guard(retire)?;
         apply_ok(&mut self.view, &retire)?;
         let op = self.operator.as_ref().ok_or("only the town swaps")?;
-        let mint = pave_kernel::sign(
-            &s,
-            &op.minter,
-            &op.minter_cred,
-            Op::Mint {
-                budget: op.cash_budget,
-                amount: coin.amount,
-                to: to.clone(),
-                change_to: op.minter_cred.clone(),
-            },
-        );
+        let mint = pave_kernel::sign(&s, &op.minter, &op.minter_cred, Op::Mint { budget: op.cash_budget, amount: coin.amount, to: to.clone(), change_to: op.minter_cred.clone() });
         let mint = self.guard(mint)?;
         self.operator.as_mut().unwrap().cash_budget = mint.output(1);
         apply_ok(&mut self.view, &mint)?;
-        Ok(SwapOutcome::Paid {
-            retire: Box::new(retire),
-            mint: Box::new(mint),
-            bundle: Box::new(self.bundle()),
-        })
+        Ok(SwapOutcome::Paid { retire: Box::new(retire), mint: Box::new(mint), bundle: Box::new(self.bundle()) })
     }
 
     /// Holder: take the swapper's answer. Returns the fresh coin, if paid.
     pub fn take_swap(&mut self, outcome: &SwapOutcome) -> Result<Option<Hash>, String> {
         match outcome {
-            SwapOutcome::Paid {
-                retire,
-                mint,
-                bundle,
-            } => {
+            SwapOutcome::Paid { retire, mint, bundle } => {
                 self.absorb_bundle(bundle);
                 apply_ok(&mut self.view, retire)?;
                 apply_ok(&mut self.view, mint)?;

@@ -13,9 +13,7 @@ fn join(town: &mut Node, name: &str, dir: &std::path::Path) -> Node {
     let (pending, req) = PendingJoin::generate();
     let e = town.enroll(&req, "hardware", &[100]).unwrap();
     let mut n = Node::finish_enrollment(pending, &e, name, &dir.join(name)).unwrap();
-    let t = town
-        .answer_refill(&n.refill_request(&town.refill_terms().unwrap(), 16).unwrap())
-        .unwrap();
+    let t = town.answer_refill(&n.refill_request(&town.refill_terms().unwrap(), 16).unwrap()).unwrap();
     n.take_tickets(t);
     n
 }
@@ -57,11 +55,7 @@ fn parcels_from_a_description() {
     let dir = std::env::temp_dir().join(format!("pave-profile-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let p = Profile::from_json(PARCELS).unwrap();
-    assert_eq!(
-        p.schemas["parcel"].schema,
-        parcel_schema(),
-        "the description names the profile's schema"
-    );
+    assert_eq!(p.schemas["parcel"].schema, parcel_schema(), "the description names the profile's schema");
 
     let mut town = Node::init_town(&dir.join("town"), "test").unwrap();
     let mut shop = join(&mut town, "shop", &dir);
@@ -74,21 +68,8 @@ fn parcels_from_a_description() {
 
     // The layout is the Rust manifest exactly: built from the same fields
     // it is the same CBOR, so it hashes the same.
-    let rust = shop
-        .ship("soup", "dn5bpsb", "dn5bpth", zoe.receive().unwrap(), 3)
-        .unwrap();
-    let fields = |m: &Manifest| {
-        params(&[
-            ("parcel", value(&m.parcel)),
-            ("what", value(&m.what)),
-            ("from_cell", value(&m.from_cell)),
-            ("to_cell", value(&m.to_cell)),
-            ("addressee", value(&m.addressee)),
-            ("pay_per_hop", value(&m.pay_per_hop)),
-            ("label", value(&m.label)),
-            ("lineage", value(&m.lineage)),
-        ])
-    };
+    let rust = shop.ship("soup", "dn5bpsb", "dn5bpth", zoe.receive().unwrap(), 3).unwrap();
+    let fields = |m: &Manifest| params(&[("parcel", value(&m.parcel)), ("what", value(&m.what)), ("from_cell", value(&m.from_cell)), ("to_cell", value(&m.to_cell)), ("addressee", value(&m.addressee)), ("pay_per_hop", value(&m.pay_per_hop)), ("label", value(&m.label)), ("lineage", value(&m.lineage))]);
     let built = p.build("manifest", &fields(&rust)).unwrap();
     assert_eq!(built, value(&rust));
     assert_eq!(p.hash("manifest", &built).unwrap(), rust.hash());
@@ -103,18 +84,7 @@ fn parcels_from_a_description() {
     let lineage = shop.act(&p, "mint", &Params::new()).unwrap().output(0);
     let zoe_at = zoe.receive().unwrap();
     let m = p
-        .build(
-            "manifest",
-            &params(&[
-                ("parcel", value(&parcel)),
-                ("what", value(&"bread")),
-                ("from_cell", value(&"dn5bpsb")),
-                ("to_cell", value(&"dn5bpth")),
-                ("addressee", value(&zoe_at)),
-                ("pay_per_hop", value(&3u64)),
-                ("lineage", value(&Some(lineage))),
-            ]),
-        )
+        .build("manifest", &params(&[("parcel", value(&parcel)), ("what", value(&"bread")), ("from_cell", value(&"dn5bpsb")), ("to_cell", value(&"dn5bpth")), ("addressee", value(&zoe_at)), ("pay_per_hop", value(&3u64)), ("lineage", value(&Some(lineage)))]))
         .unwrap();
     let manifest: Manifest = m.deserialized().unwrap();
     let mp = params(&[("manifest", m.clone())]);
@@ -136,10 +106,7 @@ fn parcels_from_a_description() {
     meet(&mut ben, &mut ana);
     ana.act(&p, "take", &mp).unwrap();
     // Only the addressee confirms: Ana holds it, and isn't.
-    assert!(ana
-        .act(&p, "confirm", &mp)
-        .unwrap_err()
-        .contains("HolderIs"));
+    assert!(ana.act(&p, "confirm", &mp).unwrap_err().contains("HolderIs"));
     // Taking twice, or with another manifest, doesn't: the handoff's receipt
     // commits to this manifest and this hop.
     assert!(ana.act(&p, "take", &mp).is_err());
@@ -154,10 +121,7 @@ fn parcels_from_a_description() {
     let mut other = fields(&manifest);
     other.insert("what".into(), value(&"cake"));
     let forged = params(&[("manifest", p.build("manifest", &other).unwrap())]);
-    assert!(zoe
-        .act(&p, "take", &forged)
-        .unwrap_err()
-        .contains("CreatedWith"));
+    assert!(zoe.act(&p, "take", &forged).unwrap_err().contains("CreatedWith"));
     zoe.act(&p, "confirm", &mp).unwrap();
 
     // Both read the same custody: the description's walk and the Rust code.
@@ -166,77 +130,29 @@ fn parcels_from_a_description() {
     meet(&mut ben, &mut shop);
     let (steps, holder) = shop.walk(&p, "custody", &mp).unwrap();
     let labels: Vec<&str> = steps.iter().map(|s| s.label.as_str()).collect();
-    assert_eq!(
-        labels,
-        ["handoff", "take", "handoff", "take", "handoff", "retired"]
-    );
+    assert_eq!(labels, ["handoff", "take", "handoff", "take", "handoff", "retired"]);
     assert_eq!(holder, None);
     let c = shop.custody(&manifest);
     assert!(c.delivered);
-    let rust_labels: Vec<&str> = c
-        .steps
-        .iter()
-        .map(|s| match s {
-            Step::Handoff { .. } => "handoff",
-            Step::Take { .. } => "take",
-            Step::Retired { .. } => "retired",
-            _ => "other",
-        })
-        .collect();
+    let rust_labels: Vec<&str> = c.steps.iter().map(|s| match s { Step::Handoff { .. } => "handoff", Step::Take { .. } => "take", Step::Retired { .. } => "retired", _ => "other" }).collect();
     assert_eq!(labels, rust_labels);
 
     // Receipts an app can show: what the shipper's payments commit to.
-    let ben_key = c
-        .steps
-        .iter()
-        .find_map(|s| {
-            if let Step::Handoff { from, .. } = s {
-                Some(from.clone())
-            } else {
-                None
-            }
-        })
-        .unwrap();
-    assert_eq!(
-        p.receipt_of("shipping", &params(&[("parcel", value(&parcel))]))
-            .unwrap(),
-        pave_board::parcel::shipping_receipt(&parcel)
-    );
-    assert_eq!(
-        p.receipt_of(
-            "pay",
-            &params(&[("parcel", value(&parcel)), ("courier", value(&ben_key))])
-        )
-        .unwrap(),
-        pave_board::parcel::pay_receipt(&parcel, &ben_key)
-    );
+    let ben_key = c.steps.iter().find_map(|s| if let Step::Handoff { from, .. } = s { Some(from.clone()) } else { None }).unwrap();
+    assert_eq!(p.receipt_of("shipping", &params(&[("parcel", value(&parcel))])).unwrap(), pave_board::parcel::shipping_receipt(&parcel));
+    assert_eq!(p.receipt_of("pay", &params(&[("parcel", value(&parcel)), ("courier", value(&ben_key))])).unwrap(), pave_board::parcel::pay_receipt(&parcel, &ben_key));
 
     // A take runs the acceptance check: a parcel handed to a key with no
     // ticket is refused even though its receipt matches.
     let parcel2 = shop.act(&p, "mint", &Params::new()).unwrap().output(0);
-    let m2 = p
-        .build(
-            "manifest",
-            &params(&[
-                ("parcel", value(&parcel2)),
-                ("what", value(&"jam")),
-                ("from_cell", value(&"a")),
-                ("to_cell", value(&"b")),
-                ("addressee", value(&zoe_at)),
-                ("pay_per_hop", value(&1u64)),
-            ]),
-        )
-        .unwrap();
+    let m2 = p.build("manifest", &params(&[("parcel", value(&parcel2)), ("what", value(&"jam")), ("from_cell", value(&"a")), ("to_cell", value(&"b")), ("addressee", value(&zoe_at)), ("pay_per_hop", value(&1u64))])).unwrap();
     let bare = pave_kernel::Scheme::credential(zoe.view.scheme(), &zoe.key);
     zoe.mine.insert(bare.clone());
     let mut hp = params(&[("manifest", m2.clone())]);
     hp.insert("to".into(), value(&bare));
     shop.act(&p, "hand_off", &hp).unwrap();
     meet(&mut shop, &mut zoe);
-    assert!(zoe
-        .act(&p, "take", &params(&[("manifest", m2)]))
-        .unwrap_err()
-        .contains("Ticket"));
+    assert!(zoe.act(&p, "take", &params(&[("manifest", m2)])).unwrap_err().contains("Ticket"));
 
     // And the shop's Rust code pays the couriers of a parcel it shipped from
     // the description: Ben and Ana.
@@ -250,9 +166,7 @@ fn parcels_from_a_description() {
     let (ca, cb) = (member(&mut town, &d), member(&mut town, &d));
     shift(&mut town, &mut ana, &d, &ca, 4);
     shift(&mut town, &mut ben, &d, &cb, 4);
-    let m3 = shop
-        .ship("tools", "dn5bpsb", "dn5bpth", zoe.receive().unwrap(), 3)
-        .unwrap();
+    let m3 = shop.ship("tools", "dn5bpsb", "dn5bpth", zoe.receive().unwrap(), 3).unwrap();
     let m3 = shop.name_dispatch(&m3.parcel, d.clone()).unwrap();
     let mp3 = params(&[("manifest", value(&m3))]);
     let hand = |to: &pave_kernel::Credential| {
@@ -263,10 +177,7 @@ fn parcels_from_a_description() {
     // Not to a key without the dispatch's shift ticket.
     let plain = ben.receive().unwrap();
     meet(&mut shop, &mut ben);
-    assert!(shop
-        .act(&p, "hand_off", &hand(&plain))
-        .unwrap_err()
-        .contains("IfPresent"));
+    assert!(shop.act(&p, "hand_off", &hand(&plain)).unwrap_err().contains("IfPresent"));
     // To Ana's shift key, which she shows with its ticket; she takes it from
     // the description, under another of her shift keys.
     let ana_at = ana.shift_key(&d).unwrap();
@@ -291,9 +202,6 @@ fn parcels_from_a_description() {
     ana.act(&p, "hand_off", &hand(&ben_old)).unwrap();
     meet(&mut ana, &mut ben);
     meet(&mut shop, &mut ben);
-    assert!(ben
-        .act(&p, "take", &mp3)
-        .unwrap_err()
-        .contains("LineageCurrent"));
+    assert!(ben.act(&p, "take", &mp3).unwrap_err().contains("LineageCurrent"));
     let _ = std::fs::remove_dir_all(&dir);
 }

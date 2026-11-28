@@ -9,9 +9,7 @@ fn join(town: &mut Node, name: &str, dir: &std::path::Path, credits: &[u64]) -> 
     let (pending, req) = PendingJoin::generate();
     let e = town.enroll(&req, "hardware", credits).unwrap();
     let mut n = Node::finish_enrollment(pending, &e, name, &dir.join(name)).unwrap();
-    let t = town
-        .answer_refill(&n.refill_request(&town.refill_terms().unwrap(), 16).unwrap())
-        .unwrap();
+    let t = town.answer_refill(&n.refill_request(&town.refill_terms().unwrap(), 16).unwrap()).unwrap();
     n.take_tickets(t);
     n
 }
@@ -44,19 +42,14 @@ fn parcels() {
     let mut zoe = join(&mut town, "zoe", &dir, &[]);
 
     // The town gives the shop a budget of parcels.
-    assert!(
-        shop.ship("x", "a", "b", zoe.receive().unwrap(), 3).is_err(),
-        "no budget yet"
-    );
+    assert!(shop.ship("x", "a", "b", zoe.receive().unwrap(), 3).is_err(), "no budget yet");
     let to = shop.receive().unwrap();
     town.issue_parcel_budget(to, 10).unwrap();
     meet(&mut shop, &mut town);
 
     // Zoe orders and gives the shop the credential to deliver to.
     let zoe_at = zoe.receive().unwrap();
-    let m = shop
-        .ship("thai takeout", "dn5bpsb", "dn5bpth", zoe_at.clone(), 3)
-        .unwrap();
+    let m = shop.ship("thai takeout", "dn5bpsb", "dn5bpth", zoe_at.clone(), 3).unwrap();
 
     // Shop → Ana → Ben → Zoe, each handoff offline, each courier taking it.
     let ana_at = ana.receive().unwrap();
@@ -85,20 +78,8 @@ fn parcels() {
     meet(&mut ana, &mut shop);
     let c = shop.custody(&m);
     assert!(c.delivered && c.holder.is_none());
-    let kinds: Vec<&str> = c
-        .steps
-        .iter()
-        .map(|s| match s {
-            Step::Handoff { .. } => "handoff",
-            Step::Take { .. } => "take",
-            Step::Retired { .. } => "retired",
-            Step::Closed { .. } => "closed",
-        })
-        .collect();
-    assert_eq!(
-        kinds,
-        ["handoff", "take", "handoff", "take", "handoff", "retired"]
-    );
+    let kinds: Vec<&str> = c.steps.iter().map(|s| match s { Step::Handoff { .. } => "handoff", Step::Take { .. } => "take", Step::Retired { .. } => "retired", Step::Closed { .. } => "closed" }).collect();
+    assert_eq!(kinds, ["handoff", "take", "handoff", "take", "handoff", "retired"]);
     assert_eq!(c.steps.last(), Some(&Step::Retired { by: zoe_at }));
 
     // The shop pays each courier per hop, once.
@@ -112,15 +93,11 @@ fn parcels() {
     // twice is the kernel's evidence; once Ben and Dan meet, both can show
     // it, and the shop won't pay Ana for it.
     let zoe_at = zoe.receive().unwrap();
-    let m3 = shop
-        .ship("flowers", "dn5bpsb", "dn5bpth", zoe.receive().unwrap(), 3)
-        .unwrap();
+    let m3 = shop.ship("flowers", "dn5bpsb", "dn5bpth", zoe.receive().unwrap(), 3).unwrap();
     shop.hand_off(&m3.parcel, ana.receive().unwrap()).unwrap();
     meet(&mut shop, &mut ana);
     ana.take_parcel(&m3).unwrap();
-    let m2 = shop
-        .ship("groceries", "dn5bpsb", "dn5bpth", zoe_at.clone(), 3)
-        .unwrap();
+    let m2 = shop.ship("groceries", "dn5bpsb", "dn5bpth", zoe_at.clone(), 3).unwrap();
     shop.hand_off(&m2.parcel, ana.receive().unwrap()).unwrap();
     meet(&mut shop, &mut ana);
     let state = ana.take_parcel(&m2).unwrap();
@@ -129,52 +106,30 @@ fn parcels() {
     ben.take_parcel(&m2).unwrap();
     ana.cheat(state, dan.receive().unwrap()).unwrap();
     meet(&mut ana, &mut dan);
-    assert!(
-        dan.take_parcel(&m2).is_err(),
-        "and it doesn't match the manifest anyway"
-    );
+    assert!(dan.take_parcel(&m2).is_err(), "and it doesn't match the manifest anyway");
     meet(&mut ben, &mut dan);
     assert_eq!(ben.view.flagged().len(), 1);
     assert_eq!(dan.view.flagged(), ben.view.flagged());
     // Ben now won't take a parcel from Ana, under any credential she uses.
     ana.hand_off(&m3.parcel, ben.receive().unwrap()).unwrap();
     meet(&mut ana, &mut ben);
-    assert!(
-        ben.take_parcel(&m3).unwrap_err().contains("NoStanding"),
-        "she can't prove she isn't the cheat"
-    );
+    assert!(ben.take_parcel(&m3).unwrap_err().contains("NoStanding"), "she can't prove she isn't the cheat");
     ben.hand_off(&m2.parcel, zoe_at).unwrap();
     meet(&mut ben, &mut zoe);
     zoe.confirm_delivery(&m2).unwrap();
     meet(&mut zoe, &mut ben);
     meet(&mut ben, &mut shop);
     assert!(shop.custody(&m2).delivered);
-    assert_eq!(
-        shop.pay_couriers(&m2).unwrap().len(),
-        1,
-        "ben is paid; ana isn't"
-    );
+    assert_eq!(shop.pay_couriers(&m2).unwrap().len(), 1, "ben is paid; ana isn't");
 
     // A courier who retires a parcel himself hasn't delivered it, and the
     // shop owes nobody for it.
-    let m4 = shop
-        .ship("tools", "dn5bpsb", "dn5bpth", zoe.receive().unwrap(), 3)
-        .unwrap();
+    let m4 = shop.ship("tools", "dn5bpsb", "dn5bpth", zoe.receive().unwrap(), 3).unwrap();
     shop.hand_off(&m4.parcel, dan.receive().unwrap()).unwrap();
     meet(&mut shop, &mut dan);
     dan.take_parcel(&m4).unwrap();
-    let coin = dan
-        .view
-        .unspent()
-        .find(|c| c.origin == m4.parcel)
-        .unwrap()
-        .clone();
-    let rec = pave_kernel::sign(
-        dan.view.scheme(),
-        &dan.key,
-        &coin.holder,
-        pave_kernel::Op::Retire { state: coin.state },
-    );
+    let coin = dan.view.unspent().find(|c| c.origin == m4.parcel).unwrap().clone();
+    let rec = pave_kernel::sign(dan.view.scheme(), &dan.key, &coin.holder, pave_kernel::Op::Retire { state: coin.state });
     dan.view.apply(&rec).unwrap();
     meet(&mut dan, &mut shop);
     let c = shop.custody(&m4);
@@ -185,24 +140,14 @@ fn parcels() {
     // Couriers take under their public identities, so the co-op's dispatch,
     // which was given them, sees which member holds the parcel.
     let mut coop = join(&mut town, "coop", &dir, &[100]);
-    let (dan_id, ben_id) = (
-        dan.identity("public").unwrap(),
-        ben.identity("public").unwrap(),
-    );
+    let (dan_id, ben_id) = (dan.identity("public").unwrap(), ben.identity("public").unwrap());
     coop.add_contact("dan", dan_id.clone()).unwrap();
     coop.add_contact("ben", ben_id.clone()).unwrap();
     let zoe_at = zoe.receive().unwrap();
-    let m6 = shop
-        .ship("books", "dn5bpsb", "dn5bpth", zoe_at.clone(), 3)
-        .unwrap();
-    let m6 = shop
-        .name_provider(&m6.parcel, coop.receive().unwrap())
-        .unwrap();
+    let m6 = shop.ship("books", "dn5bpsb", "dn5bpth", zoe_at.clone(), 3).unwrap();
+    let m6 = shop.name_provider(&m6.parcel, coop.receive().unwrap()).unwrap();
     shop.hand_off(&m6.parcel, dan.receive().unwrap()).unwrap();
-    assert!(
-        shop.name_provider(&m6.parcel, zoe_at.clone()).is_err(),
-        "named before the first handoff"
-    );
+    assert!(shop.name_provider(&m6.parcel, zoe_at.clone()).is_err(), "named before the first handoff");
     meet(&mut shop, &mut dan);
     dan.take_parcel_as(&m6, Some("public")).unwrap();
     dan.hand_off(&m6.parcel, ben.receive().unwrap()).unwrap();
@@ -219,43 +164,18 @@ fn parcels() {
         meet(&mut shop, &mut coop);
     }
     // Zoe posts a note claiming she took it: she never held it, so it's ignored.
-    let fake = pave_board::board::BoardMsg::Took {
-        parcel: m6.parcel,
-        hop: 2,
-    };
+    let fake = pave_board::board::BoardMsg::Took { parcel: m6.parcel, hop: 2 };
     let zc = zoe.receive().unwrap();
-    zoe.compose_as(
-        &zoe.town.jobs.scope.clone(),
-        &zc,
-        fake.kind(),
-        fake.job(),
-        fake.encode(),
-        None,
-        Some("public"),
-    )
-    .unwrap();
+    zoe.compose_as(&zoe.town.jobs.scope.clone(), &zc, fake.kind(), fake.job(), fake.encode(), None, Some("public")).unwrap();
     zoe.sync_with(&mut town);
     for p in [&mut dan, &mut ben, &mut coop, &mut shop] {
         p.sync_with(&mut town);
     }
     coop.parcels.insert(m6.parcel, m6.clone());
-    let names: Vec<_> = coop
-        .who_took(&m6)
-        .into_iter()
-        .map(|(h, c, n)| (h, c, n.unwrap()))
-        .collect();
-    assert_eq!(
-        names,
-        vec![
-            (2, dan_id, "dan".to_string()),
-            (4, ben_id, "ben".to_string())
-        ]
-    );
+    let names: Vec<_> = coop.who_took(&m6).into_iter().map(|(h, c, n)| (h, c, n.unwrap())).collect();
+    assert_eq!(names, vec![(2, dan_id, "dan".to_string()), (4, ben_id, "ben".to_string())]);
     assert_eq!(shop.who_took(&m6).len(), 2);
-    assert!(
-        shop.who_took(&m6).iter().all(|(_, _, n)| n.is_none()),
-        "without them, the shop sees identities, not names"
-    );
+    assert!(shop.who_took(&m6).iter().all(|(_, _, n)| n.is_none()), "without them, the shop sees identities, not names");
     assert!(shop.pay_couriers(&m6).unwrap_err().contains("provider"));
     shop.pay_provider(&m6, 10).unwrap();
     assert!(shop.pay_provider(&m6, 10).is_err(), "once");
@@ -264,10 +184,7 @@ fn parcels() {
     assert_eq!(coop.pay_couriers(&m6).unwrap().len(), 2);
     meet(&mut coop, &mut dan);
     meet(&mut coop, &mut ben);
-    assert_eq!(
-        (balance(&dan) - dan0, balance(&ben) - ben0, balance(&coop)),
-        (3, 3, 104)
-    );
+    assert_eq!((balance(&dan) - dan0, balance(&ben) - ben0, balance(&coop)), (3, 3, 104));
 
     // Manifests survive a restart.
     shop.save().unwrap();

@@ -65,15 +65,7 @@ fn s_and_w(credential: &[u8]) -> Option<(G1Projective, G1Projective)> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn challenge(
-    ctx: &[u8],
-    credential: &[u8],
-    bsn: &[u8],
-    k: &G1Projective,
-    t: &G1Projective,
-    u1: &G1Projective,
-    u2: &G1Projective,
-) -> Scalar {
+fn challenge(ctx: &[u8], credential: &[u8], bsn: &[u8], k: &G1Projective, t: &G1Projective, u1: &G1Projective, u2: &G1Projective) -> Scalar {
     let mut d = Vec::new();
     for part in [ctx, credential, bsn] {
         d.extend_from_slice(&(part.len() as u64).to_be_bytes());
@@ -89,12 +81,7 @@ fn challenge(
 /// `entries` (basename, pseudonym). `ctx` binds the proof to one use, such as
 /// a payment or a ticket request. Returns None if the key is one of them, or
 /// if an input is malformed.
-pub fn prove(
-    secret_key: &[u8],
-    credential: &[u8],
-    entries: &[(Vec<u8>, Vec<u8>)],
-    ctx: &[u8],
-) -> Option<Vec<u8>> {
+pub fn prove(secret_key: &[u8], credential: &[u8], entries: &[(Vec<u8>, Vec<u8>)], ctx: &[u8]) -> Option<Vec<u8>> {
     let f = scalar(secret_key)?;
     let (s, w) = s_and_w(credential)?;
     if s * f != w {
@@ -124,20 +111,12 @@ pub fn prove(
 
 /// Check a proof from `prove`.
 pub fn verify(credential: &[u8], entries: &[(Vec<u8>, Vec<u8>)], ctx: &[u8], proof: &[u8]) -> bool {
-    let Some((s, w)) = s_and_w(credential) else {
-        return false;
-    };
+    let Some((s, w)) = s_and_w(credential) else { return false };
     if proof.len() != entries.len() * ENTRY_PROOF_LENGTH {
         return false;
     }
     for ((bsn, k), p) in entries.iter().zip(proof.chunks(ENTRY_PROOF_LENGTH)) {
-        let (Some(k), Some(t), Some(c), Some(sa), Some(sb)) = (
-            point(k),
-            point(&p[..48]),
-            scalar(&p[48..80]),
-            scalar(&p[80..112]),
-            scalar(&p[112..144]),
-        ) else {
+        let (Some(k), Some(t), Some(c), Some(sa), Some(sb)) = (point(k), point(&p[..48]), scalar(&p[48..80]), scalar(&p[80..112]), scalar(&p[112..144])) else {
             return false;
         };
         if bool::from(t.is_identity()) {

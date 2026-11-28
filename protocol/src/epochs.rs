@@ -66,16 +66,7 @@ pub fn roll<S: Scheme>(
     next: &Credential,
     data: &EpochData,
 ) -> Record {
-    sign(
-        scheme,
-        key,
-        holder,
-        Op::Transfer {
-            state: current.state,
-            to: next.clone(),
-            receipt: data.hash(),
-        },
-    )
+    sign(scheme, key, holder, Op::Transfer { state: current.state, to: next.clone(), receipt: data.hash() })
 }
 
 /// The latest epoch of a sequence a view knows.
@@ -96,30 +87,19 @@ pub fn head<S: Scheme>(view: &View<S>, sequence: &Hash) -> Option<Head> {
         Op::Transfer { receipt, .. } => Some(*receipt),
         _ => None,
     };
-    Some(Head {
-        sequence: *sequence,
-        number: coin.hops,
-        state: coin.state,
-        data,
-    })
+    Some(Head { sequence: *sequence, number: coin.hops, state: coin.state, data })
 }
 
 /// The records of `sequence` after epoch `have`, oldest first: what a peer
 /// at epoch `have` needs to reach this view's head.
 pub fn chain_since<S: Scheme>(view: &View<S>, sequence: &Hash, have: u32) -> Vec<Record> {
     let mut out = Vec::new();
-    let Some(h) = head(view, sequence) else {
-        return out;
-    };
+    let Some(h) = head(view, sequence) else { return out };
     let mut state = h.state;
     let mut number = h.number;
     while number > have {
-        let Some(rec) = view.creator(&state) else {
-            break;
-        };
-        let Some(prev) = rec.op.consumes().first().copied() else {
-            break;
-        };
+        let Some(rec) = view.creator(&state) else { break };
+        let Some(prev) = rec.op.consumes().first().copied() else { break };
         out.push(rec.clone());
         state = prev;
         number -= 1;

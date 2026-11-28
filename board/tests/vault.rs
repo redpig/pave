@@ -7,9 +7,7 @@ fn join(town: &mut Node, name: &str, dir: &std::path::Path, credits: &[u64]) -> 
     let (pending, req) = PendingJoin::generate();
     let e = town.enroll(&req, "hardware", credits).unwrap();
     let mut p = Node::finish_enrollment(pending, &e, name, &dir.join(name)).unwrap();
-    let t = town
-        .answer_refill(&p.refill_request(&town.refill_terms().unwrap(), 8).unwrap())
-        .unwrap();
+    let t = town.answer_refill(&p.refill_request(&town.refill_terms().unwrap(), 8).unwrap()).unwrap();
     p.take_tickets(t);
     p
 }
@@ -36,21 +34,14 @@ fn sealed_state_and_restores() {
     let mut tampered = file.clone();
     *tampered.last_mut().unwrap() ^= 1;
     std::fs::write(dir.join("tampered"), &tampered).unwrap();
-    std::fs::copy(
-        alice.path.with_extension("vault"),
-        dir.join("tampered.vault"),
-    )
-    .unwrap();
+    std::fs::copy(alice.path.with_extension("vault"), dir.join("tampered.vault")).unwrap();
     assert!(Node::load(&dir.join("tampered")).is_err());
 
     // The software keystore can't stop a restore of both files: the old
     // copy signs the coin again, and evidence names alice. Detection, not
     // prevention, is all software alone can offer.
     let coin = alice.my_coins()[0].state;
-    let (backup, backup_vault) = (
-        std::fs::read(&alice.path).unwrap(),
-        std::fs::read(alice.path.with_extension("vault")).unwrap(),
-    );
+    let (backup, backup_vault) = (std::fs::read(&alice.path).unwrap(), std::fs::read(alice.path.with_extension("vault")).unwrap());
     let to_bob = bob.receive().unwrap();
     let paid = alice.spend(coin, to_bob.clone()).unwrap();
     // The signing log is saved before a signature leaves. A wallet that
@@ -67,10 +58,7 @@ fn sealed_state_and_restores() {
     std::fs::write(&alice.path, &backup).unwrap();
     std::fs::write(alice.path.with_extension("vault"), &backup_vault).unwrap();
     let mut restored = Node::load(&alice.path).unwrap();
-    assert!(
-        restored.my_coins().iter().any(|c| c.state == coin),
-        "the old copy thinks it still holds the coin"
-    );
+    assert!(restored.my_coins().iter().any(|c| c.state == coin), "the old copy thinks it still holds the coin");
     restored.spend(coin, carol.receive().unwrap()).unwrap();
     meet(&mut restored, &mut carol);
     meet(&mut carol, &mut bob);
@@ -86,9 +74,7 @@ fn sealed_state_and_restores() {
     let coin = dave.my_coins()[0].state;
     dave.spend(coin, bob.receive().unwrap()).unwrap();
     std::fs::write(&dave.path, &backup).unwrap();
-    let err = Node::load_with(&dave.path, Box::new(device.clone()))
-        .err()
-        .unwrap();
+    let err = Node::load_with(&dave.path, Box::new(device.clone())).err().unwrap();
     assert!(err.contains("retired key"), "{err}");
     // The live state still opens.
     dave.save().unwrap();

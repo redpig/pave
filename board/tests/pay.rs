@@ -10,9 +10,7 @@ fn join(town: &mut Node, name: &str, class: &str, dir: &std::path::Path, credits
     let (pending, req) = PendingJoin::generate();
     let e = town.enroll(&req, class, credits).unwrap();
     let mut p = Node::finish_enrollment(pending, &e, name, &dir.join(name)).unwrap();
-    let t = town
-        .answer_refill(&p.refill_request(&town.refill_terms().unwrap(), 8).unwrap())
-        .unwrap();
+    let t = town.answer_refill(&p.refill_request(&town.refill_terms().unwrap(), 8).unwrap()).unwrap();
     p.take_tickets(t);
     p
 }
@@ -74,19 +72,13 @@ fn payments() {
     assert_eq!(bob.my_coins().iter().map(|c| c.amount).sum::<u64>(), 30);
     assert_eq!(alice.my_coins().iter().map(|c| c.amount).sum::<u64>(), 70);
     let again = pay(&mut alice, &mut bob, 20).unwrap();
-    assert!(
-        again < first + 2,
-        "the second payment reuses what bob has ({again} vs {first})"
-    );
+    assert!(again < first + 2, "the second payment reuses what bob has ({again} vs {first})");
     assert!(alice.pending.is_empty());
 
     // The payer checks the payee's ticket: bob's class can receive at most
     // 50 in one coin.
     let inv = bob.invoice(60, "too much").unwrap();
-    assert!(alice
-        .check_invoice(&inv)
-        .unwrap_err()
-        .contains("can't receive"));
+    assert!(alice.check_invoice(&inv).unwrap_err().contains("can't receive"));
 
     // Lost acknowledgment: the payer keeps the payment pending; resending
     // the same record gets the same answer, never a second payment.
@@ -116,10 +108,8 @@ fn payments() {
     meet(&mut alice, &mut bob);
     assert!(!pave_protocol::cheat_list(&bob.view).is_empty());
     let err = pay(&mut carol, &mut bob, 20).unwrap_err();
-    assert!(
-        err.contains("known cheat") || err.contains("NoStanding") || err.contains("Refuse"),
-        "{err}"
-    );
+    assert!(err.contains("known cheat") || err.contains("NoStanding") || err.contains("Refuse"), "{err}");
+
 
     // The payee judges the coin itself: once dave knows the town is past
     // alice's coin's hard expiry, he refuses it, whatever the payer thinks.

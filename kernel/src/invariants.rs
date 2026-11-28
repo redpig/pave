@@ -16,35 +16,20 @@ pub fn conservation<S: Scheme>(v: &View<S>) -> Result<(), String> {
     let mut value: BTreeMap<Hash, u64> = BTreeMap::new();
     let mut budget: BTreeMap<Hash, u64> = BTreeMap::new();
     for c in v.unspent.values() {
-        let m = if c.kind == Kind::Value {
-            &mut value
-        } else {
-            &mut budget
-        };
+        let m = if c.kind == Kind::Value { &mut value } else { &mut budget };
         *m.entry(c.schema).or_default() += c.amount;
     }
-    let schemas: BTreeSet<Hash> = v
-        .totals
-        .keys()
-        .chain(value.keys())
-        .chain(budget.keys())
-        .copied()
-        .collect();
+    let schemas: BTreeSet<Hash> =
+        v.totals.keys().chain(value.keys()).chain(budget.keys()).copied().collect();
     for s in schemas {
         let t = v.totals(&s);
         let val = value.get(&s).copied().unwrap_or(0);
         let bud = budget.get(&s).copied().unwrap_or(0);
         if val + t.retired_value != t.minted {
-            return Err(format!(
-                "schema {s:?}: outstanding {val} + retired {} != minted {}",
-                t.retired_value, t.minted
-            ));
+            return Err(format!("schema {s:?}: outstanding {val} + retired {} != minted {}", t.retired_value, t.minted));
         }
         if bud + t.minted + t.retired_budget != t.issued {
-            return Err(format!(
-                "schema {s:?}: budget {bud} + minted {} + retired {} != issued {}",
-                t.minted, t.retired_budget, t.issued
-            ));
+            return Err(format!("schema {s:?}: budget {bud} + minted {} + retired {} != issued {}", t.minted, t.retired_budget, t.issued));
         }
     }
     Ok(())
@@ -91,9 +76,7 @@ pub fn detected<S: Scheme>(v: &View<S>) -> Result<(), String> {
     let mut uses: BTreeMap<(Hash, Credential), BTreeSet<Hash>> = BTreeMap::new();
     for rec in v.records.iter().chain(v.conflicts.iter()) {
         for s in rec.op.consumes() {
-            uses.entry((s, rec.signer.clone()))
-                .or_default()
-                .insert(rec.id());
+            uses.entry((s, rec.signer.clone())).or_default().insert(rec.id());
         }
     }
     for ((state, _), recs) in uses {

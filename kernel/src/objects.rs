@@ -135,58 +135,23 @@ impl Genesis {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Op {
     /// Scope: create a child, under a shared capability with `create-scope`.
-    CreateScope {
-        parent: Hash,
-        rules: ScopeRules,
-        authority: Hash,
-    },
+    CreateScope { parent: Hash, rules: ScopeRules, authority: Hash },
     /// Capability: derive a narrower shared capability.
-    Derive {
-        parent: Hash,
-        rights: BTreeSet<String>,
-        to: Credential,
-    },
+    Derive { parent: Hash, rights: BTreeSet<String>, to: Credential },
     /// Create a mint right (a budget) for a new schema, under `issue`.
-    IssueBudget {
-        authority: Hash,
-        schema: Schema,
-        amount: u64,
-        to: Credential,
-    },
+    IssueBudget { authority: Hash, schema: Schema, amount: u64, to: Credential },
     /// Mint value by spending a budget state; any remainder stays a budget.
-    Mint {
-        budget: Hash,
-        amount: u64,
-        to: Credential,
-        change_to: Credential,
-    },
+    Mint { budget: Hash, amount: u64, to: Credential, change_to: Credential },
     /// Move an exclusive capability to be held under another credential.
-    Transfer {
-        state: Hash,
-        to: Credential,
-        receipt: Hash,
-    },
+    Transfer { state: Hash, to: Credential, receipt: Hash },
     /// Divide one state into parts; zero-value parts prove possession.
-    Split {
-        state: Hash,
-        parts: Vec<(u64, Credential)>,
-        receipt: Hash,
-    },
+    Split { state: Hash, parts: Vec<(u64, Credential)>, receipt: Hash },
     /// Combine states of one schema, all held by the signer.
-    Merge {
-        states: Vec<Hash>,
-        to: Credential,
-        receipt: Hash,
-    },
+    Merge { states: Vec<Hash>, to: Credential, receipt: Hash },
     /// Remove a state from what is outstanding.
     Retire { state: Hash },
     /// Message: send to a scope, presenting a shared capability if required.
-    Send {
-        scope: Hash,
-        presenting: Option<Hash>,
-        body: Vec<u8>,
-        receipt: Hash,
-    },
+    Send { scope: Hash, presenting: Option<Hash>, body: Vec<u8>, receipt: Hash },
 }
 
 impl Op {

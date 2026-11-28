@@ -69,23 +69,15 @@ fn request(j: &JoinRequest) -> String {
 
 impl Join {
     pub fn new() -> Self {
-        Join {
-            state: Mutex::new(Some(PendingJoin::generate())),
-        }
+        Join { state: Mutex::new(Some(PendingJoin::generate())) }
     }
 
     pub fn request(&self) -> String {
-        self.state
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|(_, j)| request(j))
-            .unwrap_or_else(|| json!({ "error": "this join is finished" }).to_string())
+        self.state.lock().unwrap().as_ref().map(|(_, j)| request(j)).unwrap_or_else(|| json!({ "error": "this join is finished" }).to_string())
     }
 
     pub fn attest(&self, attestation_json: String) -> Result<String, PaveError> {
-        let v: Value =
-            serde_json::from_str(&attestation_json).map_err(|e| format!("bad json: {e}"))?;
+        let v: Value = serde_json::from_str(&attestation_json).map_err(|e| format!("bad json: {e}"))?;
         let a = crate::attestation(&v)?;
         let mut st = self.state.lock().unwrap();
         let (_, j) = st.as_mut().ok_or("this join is finished".to_string())?;
@@ -93,31 +85,12 @@ impl Join {
         Ok(request(j))
     }
 
-    pub fn finish(
-        &self,
-        reply_hex: String,
-        name: String,
-        path: String,
-        keystore: Box<dyn Keystore>,
-    ) -> Result<Arc<Wallet>, PaveError> {
-        let (pending, _) = self
-            .state
-            .lock()
-            .unwrap()
-            .take()
-            .ok_or("this join is finished".to_string())?;
+    pub fn finish(&self, reply_hex: String, name: String, path: String, keystore: Box<dyn Keystore>) -> Result<Arc<Wallet>, PaveError> {
+        let (pending, _) = self.state.lock().unwrap().take().ok_or("this join is finished".to_string())?;
         let bytes = hex::decode(reply_hex).map_err(|e| e.to_string())?;
         let e: Enrollment = ciborium::from_reader(bytes.as_slice()).map_err(|e| e.to_string())?;
-        let n = Node::finish_enrollment_with(
-            pending,
-            &e,
-            &name,
-            Path::new(&path),
-            Box::new(AppKeystore(keystore)),
-        )?;
-        Ok(Arc::new(Wallet {
-            node: Arc::new(Mutex::new(n)),
-        }))
+        let n = Node::finish_enrollment_with(pending, &e, &name, Path::new(&path), Box::new(AppKeystore(keystore)))?;
+        Ok(Arc::new(Wallet { node: Arc::new(Mutex::new(n)) }))
     }
 }
 
@@ -134,9 +107,7 @@ pub struct Wallet {
 impl Wallet {
     pub fn open(path: String, keystore: Box<dyn Keystore>) -> Result<Self, PaveError> {
         let n = Node::load_with(Path::new(&path), Box::new(AppKeystore(keystore)))?;
-        Ok(Wallet {
-            node: Arc::new(Mutex::new(n)),
-        })
+        Ok(Wallet { node: Arc::new(Mutex::new(n)) })
     }
 
     pub fn call(&self, json_in: String) -> String {
@@ -150,9 +121,7 @@ impl Wallet {
                 r.to_string()
             }
             Ok(Err(e)) => json!({ "ok": false, "error": e }).to_string(),
-            Err(_) => {
-                json!({ "ok": false, "error": "the wallet panicked on that command" }).to_string()
-            }
+            Err(_) => json!({ "ok": false, "error": "the wallet panicked on that command" }).to_string(),
         }
     }
 

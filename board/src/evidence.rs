@@ -58,14 +58,9 @@ pub const MAX_EVIDENCE: usize = 256 * 1024;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Evidence {
     /// A parcel's manifest and the records of its custody chain.
-    Custody {
-        manifest: Box<Manifest>,
-        records: Vec<Record>,
-    },
+    Custody { manifest: Box<Manifest>, records: Vec<Record> },
     /// The code a code delivery was shipped with.
-    Code {
-        code: String,
-    },
+    Code { code: String },
     /// A drop's photo as shown, and the commitment to its original.
     DropPhoto {
         #[serde(with = "serde_bytes")]
@@ -94,9 +89,7 @@ pub enum Evidence {
         #[serde(with = "serde_bytes")]
         image: Vec<u8>,
     },
-    Statement {
-        text: String,
-    },
+    Statement { text: String },
 }
 
 impl Evidence {
@@ -129,11 +122,7 @@ pub struct Sealed {
 }
 
 fn sealed_bytes(subject: &Hash, bytes: &[u8]) -> Vec<u8> {
-    encode(&(
-        "pave/evidence/v0",
-        subject,
-        hash_bytes("pave/evidence/bytes", bytes),
-    ))
+    encode(&("pave/evidence/v0", subject, hash_bytes("pave/evidence/bytes", bytes)))
 }
 
 impl Sealed {
@@ -141,12 +130,7 @@ impl Sealed {
         hash_bytes("pave/evidence/bytes", &self.bytes)
     }
     pub fn verify(&self, s: &crate::node::S) -> bool {
-        s.verify(
-            &self.from,
-            &sealed_bytes(&self.subject, &self.bytes),
-            None,
-            &self.sig,
-        )
+        s.verify(&self.from, &sealed_bytes(&self.subject, &self.bytes), None, &self.sig)
     }
     pub fn evidence(&self) -> Option<Evidence> {
         ciborium::from_reader(self.bytes.as_slice()).ok()
@@ -234,12 +218,7 @@ impl Node {
     /// this wallet holds that makes it a party) or a fresh one. The bytes
     /// go to the host at the next sync; a public note of their kind and
     /// hash is posted with them.
-    pub fn submit_evidence(
-        &mut self,
-        subject: Hash,
-        evidence: &Evidence,
-        as_cred: Option<Credential>,
-    ) -> Result<Hash, String> {
+    pub fn submit_evidence(&mut self, subject: Hash, evidence: &Evidence, as_cred: Option<Credential>) -> Result<Hash, String> {
         let bytes = encode(evidence);
         if bytes.len() > MAX_EVIDENCE {
             return Err(format!("evidence over {MAX_EVIDENCE} bytes"));
@@ -249,31 +228,12 @@ impl Node {
             Some(_) => return Err("this wallet doesn't hold that credential".into()),
             None => self.fresh()?,
         };
-        let sig = self
-            .view
-            .scheme()
-            .sign(&self.key, &from, &sealed_bytes(&subject, &bytes), None);
-        let sealed = Sealed {
-            subject,
-            bytes,
-            from: from.clone(),
-            sig,
-        };
+        let sig = self.view.scheme().sign(&self.key, &from, &sealed_bytes(&subject, &bytes), None);
+        let sealed = Sealed { subject, bytes, from: from.clone(), sig };
         let hash = sealed.hash();
-        let note = BoardMsg::EvidenceNote {
-            subject,
-            kind: evidence.kind().into(),
-            hash,
-        };
+        let note = BoardMsg::EvidenceNote { subject, kind: evidence.kind().into(), hash };
         let scope = self.town.jobs.scope;
-        self.compose(
-            &scope,
-            &from,
-            note.kind(),
-            Some(subject),
-            note.encode(),
-            None,
-        )?;
+        self.compose(&scope, &from, note.kind(), Some(subject), note.encode(), None)?;
         if self.hosts(&scope) {
             self.host_evidence(&sealed)?;
         } else {
@@ -316,16 +276,8 @@ impl Node {
     /// A request for a subject's evidence signed with `cred`, whatever it is.
     pub fn ask_evidence_as(&self, subject: &Hash, cred: &Credential) -> Ask {
         let epoch = self.epoch();
-        let sig = self
-            .view
-            .scheme()
-            .sign(&self.key, cred, &ask_bytes(subject, epoch), None);
-        Ask {
-            subject: *subject,
-            epoch,
-            panelist: cred.clone(),
-            sig,
-        }
+        let sig = self.view.scheme().sign(&self.key, cred, &ask_bytes(subject, epoch), None);
+        Ask { subject: *subject, epoch, panelist: cred.clone(), sig }
     }
 
     /// Host: answer a panelist, and only a panelist.
@@ -334,45 +286,24 @@ impl Node {
         if ask.epoch > now || ask.epoch + 1 < now {
             return Err("that request isn't current".into());
         }
-        if !self.view.scheme().verify(
-            &ask.panelist,
-            &ask_bytes(&ask.subject, ask.epoch),
-            None,
-            &ask.sig,
-        ) {
+        if !self.view.scheme().verify(&ask.panelist, &ask_bytes(&ask.subject, ask.epoch), None, &ask.sig) {
             return Err("that request isn't signed by its panelist".into());
         }
         let (ds, _) = self.disputes();
-        let allowed = ds.values().filter(|d| d.subject == ask.subject).any(|d| {
-            d.opener == ask.panelist || d.panel.iter().flatten().any(|(c, _)| *c == ask.panelist)
-        });
+        let allowed = ds.values().filter(|d| d.subject == ask.subject).any(|d| d.opener == ask.panelist || d.panel.iter().flatten().any(|(c, _)| *c == ask.panelist));
         if !allowed {
-            return Err(
-                "only a panel on a dispute about this, or its parties, see its evidence".into(),
-            );
+            return Err("only a panel on a dispute about this, or its parties, see its evidence".into());
         }
-        Ok(self
-            .held_evidence
-            .get(&ask.subject)
-            .cloned()
-            .unwrap_or_default())
+        Ok(self.held_evidence.get(&ask.subject).cloned().unwrap_or_default())
     }
 
     /// The evidence notes posted about a subject: kind, hash and submitter.
     pub fn evidence_notes(&self, subject: &Hash) -> Vec<(String, Hash, Credential)> {
-        let Ok(copy) = self.copy(&self.town.jobs.scope) else {
-            return vec![];
-        };
+        let Ok(copy) = self.copy(&self.town.jobs.scope) else { return vec![] };
         copy.items()
             .into_iter()
             .filter_map(|i| match BoardMsg::decode(i.content) {
-                Some(BoardMsg::EvidenceNote {
-                    subject: s,
-                    kind,
-                    hash,
-                }) if s == *subject && i.post.thread == Some(s) => {
-                    Some((kind, hash, i.signer.clone()))
-                }
+                Some(BoardMsg::EvidenceNote { subject: s, kind, hash }) if s == *subject && i.post.thread == Some(s) => Some((kind, hash, i.signer.clone())),
                 _ => None,
             })
             .collect()
@@ -402,20 +333,14 @@ impl Node {
         let mut salt = vec![0u8; 32];
         rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut salt);
         let c = photo_commitment(&salt, original);
-        self.originals
-            .insert(c, (*subject, salt, original.to_vec()));
+        self.originals.insert(c, (*subject, salt, original.to_vec()));
         c
     }
 
     /// Courier: drop a parcel with a photo. The drop note commits to the
     /// original, metadata and provenance included; the wallet keeps it and
     /// its salt, and shows a panel a stripped copy unless it reveals more.
-    pub fn drop_off_photo(
-        &mut self,
-        m: &Manifest,
-        cell: &str,
-        photo: &[u8],
-    ) -> Result<Hash, String> {
+    pub fn drop_off_photo(&mut self, m: &Manifest, cell: &str, photo: &[u8]) -> Result<Hash, String> {
         let c = self.commit_original(&m.parcel, photo);
         let state = self.drop_off(m, cell, c)?;
         self.drop_photos.insert(m.parcel, c);
@@ -426,95 +351,39 @@ impl Node {
     /// Submit a picture about a subject. With `redact`, what is shown is
     /// stripped of metadata and carries a commitment to the original, which
     /// this wallet keeps to reveal if it helps.
-    pub fn submit_image(
-        &mut self,
-        subject: Hash,
-        caption: &str,
-        original: &[u8],
-        redact: bool,
-        as_cred: Option<Credential>,
-    ) -> Result<Hash, String> {
-        let (image, commitment) = if redact {
-            (
-                crate::media::strip_metadata(original),
-                Some(self.commit_original(&subject, original)),
-            )
-        } else {
-            (original.to_vec(), None)
-        };
-        self.submit_evidence(
-            subject,
-            &Evidence::Image {
-                caption: caption.into(),
-                image,
-                original: commitment,
-            },
-            as_cred,
-        )
+    pub fn submit_image(&mut self, subject: Hash, caption: &str, original: &[u8], redact: bool, as_cred: Option<Credential>) -> Result<Hash, String> {
+        let (image, commitment) = if redact { (crate::media::strip_metadata(original), Some(self.commit_original(&subject, original))) } else { (original.to_vec(), None) };
+        self.submit_evidence(subject, &Evidence::Image { caption: caption.into(), image, original: commitment }, as_cred)
     }
 
     /// Reveal the originals this wallet committed to about a subject.
-    pub fn reveal_originals(
-        &mut self,
-        subject: &Hash,
-        as_cred: Option<Credential>,
-    ) -> Result<Vec<Hash>, String> {
-        let mine: Vec<(Vec<u8>, Vec<u8>)> = self
-            .originals
-            .values()
-            .filter(|(s, _, _)| s == subject)
-            .map(|(_, salt, o)| (salt.clone(), o.clone()))
-            .collect();
+    pub fn reveal_originals(&mut self, subject: &Hash, as_cred: Option<Credential>) -> Result<Vec<Hash>, String> {
+        let mine: Vec<(Vec<u8>, Vec<u8>)> = self.originals.values().filter(|(s, _, _)| s == subject).map(|(_, salt, o)| (salt.clone(), o.clone())).collect();
         if mine.is_empty() {
             return Err("no originals about that".into());
         }
-        mine.into_iter()
-            .map(|(salt, original)| {
-                self.submit_evidence(
-                    *subject,
-                    &Evidence::Original { salt, original },
-                    as_cred.clone(),
-                )
-            })
-            .collect()
+        mine.into_iter().map(|(salt, original)| self.submit_evidence(*subject, &Evidence::Original { salt, original }, as_cred.clone())).collect()
     }
 
     /// Everything this wallet can show about a parcel: its custody, the
     /// code if it shipped by code, the photo if it dropped it, and any
     /// statement. Submitted as `as_cred`, or a credential from the custody
     /// chain this wallet holds, so the panel sees which party it is.
-    pub fn submit_parcel_evidence(
-        &mut self,
-        m: &Manifest,
-        statement: Option<&str>,
-    ) -> Result<Vec<Hash>, String> {
+    pub fn submit_parcel_evidence(&mut self, m: &Manifest, statement: Option<&str>) -> Result<Vec<Hash>, String> {
         let parties = self.parties(m);
         let as_cred = parties.iter().find(|c| self.mine.contains(*c)).cloned();
-        let mut items = vec![Evidence::Custody {
-            manifest: Box::new(m.clone()),
-            records: self.custody_records(m),
-        }];
+        let mut items = vec![Evidence::Custody { manifest: Box::new(m.clone()), records: self.custody_records(m) }];
         if let Some(code) = self.codes.get(&m.parcel) {
             items.push(Evidence::Code { code: code.clone() });
         }
-        if let Some((_, _, original)) = self
-            .drop_photos
-            .get(&m.parcel)
-            .and_then(|c| self.originals.get(c))
-        {
+        if let Some((_, _, original)) = self.drop_photos.get(&m.parcel).and_then(|c| self.originals.get(c)) {
             let commitment = self.drop_photos[&m.parcel];
-            items.push(Evidence::DropPhoto {
-                image: crate::media::strip_metadata(original),
-                commitment,
-            });
+            items.push(Evidence::DropPhoto { image: crate::media::strip_metadata(original), commitment });
         }
         if let Some(t) = statement {
             items.push(Evidence::Statement { text: t.into() });
         }
-        items
-            .iter()
-            .map(|e| self.submit_evidence(m.parcel, e, as_cred.clone()))
-            .collect()
+        items.iter().map(|e| self.submit_evidence(m.parcel, e, as_cred.clone())).collect()
     }
 
     /// Panelist: examine a parcel's evidence. Custody records are applied
@@ -522,19 +391,11 @@ impl Node {
     /// and photos are checked against the records and the drop note.
     pub fn examine_parcel(&mut self, subject: &Hash, evidence: &[Sealed]) -> Examination {
         let s = self.view.scheme().clone();
-        let good: Vec<(Credential, Evidence, Hash)> = evidence
-            .iter()
-            .filter(|e| e.subject == *subject && e.verify(&s))
-            .filter_map(|e| e.evidence().map(|ev| (e.from.clone(), ev, e.hash())))
-            .collect();
+        let good: Vec<(Credential, Evidence, Hash)> = evidence.iter().filter(|e| e.subject == *subject && e.verify(&s)).filter_map(|e| e.evidence().map(|ev| (e.from.clone(), ev, e.hash()))).collect();
         // Custody first: apply every record we can.
         let mut manifest: Option<Manifest> = None;
         for (_, ev, _) in &good {
-            if let Evidence::Custody {
-                manifest: m,
-                records,
-            } = ev
-            {
+            if let Evidence::Custody { manifest: m, records } = ev {
                 if m.parcel != *subject {
                     continue;
                 }
@@ -544,17 +405,7 @@ impl Node {
                 manifest.get_or_insert_with(|| (**m).clone());
             }
         }
-        let mut ex = Examination {
-            subject: *subject,
-            mode: None,
-            custody: vec![],
-            delivery: None,
-            code_matches: Check::Unknown,
-            photo_matches: Check::Unknown,
-            cell_matches: Check::Unknown,
-            pictures: vec![],
-            exhibits: vec![],
-        };
+        let mut ex = Examination { subject: *subject, mode: None, custody: vec![], delivery: None, code_matches: Check::Unknown, photo_matches: Check::Unknown, cell_matches: Check::Unknown, pictures: vec![], exhibits: vec![] };
         let roles: BTreeMap<Credential, String> = match &manifest {
             Some(m) => self.roles(m),
             None => BTreeMap::new(),
@@ -566,76 +417,36 @@ impl Node {
                 .steps
                 .iter()
                 .map(|st| match st {
-                    Step::Handoff { from, to } => format!(
-                        "handoff {} → {}",
-                        roles.get(from).map_or("?", |s| s.as_str()),
-                        roles.get(to).map_or("?", |s| s.as_str())
-                    ),
-                    Step::Take { by } => {
-                        format!("take by {}", roles.get(by).map_or("?", |s| s.as_str()))
-                    }
-                    Step::Retired { by } => {
-                        format!("retired by {}", roles.get(by).map_or("?", |s| s.as_str()))
-                    }
-                    Step::Closed { by, .. } => {
-                        format!("closed by {}", roles.get(by).map_or("?", |s| s.as_str()))
-                    }
+                    Step::Handoff { from, to } => format!("handoff {} → {}", roles.get(from).map_or("?", |s| s.as_str()), roles.get(to).map_or("?", |s| s.as_str())),
+                    Step::Take { by } => format!("take by {}", roles.get(by).map_or("?", |s| s.as_str())),
+                    Step::Retired { by } => format!("retired by {}", roles.get(by).map_or("?", |s| s.as_str())),
+                    Step::Closed { by, .. } => format!("closed by {}", roles.get(by).map_or("?", |s| s.as_str())),
                 })
                 .collect();
             if c.delivered {
                 ex.delivery = Some(format!("{:?}", Delivery::Delivered("signed")));
             }
-            let closings: Vec<(Hash, u32)> = c
-                .steps
-                .iter()
-                .filter_map(|st| {
-                    if let Step::Closed { receipt, hop, .. } = st {
-                        Some((*receipt, *hop))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+            let closings: Vec<(Hash, u32)> = c.steps.iter().filter_map(|st| if let Step::Closed { receipt, hop, .. } = st { Some((*receipt, *hop)) } else { None }).collect();
             let h = m.hash();
             // Where the drop note says it was left, against where it was going.
             let note_cell = self.copy(&self.town.jobs.scope).ok().and_then(|copy| {
-                copy.items()
-                    .into_iter()
-                    .find_map(|i| match BoardMsg::decode(i.content) {
-                        Some(BoardMsg::Dropped {
-                            parcel,
-                            cell,
-                            photo,
-                        }) if parcel == *subject
-                            && closings.iter().any(|(r, hop)| {
-                                *r == crate::parcel::drop_receipt(&h, *hop, &cell, &photo)
-                            }) =>
-                        {
-                            Some(cell)
-                        }
-                        _ => None,
-                    })
+                copy.items().into_iter().find_map(|i| match BoardMsg::decode(i.content) {
+                    Some(BoardMsg::Dropped { parcel, cell, photo }) if parcel == *subject && closings.iter().any(|(r, hop)| *r == crate::parcel::drop_receipt(&h, *hop, &cell, &photo)) => Some(cell),
+                    _ => None,
+                })
             });
             if let Some(cell) = note_cell {
-                ex.cell_matches = if cell == m.to_cell {
-                    Check::Yes
-                } else {
-                    Check::No
-                };
+                ex.cell_matches = if cell == m.to_cell { Check::Yes } else { Check::No };
             }
             for (_, ev, _) in &good {
                 match ev {
                     Evidence::Code { code } if m.mode == Mode::Code => {
-                        let hit = closings
-                            .iter()
-                            .any(|(r, hop)| *r == code_receipt(&h, *hop, code));
+                        let hit = closings.iter().any(|(r, hop)| *r == code_receipt(&h, *hop, code));
                         if hit || ex.code_matches == Check::Unknown {
                             ex.code_matches = if hit { Check::Yes } else { Check::No };
                         }
                     }
-                    Evidence::DropPhoto { commitment, .. }
-                        if matches!(m.mode, Mode::Drop { .. }) =>
-                    {
+                    Evidence::DropPhoto { commitment, .. } if matches!(m.mode, Mode::Drop { .. }) => {
                         let noted = self.copy(&self.town.jobs.scope).ok().is_some_and(|copy| {
                             copy.items().into_iter().any(|i| matches!(BoardMsg::decode(i.content), Some(BoardMsg::Dropped { parcel, photo: p, .. }) if parcel == *subject && p == *commitment))
                         });
@@ -650,24 +461,12 @@ impl Node {
         let commits: Vec<Hash> = self
             .copy(&self.town.jobs.scope)
             .ok()
-            .map(|copy| {
-                copy.items()
-                    .into_iter()
-                    .filter_map(|i| match BoardMsg::decode(i.content) {
-                        Some(BoardMsg::Dropped { parcel, photo, .. }) if parcel == *subject => {
-                            Some(photo)
-                        }
-                        _ => None,
-                    })
-                    .collect()
-            })
+            .map(|copy| copy.items().into_iter().filter_map(|i| match BoardMsg::decode(i.content) {
+                Some(BoardMsg::Dropped { parcel, photo, .. }) if parcel == *subject => Some(photo),
+                _ => None,
+            }).collect())
             .unwrap_or_default();
-        let pic = |label: String,
-                   from: &str,
-                   committed: bool,
-                   url: Option<String>,
-                   bytes: &[u8],
-                   commitment: Option<Hash>| Picture {
+        let pic = |label: String, from: &str, committed: bool, url: Option<String>, bytes: &[u8], commitment: Option<Hash>| Picture {
             label,
             from: from.into(),
             committed_at_drop: committed,
@@ -678,97 +477,38 @@ impl Node {
             commitment,
         };
         for (from, ev, hash) in &good {
-            let who = roles
-                .get(from)
-                .cloned()
-                .unwrap_or_else(|| "not a party".into());
+            let who = roles.get(from).cloned().unwrap_or_else(|| "not a party".into());
             let detail = match ev {
                 Evidence::Statement { text } => text.clone(),
                 Evidence::DropPhoto { image, .. } => format!("{} bytes as shown", image.len()),
-                Evidence::Image { caption, image, .. } => {
-                    format!("{caption} ({} bytes)", image.len())
-                }
-                Evidence::Original { original, .. } => format!(
-                    "{} bytes; metadata: {}",
-                    original.len(),
-                    crate::media::metadata_kinds(original).join(", ")
-                ),
-                Evidence::Reference {
-                    source,
-                    url,
-                    caption,
-                    image,
-                } => format!("{source}: {caption} <{url}> ({} bytes)", image.len()),
+                Evidence::Image { caption, image, .. } => format!("{caption} ({} bytes)", image.len()),
+                Evidence::Original { original, .. } => format!("{} bytes; metadata: {}", original.len(), crate::media::metadata_kinds(original).join(", ")),
+                Evidence::Reference { source, url, caption, image } => format!("{source}: {caption} <{url}> ({} bytes)", image.len()),
                 Evidence::Custody { records, .. } => format!("{} records", records.len()),
                 Evidence::Code { code } => code.clone(),
             };
             match ev {
-                Evidence::DropPhoto { image, commitment } => ex.pictures.push(pic(
-                    "drop photo".into(),
-                    &who,
-                    commits.contains(commitment),
-                    None,
-                    image,
-                    Some(*commitment),
-                )),
-                Evidence::Image {
-                    caption,
-                    image,
-                    original,
-                } => ex
-                    .pictures
-                    .push(pic(caption.clone(), &who, false, None, image, *original)),
-                Evidence::Reference {
-                    source,
-                    url,
-                    caption,
-                    image,
-                } => ex.pictures.push(pic(
-                    format!("{source}: {caption}"),
-                    &who,
-                    false,
-                    Some(url.clone()),
-                    image,
-                    None,
-                )),
+                Evidence::DropPhoto { image, commitment } => ex.pictures.push(pic("drop photo".into(), &who, commits.contains(commitment), None, image, Some(*commitment))),
+                Evidence::Image { caption, image, original } => ex.pictures.push(pic(caption.clone(), &who, false, None, image, *original)),
+                Evidence::Reference { source, url, caption, image } => ex.pictures.push(pic(format!("{source}: {caption}"), &who, false, Some(url.clone()), image, None)),
                 _ => {}
             }
-            ex.exhibits.push(Exhibit {
-                kind: ev.kind().into(),
-                from: who,
-                hash: *hash,
-                detail,
-            });
+            ex.exhibits.push(Exhibit { kind: ev.kind().into(), from: who, hash: *hash, detail });
         }
         // Originals last: each is checked against the commitment it claims to
         // open, and shown beside the picture it is the original of.
         for (from, ev, _) in &good {
-            let Evidence::Original { salt, original } = ev else {
-                continue;
-            };
-            let who = roles
-                .get(from)
-                .cloned()
-                .unwrap_or_else(|| "not a party".into());
+            let Evidence::Original { salt, original } = ev else { continue };
+            let who = roles.get(from).cloned().unwrap_or_else(|| "not a party".into());
             let c = photo_commitment(salt, original);
             let of = ex.pictures.iter_mut().find(|p| p.commitment == Some(c));
             let (label, committed, check) = match of {
                 Some(p) => {
                     p.original = Check::Yes;
-                    (
-                        format!("original of {}", p.label),
-                        p.committed_at_drop,
-                        Check::Yes,
-                    )
+                    (format!("original of {}", p.label), p.committed_at_drop, Check::Yes)
                 }
-                None if commits.contains(&c) => {
-                    ("original of the drop photo".into(), true, Check::Yes)
-                }
-                None => (
-                    "an original that matches nothing shown".into(),
-                    false,
-                    Check::No,
-                ),
+                None if commits.contains(&c) => ("original of the drop photo".into(), true, Check::Yes),
+                None => ("an original that matches nothing shown".into(), false, Check::No),
             };
             let mut p = pic(label, &who, committed, None, original, Some(c));
             p.original = check;
@@ -787,9 +527,7 @@ impl Node {
             match st {
                 Step::Handoff { from, to } => {
                     if i == 0 {
-                        roles
-                            .entry(from.clone())
-                            .or_insert_with(|| "shipper".into());
+                        roles.entry(from.clone()).or_insert_with(|| "shipper".into());
                     }
                     if !roles.contains_key(to) {
                         courier += 1;
@@ -824,9 +562,6 @@ impl Node {
     /// The hash of everything a panelist was given about a subject, for
     /// its ruling to refer to.
     pub fn evidence_digest(evidence: &[Sealed]) -> Hash {
-        hash_of(
-            "pave/evidence/digest",
-            &evidence.iter().map(|e| e.hash()).collect::<Vec<_>>(),
-        )
+        hash_of("pave/evidence/digest", &evidence.iter().map(|e| e.hash()).collect::<Vec<_>>())
     }
 }
