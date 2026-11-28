@@ -1,0 +1,51 @@
+// The pave wallet for Kotlin and Swift apps, through UniFFI. The same
+// wallet as pave.h: open it, then send it the JSON commands pave-node
+// takes ({"cmd": "help"} lists them).
+namespace pave {
+    string version();
+};
+
+[Error]
+interface PaveError {
+    Failed(string message);
+};
+
+/// The app's keystore: on a phone, the platform's (Android Keystore, the
+/// Secure Enclave). seal seals under a fresh key, keeping older ones until
+/// commit retires them; open opens with any key not yet retired.
+callback interface Keystore {
+    [Throws=PaveError]
+    bytes seal(bytes data);
+    [Throws=PaveError]
+    bytes open(bytes sealed);
+    [Throws=PaveError]
+    void commit();
+    boolean rollback_resistant();
+};
+
+/// Joining a town: this device's keys, kept in memory until the town's
+/// reply comes back.
+interface Join {
+    constructor();
+    /// {"request": hex, "challenge": hex}: the request to take to the town,
+    /// and what a hardware attestation must bind.
+    string request();
+    /// Attach the platform's attestation, {"android": {"chain": [hex]}} or
+    /// {"apple": {"object": hex, "key_id": hex}}; returns the new request.
+    [Throws=PaveError]
+    string attest(string attestation_json);
+    /// Finish with the town's reply (hex), creating the wallet at `path`.
+    [Throws=PaveError]
+    Wallet finish(string reply_hex, string name, string path, Keystore keystore);
+};
+
+/// An open wallet. Calls block: run them off the main thread.
+interface Wallet {
+    [Throws=PaveError, Name=open]
+    constructor(string path, Keystore keystore);
+    /// Run one JSON command; the reply has "ok", and "error" if it failed.
+    string call(string json);
+    /// Save now.
+    [Throws=PaveError]
+    void save();
+};

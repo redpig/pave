@@ -14,14 +14,40 @@
 //! Strings in and out are UTF-8 and NUL-terminated. Every string this
 //! library returns is the caller's to free with [`pave_string_free`].
 //! `include/pave.h` declares all of it.
+//!
+//! The same wallet is also offered through UniFFI (`src/pave.udl`), for
+//! Kotlin and Swift apps without hand-written glue; see [`ffi`].
+
+// UniFFI 0.25's generated scaffolding compares function pointers, which
+// newer compilers warn about, and leaves blank lines after doc comments;
+// it's the generator's code, not ours.
+#![allow(unpredictable_function_pointer_comparisons, clippy::empty_line_after_doc_comments)]
 
 use pave_board::commands::command;
 use pave_board::node::{Enrollment, Node, PendingJoin};
-use pave_board::vault::Keystore;
+use pave_board::vault::Keystore as VaultKeystore;
 use serde_json::{json, Value};
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+
+mod ffi;
+pub use ffi::*;
+uniffi::include_scaffolding!("pave");
+
+/// An attestation as the app hands it over: `{"android": {"chain": [hex]}}`
+/// or `{"apple": {"object": hex, "key_id": hex}}`.
+fn attestation(v: &Value) -> Result<pave_board::attest::Attestation, String> {
+    let hexes = |x: &Value| -> Result<Vec<u8>, String> { hex::decode(x.as_str().ok_or("expected hex")?).map_err(|e| e.to_string()) };
+    if let Some(a) = v.get("android") {
+        let chain = a["chain"].as_array().ok_or("android needs a chain")?.iter().map(|c| hexes(c).map(serde_bytes::ByteBuf::from)).collect::<Result<_, _>>()?;
+        Ok(pave_board::attest::Attestation::Android { chain })
+    } else if let Some(a) = v.get("apple") {
+        Ok(pave_board::attest::Attestation::Apple { object: serde_bytes::ByteBuf::from(hexes(&a["object"])?), key_id: serde_bytes::ByteBuf::from(hexes(&a["key_id"])?) })
+    } else {
+        Err("expected android or apple".into())
+    }
+}
 
 /// An open wallet.
 pub struct PaveWallet {
@@ -81,7 +107,7 @@ impl Callbacks {
     }
 }
 
-impl Keystore for Callbacks {
+impl VaultKeystore for Callbacks {
     fn seal(&mut self, data: &[u8]) -> Result<Vec<u8>, String> {
         self.call(self.0.seal, data)
     }
@@ -193,16 +219,7 @@ pub unsafe extern "C" fn pave_join_attest(join: *mut PaveJoin, json_in: *const c
     }
     let r = (|| -> Result<Value, String> {
         let v: Value = serde_json::from_str(text(json_in)?).map_err(|e| format!("bad json: {e}"))?;
-        let hexes = |x: &Value| -> Result<Vec<u8>, String> { hex::decode(x.as_str().ok_or("expected hex")?).map_err(|e| e.to_string()) };
-        let a = if let Some(a) = v.get("android") {
-            let chain = a["chain"].as_array().ok_or("android needs a chain")?.iter().map(|c| hexes(c).map(serde_bytes::ByteBuf::from)).collect::<Result<_, _>>()?;
-            pave_board::attest::Attestation::Android { chain }
-        } else if let Some(a) = v.get("apple") {
-            pave_board::attest::Attestation::Apple { object: serde_bytes::ByteBuf::from(hexes(&a["object"])?), key_id: serde_bytes::ByteBuf::from(hexes(&a["key_id"])?) }
-        } else {
-            return Err("expected android or apple".into());
-        };
-        (*join).join.attestation = Some(a);
+        (*join).join.attestation = Some(attestation(&v)?);
         Ok(request(&(*join).join))
     })();
     match r {

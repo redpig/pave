@@ -1,6 +1,8 @@
 # pave-mobile
 
-The pave wallet for phone apps: the whole wallet in one library, behind a small C interface ([`include/pave.h`](include/pave.h)). An app opens a wallet and sends it the JSON commands `pave-node` takes ([`board/src/commands`](../board/src/commands)); `{"cmd": "help"}` lists them. It shows and scans QR codes and carries sealed bytes over its radios; the library does the rest.
+The pave wallet for phone apps: the whole wallet in one library, behind two interfaces over the same commands:
+- **UniFFI** ([`src/pave.udl`](src/pave.udl)): generated Kotlin and Swift bindings, the same toolchain Briolette's app uses. This is what [the app](#the-app) calls.
+- **A small C interface** ([`include/pave.h`](include/pave.h)): for other hosts. An app opens a wallet and sends it the JSON commands `pave-node` takes ([`board/src/commands`](../board/src/commands)); `{"cmd": "help"}` lists them. It shows and scans QR codes and carries sealed bytes over its radios; the library does the rest.
 
 ## The interface
 
@@ -30,22 +32,47 @@ The pave wallet for phone apps: the whole wallet in one library, behind a small 
 | Wi-Fi Aware | `WifiAwareManager`: publish a service named in the invite, with the token as its service-specific info; open a data path to the subscriber that matches | The `WiFiAware` framework (iOS 26, iPhone 12 and later), same service name |
 | Bluetooth LE | Advertise the invite's service UUID with the token as service data | Core Bluetooth, the same |
 
+## The app
+
+[`app/`](app) is a Kotlin Multiplatform app on Briolette's Gradle setup (Compose Multiplatform, UniFFI, CameraX and ML Kit for scanning, ZXing for drawing):
+
+| | |
+|---|---|
+| `shared/src/commonMain/.../Pave.kt` | The wallet as the screens see it: JSON commands, joining, the platform |
+| `.../Link.kt` | In-person links: invites, sealing, QR frames, and a meet over a radio |
+| `.../Flows.kt` | The counter pickup (`Counter.cafe`, `Counter.courier`) over a radio, and the door handoff (`Door`) in alternating QR turns |
+| `.../ui/App.kt` | Join (with this device's attestation), hand a bag to a courier, pick one up, hand one over at the door, receive one |
+| `shared/src/androidMain/.../AndroidPlatform.kt` | The UniFFI wallet; the Android Keystore vault (rollback-resistant AES-GCM); Key Attestation |
+| `.../WifiAwareRadio.kt` | The counter's radio: publish and subscribe on the invite's service, matched by its token, a data path with the token as passphrase, framed over a socket |
+| `.../AndroidQr.kt` | Drawing codes, and a camera that keeps reading them through a frame loop |
+| `iosApp/PaveVault.swift` | The Secure Enclave vault and App Attest, over UniFFI's Swift protocol |
+
+`build-rust.sh bindings` regenerates the Kotlin and Swift bindings into the app, `build-rust.sh android` builds the library for each ABI, then `./gradlew :androidApp:assembleDebug`. The iOS app shell (an Xcode project embedding the shared framework, as Briolette's does) and a Bluetooth radio are still to come.
+
+[`demo/phone_demo.py`](../demo/phone_demo.py) runs the same turns as `Flows.kt` against the library, so the steps are checked here even though the Kotlin isn't compiled.
+
 ## What's verified here and what isn't
 
 - **Verified:** the library, built for this machine, x86-64 Linux.
+  - [`tests/uniffi/check.py`](tests/uniffi/check.py) generates UniFFI's Python bindings from the built library, which come from the same place as its Kotlin and Swift. It joins a town with a keystore written in Python, uses the wallet and reopens it. A stale copy of the state, a bad attestation and a second finish of the same join are refused.
   - [`tests/c/check.py`](tests/c/check.py) builds [`tests/c/smoke.c`](tests/c/smoke.c) against `pave.h` with `-Wall -Wextra -Werror`. It enrolls a wallet through the header with its own keystore callbacks against a real town, uses the wallet and reopens it. A stale copy of the state is refused.
   - [`demo/phone_demo.py`](../demo/phone_demo.py) drives three wallets through the C interface:
     - online steps with the town;
     - a counter pickup over a socket standing in for Wi-Fi Aware;
     - a door handoff in QR frames alone.
-- **Not built here:** [`android/Pave.kt`](android/Pave.kt) (JNA, with an Android Keystore vault) and [`ios/Pave.swift`](ios/Pave.swift) (with a Secure Enclave vault). The machine this was written on can't reach the Android SDK and NDK, Xcode, or Rust's phone targets. They follow the header and make the same calls as the demo.
+- **Not built here:** the app's Kotlin and Swift. The machine this was written on can't reach the Android SDK and NDK, Google's Maven, Xcode, or Rust's phone targets. The app calls the generated bindings, and its flows are the demo's.
 
 ## Building
 
-    # this machine: the library, the C check and the phone demo
+    # this machine: the library, both interfaces' checks and the phone demo
     cargo build --release -p pave-board -p pave-mobile
     python3 mobile/tests/c/check.py
+    python3 mobile/tests/uniffi/check.py
     python3 demo/phone_demo.py
+
+    # the app (with the Android SDK, NDK and cargo-ndk)
+    mobile/app/build-rust.sh all
+    (cd mobile/app && ./gradlew :androidApp:assembleDebug)
 
     # Android (with the NDK and cargo-ndk)
     rustup target add aarch64-linux-android x86_64-linux-android
@@ -63,6 +90,6 @@ The pave wallet for phone apps: the whole wallet in one library, behind a small 
 
 ## Next
 
-- Build the two wrappers in real apps and run the C check's steps on a device.
+- Build the app on a device; the iOS shell; a Bluetooth radio beside Wi-Fi Aware.
 - Time [`board/examples/devices.rs`](../board/examples/devices.rs) on a phone.
 - Carry the link over Wi-Fi Aware and Bluetooth, Android to iPhone.

@@ -29,6 +29,7 @@ pub const HELP: &[&str] = &[
     "received {receipt}",
     "act {action: hand_off|take|confirm, manifest, to?} (the food profile)",
     "food_custody {manifest}",
+    "manifest {manifest} (what a manifest says: parcel, addressee, dispatch, provider, about)",
     "offer_delivery {manifest, pay, pickup_in} (provider: seconds from now, may be negative)",
     "show_known {job} (courier: its badge, for the poster)",
     "accept_shown {job, worker, shown}",
@@ -157,6 +158,16 @@ pub fn command(n: &mut Node, cmd: &str, v: &Value) -> Option<Result<Value, Strin
             let rec = n.act(&food, text(v, "action")?, &p)?;
             n.parcels.entry(m.parcel).or_insert(m);
             Ok(json!({ "record": hx(&rec.id()) }))
+        })(),
+        "manifest" => (|| {
+            let m = manifest(v)?;
+            Ok(json!({
+                "parcel": hx(&m.parcel),
+                "addressee": cx(&m.addressee),
+                "dispatch": m.dispatch.as_ref().map(|d| json!({ "id": hx(&d.id), "label": d.label })),
+                "provider": m.provider.as_ref().map(cx),
+                "about": m.about.as_ref().map(hx),
+            }))
         })(),
         "food_custody" => (|| {
             let c = n.custody(&manifest(v)?);

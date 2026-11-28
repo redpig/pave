@@ -184,12 +184,15 @@ def main():
             print(f"    {src.name} → {dst.name}: {kind}, {len(sealed) // 2} bytes sealed")
             return r["body"]
 
+        # The same steps as the app's Counter.cafe and Counter.courier
+        # (mobile/app/shared/.../Flows.kt).
         lc, la = inv["link"], scanned["link"]
         ticket = over_radio(ana, la, cafe, lc, "badge", ana("present", quiet=True, key=ana_key)["ticket"])
+        key = over_radio(ana, la, cafe, lc, "badge_key", ana_key)
         r = cafe("learn_ticket", quiet=True, ticket=ticket, dispatch=dispatch)
         print(f"  the tablet checks the badge: {GREEN}{r['badge']}{OFF}, from Pine Co-op")
         meet(cafe, lc, ana, la, over_radio)
-        cafe("act", action="hand_off", manifest=m, to=ana_key)
+        cafe("act", action="hand_off", manifest=m, to=key)
         manifest = over_radio(cafe, lc, ana, la, "manifest", m)
         meet(cafe, lc, ana, la, over_radio)
         ana("act", action="take", manifest=manifest)
@@ -216,10 +219,19 @@ def main():
             print(f"    {src.name} → {dst.name}: {kind}, {len(loop)} frame{'s' if len(loop) > 1 else ''}")
             return r["body"]
 
-        meet(ana, la2, cust, lu, by_camera)
-        ana("act", action="hand_off", manifest=manifest, to=deliver_to)
-        meet(ana, la2, cust, lu, by_camera)
-        cust("act", action="confirm", manifest=manifest)
+        # The app's Door turns (mobile/app/shared/.../Flows.kt): each phone
+        # shows what the other scans.
+        ha = by_camera(ana, la2, cust, lu, "have", ana("have", quiet=True)["have"])
+        hu = by_camera(cust, lu, ana, la2, "have", cust("have", quiet=True)["have"])
+        for_ana = by_camera(cust, lu, ana, la2, "bundle", cust("bundle_for", quiet=True, have=ha)["bundle"])
+        ana("absorb", quiet=True, bundle=for_ana)
+        addressee = ana("manifest", quiet=True, manifest=manifest)["addressee"]
+        assert addressee == deliver_to
+        ana("act", action="hand_off", manifest=manifest, to=addressee)
+        m_at_door = by_camera(ana, la2, cust, lu, "manifest", manifest)
+        for_cust = by_camera(ana, la2, cust, lu, "bundle", ana("bundle_for", quiet=True, have=hu)["bundle"])
+        cust("absorb", quiet=True, bundle=for_cust)
+        cust("act", action="confirm", manifest=m_at_door)
         print(f"  delivered, in {shown['frames']} QR frames between the two screens")
 
         say("Back online: the cafe hears how it went")
