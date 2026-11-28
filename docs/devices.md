@@ -58,7 +58,7 @@ They were measured on one core of a 2.3 GHz Xeon build machine, not a phone. The
 | | Android | iPhone |
 |---|---|---|
 | The member key | In app storage, encrypted under a hardware-held key. Phone secure hardware (StrongBox, Secure Enclave) does P-256, not the pairings these signatures need | Same |
-| Device binding at enrollment | Play Integrity attestation | App Attest |
+| Device binding at enrollment | Key Attestation, verified by the town ([`board/src/attest.rs`](../board/src/attest.rs)) | App Attest, verified by the town |
 | Online: board, offers, posts, vouches, refills | Yes | Yes |
 | Offline, both apps open: Bluetooth LE | Yes | Yes |
 | Offline, both apps open: Wi-Fi Aware (peer-to-peer Wi-Fi) | Yes, for years | iOS 26 and later, iPhone 12 and later; interoperates with Android |

@@ -36,9 +36,13 @@ typedef struct {
 char *pave_version(void);
 
 /* Joining a town: begin makes this device's keys, in memory, and returns
- * {"request": hex} to take to the town; finish takes the town's reply (hex)
+ * {"request": hex, "challenge": hex} to take to the town; finish takes the town's reply (hex)
  * and creates the wallet at `path`. finish consumes `join`. */
 PaveJoin *pave_join_begin(char **request_out);
+/* Attach the platform's attestation of a hardware key made with the
+ * request's "challenge": {"android": {"chain": [hex, ...]}} (leaf first) or
+ * {"apple": {"object": hex, "key_id": hex}}. Returns the request to send. */
+char *pave_join_attest(PaveJoin *join, const char *json);
 PaveWallet *pave_join_finish(PaveJoin *join, const char *reply_hex, const char *name, const char *path, PaveKeystore ks, char **err);
 
 /* Open a wallet: with the software keystore beside its state file (tests,

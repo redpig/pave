@@ -44,7 +44,7 @@ That is the phone half of the class break: one exploit, every phone of a model, 
 | **phone + card** | Split ECDAA key: `sk = card share + phone share`. The card (an NFC card, a SIM applet or a Briolette credstick) never releases its share | On the card, behind a hardware monotonic counter | Normal caps |
 | **card alone** | The credstick's full key | On the card | Normal caps, plus the card's own trusted display and PIN |
 
-The class is set at enrollment from attestation: Key Attestation on Android, App Attest on iOS, or the card's manufacturer key. The join request binds the attestation challenge to the new public keys, as Briolette's registrar does.
+The class is set at enrollment from attestation: Key Attestation on Android, App Attest on iOS, or the card's manufacturer key. The join request binds the attestation challenge to the new public keys, as Briolette's registrar does. Phones are built: [`board/src/attest.rs`](../board/src/attest.rs) verifies both, and a class the town's policy names is granted only on an attestation that earns it. Cards are not yet.
 
 ### The split key
 
@@ -84,10 +84,8 @@ On Android, each save costs one rollback-resistant key creation and one deletion
 
 ## Not built yet
 
-- Platform keystores:
-  - an Android Keystore backend (AES-GCM keys with `ROLLBACK_RESISTANCE` and user-auth binding);
-  - an iOS backend (a Secure Enclave P-256 key sealing by ECIES).
-- Attestation at enrollment, setting the class.
+- Platform keystores on a device. The app passes its keystore as callbacks ([mobile/](../mobile)); the Kotlin (Android Keystore, rollback-resistant AES-GCM) and Swift (Secure Enclave ECIES) vaults are written but not yet built on a device.
+- Attestation for cards (the manufacturer key). Phones are built ([`board/src/attest.rs`](../board/src/attest.rs)).
 - The split-key scheme with a card.
 - Pruning the signing log once its states are past hard expiry.
 - Spending caps that a node enforces for the agent driving it.

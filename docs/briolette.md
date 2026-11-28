@@ -20,12 +20,14 @@ The patterns pave builds on are Briolette's design rather than its code: tickets
 
 **Worth taking soon:**
 
-1. **Hardware attestation at enrollment.** `src/registrar/src/attestation.rs` verifies Android Key Attestation chains and Apple App Attest objects:
-   - the chain roots to the vendor;
-   - the challenge binds the device;
-   - the key is in hardware.
+1. **Hardware attestation at enrollment.** Built in pave as [`board/src/attest.rs`](../board/src/attest.rs), after the fork's `src/registrar/src/attestation.rs`. Pave's version is stricter:
+   - It checks every signature in the chain, RSA and P-384 included; the fork trusts an RSA or unknown signature by its place in the chain.
+   - It refuses everything when no roots are configured; the fork skips the root check then.
+   - It requires every issuer to be a CA and every certificate to be in date.
+   - On Android it checks the boot is verified and locked, and that the attestation is for a trusted app.
+   - On Apple it checks the key id and credential, the counter and the environment.
 
-   Pave's enrollment takes the device class from the town operator, unchecked. Verifying attestation is what makes the "hardware" class mean something ([phone-keys.md](phone-keys.md)). A port would sit in `Node::enroll`.
+   A class the town's policy names is granted only on an attestation that earns it.
 2. **The mobile app.** `mobile/` is a Kotlin Multiplatform app:
    - shared Compose screens;
    - UniFFI bindings to the Rust wallet;

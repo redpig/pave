@@ -2,6 +2,7 @@
 //! binary values as hex. `pave-node` serves it on stdin and a socket; the
 //! mobile core serves it through its C interface.
 
+mod attest;
 mod food;
 mod link;
 
@@ -40,7 +41,7 @@ pub const HELP: &[&str] = &[
 pub fn command(node: &Arc<Mutex<Node>>, v: &Value) -> Result<Value, String> {
     let cmd = v["cmd"].as_str().ok_or("missing cmd")?;
     match cmd {
-        "help" => Ok(json!({ "commands": HELP.iter().chain(food::HELP).chain(link::HELP).collect::<Vec<_>>() })),
+        "help" => Ok(json!({ "commands": HELP.iter().chain(food::HELP).chain(link::HELP).chain(attest::HELP).collect::<Vec<_>>() })),
         "meet" => {
             let peer = v["peer"].as_str().ok_or("missing peer")?;
             let (new, bytes) = net::meet(node, peer).map_err(|e| e.to_string())?;
@@ -131,6 +132,9 @@ fn local(n: &mut Node, cmd: &str, v: &Value) -> Result<Value, String> {
         return r;
     }
     if let Some(r) = link::command(n, cmd, v) {
+        return r;
+    }
+    if let Some(r) = attest::command(n, cmd, v) {
         return r;
     }
     match cmd {

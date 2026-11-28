@@ -32,6 +32,7 @@ for _ in range(100):
         break
     time.sleep(0.1)
 req = json.load(open(req_json))
+assert len(req["challenge"]) == 64, req
 req_bin, reply_bin = os.path.join(d, "request.bin"), os.path.join(d, "reply.bin")
 open(req_bin, "wb").write(bytes.fromhex(req["request"]))
 subprocess.run([node, "enroll", "--town", town, "--request", req_bin, "--reply", reply_bin, "--class", "hardware", "--credit", "250"], check=True, capture_output=True)
@@ -47,5 +48,6 @@ assert who["ok"] and who["balance"] == 250 and who["name"] == "phone", who
 assert again["ok"] and again["balance"] == 250, again
 assert json.loads(lines["bad"])["ok"] is False and json.loads(lines["json"])["ok"] is False
 assert int(lines["commits"]) >= 1
+assert json.loads(lines["attest_bad"])["ok"] is False
 assert json.loads(lines["stale"])["ok"] is False, lines["stale"]
 print("ok: joined, used and reopened a wallet through pave.h with the app's keystore; a stale copy is refused")

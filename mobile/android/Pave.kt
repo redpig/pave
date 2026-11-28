@@ -16,6 +16,8 @@ import com.sun.jna.Pointer
 import com.sun.jna.Structure
 import com.sun.jna.ptr.PointerByReference
 import org.json.JSONObject
+import android.security.keystore.StrongBoxUnavailableException
+import java.security.KeyPairGenerator
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -26,6 +28,7 @@ import javax.crypto.spec.GCMParameterSpec
 interface PaveLib : Library {
     fun pave_version(): Pointer
     fun pave_join_begin(request: PointerByReference): Pointer
+    fun pave_join_attest(join: Pointer, json: String): Pointer
     fun pave_join_finish(join: Pointer, reply: String, name: String, path: String, ks: PaveKeystore.ByValue, err: PointerByReference): Pointer?
     fun pave_open_with(path: String, ks: PaveKeystore.ByValue, err: PointerByReference): Pointer?
     fun pave_call(w: Pointer, json: String): Pointer
@@ -63,7 +66,7 @@ open class PaveKeystore : Structure() {
  * which makes a deleted key unrecoverable where the device supports it
  * (see docs/phone-keys.md).
  */
-class AndroidVault(private val prefix: String) {
+class AndroidVault(val prefix: String) {
     private val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
 
     private fun versions(): List<Int> =
@@ -135,11 +138,43 @@ class Wallet private constructor(private val w: Pointer, private val keystore: P
             return Wallet(w, ks)
         }
 
-        /** Start joining: the request (hex) to take to the town, and a function to finish with its reply. */
-        fun join(name: String, path: String, vault: AndroidVault): Pair<String, (String) -> Wallet> {
+        /**
+         * A hardware key attested by Android Key Attestation, binding the join's challenge:
+         * its certificate chain, leaf first. StrongBox where the device has it, else the TEE.
+         */
+        fun attestKey(alias: String, challenge: ByteArray): List<ByteArray> {
+            fun make(strongBox: Boolean) {
+                val spec = KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN)
+                    .setDigests(KeyProperties.DIGEST_SHA256)
+                    .setAttestationChallenge(challenge)
+                    .setIsStrongBoxBacked(strongBox)
+                    .build()
+                KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore").apply { initialize(spec) }.generateKeyPair()
+            }
+            try { make(true) } catch (e: StrongBoxUnavailableException) { make(false) }
+            val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            return ks.getCertificateChain(alias).map { it.encoded }
+        }
+
+        private fun hex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
+        private fun unhex(s: String) = ByteArray(s.length / 2) { s.substring(2 * it, 2 * it + 2).toInt(16).toByte() }
+
+        /**
+         * Start joining: the request (hex) to take to the town, and a function to finish with
+         * its reply. With `attest`, the request carries this device's key attestation, which
+         * a town needs before it grants a hardware class.
+         */
+        fun join(name: String, path: String, vault: AndroidVault, attest: Boolean = true): Pair<String, (String) -> Wallet> {
             val req = PointerByReference()
             val j = PaveLib.lib.pave_join_begin(req)
-            val request = take(req.value).getString("request")
+            var begun = take(req.value)
+            if (attest) {
+                val chain = attestKey("${vault.prefix}.attest", unhex(begun.getString("challenge")))
+                val body = JSONObject().put("android", JSONObject().put("chain", org.json.JSONArray(chain.map { hex(it) })))
+                begun = take(PaveLib.lib.pave_join_attest(j, body.toString()))
+                if (!begun.optBoolean("ok")) throw IllegalStateException(begun.optString("error"))
+            }
+            val request = begun.getString("request")
             return request to { reply: String ->
                 val ks = vault.callbacks()
                 val err = PointerByReference()

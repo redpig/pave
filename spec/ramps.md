@@ -2,8 +2,6 @@
 
 Pave's credit stays credit. A **ramp** is an accountable clerk at the edge of a town that exchanges it for something outside: bitcoin, ether, a stablecoin, or a bank transfer. The kernel doesn't change and doesn't learn what is on the other side. The design follows Briolette's bridge (`src/bridge` and `docs/design/bitcoin_l2.md` in [redpig/briolette](https://github.com/redpig/briolette)), whose `L1Client` already hides which chain is behind it.
 
-**Test credit only** ([principles.md](../docs/principles.md), 24). Nothing here moves real money. A ramp holding people's deposits is a money transmitter in most places, so build and run it against regtest or a testnet until there is legal advice.
-
 ## What a ramp needs from the outside system
 
 Four things, as in Briolette:

@@ -6,7 +6,8 @@ The pave wallet for phone apps: the whole wallet in one library, behind a small 
 
 | Call | What it does |
 |---|---|
-| `pave_join_begin` | Make this device's keys, in memory, and return the join request for the town |
+| `pave_join_begin` | Make this device's keys, in memory, and return the join request for the town, with the challenge an attestation must bind |
+| `pave_join_attest` | Attach the platform's attestation (Android Key Attestation's chain, or App Attest's object and key id); a town grants a hardware class only on one ([`board/src/attest.rs`](../board/src/attest.rs)) |
 | `pave_join_finish` | Take the town's reply and create the wallet, sealed by the app's keystore |
 | `pave_open_with` | Open a wallet sealed by the app's keystore |
 | `pave_open` | Open one sealed by the software keystore beside it (tests, demos) |

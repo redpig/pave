@@ -99,6 +99,10 @@ pub struct Operator {
     pub tokens: crate::slots::Seen,
     /// Swaps waiting out their hold.
     pub held: Vec<crate::swap::Held>,
+    /// What device attestations the town trusts, and which classes only an
+    /// attestation grants. See [`crate::attest`].
+    #[serde(default)]
+    pub attest: crate::attest::Policy,
     pub root: HolderKey,
     pub root_cred: Credential,
     pub clerk: HolderKey,
@@ -113,6 +117,11 @@ pub struct Operator {
 pub struct Join {
     pub transfer: JoinRequest,
     pub access: JoinRequest,
+    /// The device's hardware attestation, binding [`crate::attest::challenge`]
+    /// of this join. Needed for any class the town's policy says only an
+    /// attestation grants.
+    #[serde(default)]
+    pub attestation: Option<crate::attest::Attestation>,
 }
 
 /// The wallet's side of a join until the town answers. Keep it secret.
@@ -126,7 +135,7 @@ impl PendingJoin {
     pub fn generate() -> (PendingJoin, Join) {
         let (t, tr) = PendingKey::generate(&join_nonce());
         let (a, ar) = PendingKey::generate(&join_nonce());
-        (PendingJoin { transfer: t, access: a }, Join { transfer: tr, access: ar })
+        (PendingJoin { transfer: t, access: a }, Join { transfer: tr, access: ar, attestation: None })
     }
 }
 
@@ -412,6 +421,7 @@ impl Node {
             elections: BTreeMap::new(),
             dispatches: BTreeMap::new(),
             held: vec![],
+            attest: Default::default(),
             root,
             root_cred: rc,
             clerk,
@@ -515,6 +525,15 @@ impl Node {
         let op = self.operator.as_mut().ok_or("only the town operator can enroll")?;
         if op.closed.contains(class) {
             return Err(format!("class {class} is closed"));
+        }
+        // A class an attestation earns is granted only on one that verifies
+        // and earns it, never on the operator's say-so.
+        if op.attest.attested_classes().any(|c| c == class) {
+            let a = join.attestation.as_ref().ok_or(format!("class {class} needs a hardware attestation"))?;
+            let got = crate::attest::verify(&op.attest, a, &crate::attest::challenge(join), crate::bulletin::now())?;
+            if op.attest.earns.get(&got) != Some(&class.to_string()) {
+                return Err(format!("a {got:?} attestation doesn't earn class {class}"));
+            }
         }
         let transfer = op.registrar.issue(&join.transfer)?;
         let access = op.access.get(class).ok_or("unknown class")?.issue(&join.access)?;

@@ -27,6 +27,7 @@
 //! - [`vault`]: sealing a wallet's state, and making old copies useless
 
 pub mod board;
+pub mod attest;
 pub mod bulletin;
 pub mod commands;
 pub mod dispatch;

@@ -78,6 +78,7 @@ int main(int argc, char **argv) {
 
     char *req = NULL;
     PaveJoin *join = pave_join_begin(&req);
+    say("attest_bad", pave_join_attest(join, "{}"));
     FILE *f = fopen(argv[1], "w");
     fputs(req, f);
     fclose(f);

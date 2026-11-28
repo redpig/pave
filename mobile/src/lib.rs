@@ -29,9 +29,18 @@ pub struct PaveWallet {
 }
 
 /// A join in progress: the key made on this device, waiting for the town's
-/// answer. It lives only in memory.
+/// answer, and the request. It lives only in memory.
 pub struct PaveJoin {
     pending: PendingJoin,
+    join: pave_board::node::Join,
+}
+
+fn request(join: &pave_board::node::Join) -> Value {
+    json!({
+        "ok": true,
+        "request": hex::encode(pave_kernel::hash::encode(join)),
+        "challenge": hex::encode(pave_board::attest::challenge(join)),
+    })
 }
 
 /// The app's keystore. Each callback returns 0 on success, 1 if `out` is too
@@ -153,18 +162,53 @@ pub unsafe extern "C" fn pave_open_with(path: *const c_char, ks: PaveKeystore, e
 }
 
 /// Start joining a town: make this device's keys and return the join
-/// request (`{"request": hex}`) to take to the town. The keys stay in the
-/// returned handle, in memory, until [`pave_join_finish`].
+/// request to take to the town, `{"request": hex, "challenge": hex}`. For
+/// a class that needs it, have the platform attest a hardware key with
+/// `challenge` and add it with [`pave_join_attest`] before sending. The keys
+/// stay in the returned handle, in memory, until [`pave_join_finish`].
 ///
 /// # Safety
 /// `request_out` is writable; free the string it gets.
 #[no_mangle]
 pub unsafe extern "C" fn pave_join_begin(request_out: *mut *mut c_char) -> *mut PaveJoin {
-    let (pending, req) = PendingJoin::generate();
+    let (pending, join) = PendingJoin::generate();
     if !request_out.is_null() {
-        *request_out = out(json!({ "ok": true, "request": hex::encode(pave_kernel::hash::encode(&req)) }));
+        *request_out = out(request(&join));
     }
-    Box::into_raw(Box::new(PaveJoin { pending }))
+    Box::into_raw(Box::new(PaveJoin { pending, join }))
+}
+
+/// Add the platform's attestation to a join, returning the request to send
+/// in its place. `json` is `{"android": {"chain": [hex, ...]}}`, the
+/// attested key's certificate chain leaf first, or `{"apple": {"object":
+/// hex, "key_id": hex}}`, App Attest's attestation object and key id.
+///
+/// # Safety
+/// `join` came from [`pave_join_begin`] and isn't finished; `json` is
+/// NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn pave_join_attest(join: *mut PaveJoin, json_in: *const c_char) -> *mut c_char {
+    if join.is_null() {
+        return fail("null join");
+    }
+    let r = (|| -> Result<Value, String> {
+        let v: Value = serde_json::from_str(text(json_in)?).map_err(|e| format!("bad json: {e}"))?;
+        let hexes = |x: &Value| -> Result<Vec<u8>, String> { hex::decode(x.as_str().ok_or("expected hex")?).map_err(|e| e.to_string()) };
+        let a = if let Some(a) = v.get("android") {
+            let chain = a["chain"].as_array().ok_or("android needs a chain")?.iter().map(|c| hexes(c).map(serde_bytes::ByteBuf::from)).collect::<Result<_, _>>()?;
+            pave_board::attest::Attestation::Android { chain }
+        } else if let Some(a) = v.get("apple") {
+            pave_board::attest::Attestation::Apple { object: serde_bytes::ByteBuf::from(hexes(&a["object"])?), key_id: serde_bytes::ByteBuf::from(hexes(&a["key_id"])?) }
+        } else {
+            return Err("expected android or apple".into());
+        };
+        (*join).join.attestation = Some(a);
+        Ok(request(&(*join).join))
+    })();
+    match r {
+        Ok(v) => out(v),
+        Err(e) => fail(e),
+    }
 }
 
 /// Finish joining with the town's `reply` (hex), creating the wallet at

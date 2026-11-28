@@ -4,6 +4,7 @@
 // this was written on. It follows mobile/include/pave.h and the Python
 // demo (demo/phone_demo.py), which runs the same calls. Build the library
 // as an XCFramework (see mobile/README.md) and import its module `Pave`.
+import DeviceCheck
 import Foundation
 import Security
 import Pave
@@ -106,11 +107,31 @@ final class Wallet {
         return Wallet(w, vault)
     }
 
-    /// Start joining: the request (hex) to take to the town, and a function to finish with its reply.
-    static func join(name: String, path: String, vault: EnclaveVault) -> (request: String, finish: (String) throws -> Wallet) {
+    private static func hex(_ d: Data) -> String { d.map { String(format: "%02x", $0) }.joined() }
+    private static func unhex(_ s: String) -> Data {
+        var d = Data(); var i = s.startIndex
+        while i < s.endIndex { let j = s.index(i, offsetBy: 2); d.append(UInt8(s[i..<j], radix: 16)!); i = j }
+        return d
+    }
+
+    /// Start joining: the request (hex) to take to the town, and a function to finish with
+    /// its reply. With `attest`, the request carries App Attest's attestation of a new key,
+    /// binding the join's challenge, which a town needs before it grants a hardware class.
+    static func join(name: String, path: String, vault: EnclaveVault, attest: Bool = true) async throws -> (request: String, finish: (String) throws -> Wallet) {
         var req: UnsafeMutablePointer<CChar>?
         let j = pave_join_begin(&req)
-        let request = take(req)["request"] as? String ?? ""
+        var begun = take(req)
+        if attest {
+            let service = DCAppAttestService.shared
+            guard service.isSupported else { throw PaveError.failed("App Attest isn't supported on this device") }
+            let keyId = try await service.generateKey()
+            let object = try await service.attestKey(keyId, clientDataHash: unhex(begun["challenge"] as? String ?? ""))
+            let body: [String: Any] = ["apple": ["object": hex(object), "key_id": hex(Data(base64Encoded: keyId)!)]]
+            let json = String(data: try JSONSerialization.data(withJSONObject: body), encoding: .utf8)!
+            begun = take(pave_join_attest(j, json))
+            guard begun["ok"] as? Bool == true else { throw PaveError.failed(begun["error"] as? String ?? "") }
+        }
+        let request = begun["request"] as? String ?? ""
         return (request, { reply in
             var err: UnsafeMutablePointer<CChar>?
             guard let w = pave_join_finish(j, reply, name, path, vault.callbacks(), &err) else { throw PaveError.failed(take(err)["error"] as? String ?? "") }

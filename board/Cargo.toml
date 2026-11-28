@@ -21,3 +21,13 @@ hex = "0.4"
 pave-scheme-briolette = { path = "../schemes/briolette" }
 rand = "0.8"
 chacha20poly1305 = "0.10"
+# Attestation at enrollment: certificate chains from Android and Apple.
+sha2 = "0.10"
+der = "0.7"
+x509-cert = "0.2"
+p256 = { version = "0.13", features = ["ecdsa"] }
+p384 = { version = "0.13", features = ["ecdsa"] }
+rsa = { version = "0.9", features = ["sha2"] }
+
+[dev-dependencies]
+x509-cert = { version = "0.2", features = ["builder"] }
